@@ -81,6 +81,23 @@ model Tenant {
   invoices         Invoice[]
   auditLogs        AuditLog[]
 
+  guests            Guest[]
+  reservations      Reservation[]
+  folios            Folio[]
+  folioEntries      FolioEntry[]
+  guestInvoices     GuestInvoice[]
+  receipts          Receipt[]
+  documentCounters  DocumentCounter[]
+  taxSettings       TaxSetting[]
+  digestSettings    DigestSetting[]
+  cashierShifts     CashierShift[]
+  guardFlags        GuardFlag[]
+  ownerDigests      OwnerDigest[]
+  nightAuditRuns    NightAuditRun[]
+  dailyStats        DailyStat[]
+  housekeepingTasks HousekeepingTask[]
+  idempotencyKeys   IdempotencyKey[]
+
   @@map("tenants")
 }
 
@@ -115,9 +132,13 @@ model Property {
   createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt              DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  roomTypes RoomType[]
-  rooms     Room[]
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  roomTypes     RoomType[]
+  rooms         Room[]
+  reservations  Reservation[]
+  folios        Folio[]
+  taxSetting    TaxSetting?
+  digestSetting DigestSetting?
 
   @@index([tenantId])
   @@index([city])
@@ -142,9 +163,10 @@ model RoomType {
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
-  rooms    Room[]
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property     Property      @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  rooms        Room[]
+  reservations Reservation[]
 
   @@unique([propertyId, name])
   @@index([tenantId])
@@ -163,9 +185,12 @@ model Room {
   createdAt  DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt  DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
-  roomType RoomType @relation(fields: [roomTypeId], references: [id], onDelete: Restrict)
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property          Property           @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  roomType          RoomType           @relation(fields: [roomTypeId], references: [id], onDelete: Restrict)
+  reservations      Reservation[]
+  housekeepingTasks HousekeepingTask[]
+  guardFlags        GuardFlag[]
 
   @@unique([propertyId, number])
   @@index([tenantId, status])
@@ -178,17 +203,21 @@ model Room {
 // ---------------------------------------------------------------------------
 
 model User {
-  id           String    @id @default(uuid()) @db.Uuid
-  tenantId     String    @map("tenant_id") @db.Uuid
-  email        String    @unique
-  fullName     String    @map("full_name")
-  phone        String    @default("")
-  role         StaffRole
-  passwordHash String    @map("password_hash")
-  isActive     Boolean   @default(true) @map("is_active")
-  lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(3)
-  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id              String    @id @default(uuid()) @db.Uuid
+  tenantId        String    @map("tenant_id") @db.Uuid
+  email           String    @unique
+  fullName        String    @map("full_name")
+  phone           String    @default("")
+  role            StaffRole
+  passwordHash    String    @map("password_hash")
+  isActive        Boolean   @default(true) @map("is_active")
+  lastLoginAt     DateTime? @map("last_login_at") @db.Timestamptz(3)
+  /// argon2 hash of the optional 4-6 digit second-key approval PIN.
+  approvalPinHash String?   @map("approval_pin_hash")
+  pinFailedCount  Int       @default(0) @map("pin_failed_count")
+  pinLockedUntil  DateTime? @map("pin_locked_until") @db.Timestamptz(3)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   refreshTokens RefreshToken[]
@@ -338,20 +367,20 @@ model Subscription {
 }
 
 model Invoice {
-  id                String          @id @default(uuid()) @db.Uuid
-  tenantId          String          @map("tenant_id") @db.Uuid
-  subscriptionId    String          @map("subscription_id") @db.Uuid
-  reference         String          @unique
-  amountKobo        Int             @map("amount_kobo")
-  currency          String          @default("NGN")
-  status            InvoiceStatus   @default(PENDING)
-  planCode          String          @map("plan_code")
-  interval          BillingInterval
-  provider          String          @default("paystack")
-  authorizationUrl  String?         @map("authorization_url")
-  paidAt            DateTime?       @map("paid_at") @db.Timestamptz(3)
-  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt         DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id               String          @id @default(uuid()) @db.Uuid
+  tenantId         String          @map("tenant_id") @db.Uuid
+  subscriptionId   String          @map("subscription_id") @db.Uuid
+  reference        String          @unique
+  amountKobo       Int             @map("amount_kobo")
+  currency         String          @default("NGN")
+  status           InvoiceStatus   @default(PENDING)
+  planCode         String          @map("plan_code")
+  interval         BillingInterval
+  provider         String          @default("paystack")
+  authorizationUrl String?         @map("authorization_url")
+  paidAt           DateTime?       @map("paid_at") @db.Timestamptz(3)
+  createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
@@ -403,4 +432,618 @@ model AuditLog {
 
   @@index([tenantId, createdAt(sort: Desc)])
   @@map("audit_logs")
+}
+
+// ===========================================================================
+// M2: core hotel operations
+// ===========================================================================
+//
+// Money columns are BIGINT kobo. Business dates are DATE in Africa/Lagos.
+// Every table below is tenant-scoped and protected by RLS (see the
+// *_m2_operations migration), which also adds what Prisma cannot model:
+// the reservation exclusion constraint, the append-only folio_entries
+// trigger and a few partial unique indexes.
+
+enum StayType {
+  NIGHTLY
+  DAY_USE
+}
+
+enum ReservationSource {
+  WALK_IN
+  PHONE
+  WHATSAPP
+  MARKETPLACE
+  BOOKING_SITE
+  CORPORATE
+  OTA
+}
+
+enum ReservationStatus {
+  PENDING
+  CONFIRMED
+  CHECKED_IN
+  CHECKED_OUT
+  CANCELLED
+  NO_SHOW
+}
+
+enum IdType {
+  NIN
+  PASSPORT
+  DRIVERS_LICENSE
+  VOTERS_CARD
+  OTHER
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  UNDISCLOSED
+}
+
+enum VisitPurpose {
+  BUSINESS
+  LEISURE
+  EVENT
+  TRANSIT
+  OTHER
+}
+
+enum FolioKind {
+  RESERVATION
+  WALK_IN
+}
+
+enum FolioStatus {
+  OPEN
+  CLOSED
+}
+
+enum FolioEntryType {
+  ROOM
+  DAY_USE
+  EXTRA
+  TAX
+  SERVICE_CHARGE
+  DISCOUNT
+  PAYMENT
+  REFUND
+  VOID
+}
+
+enum TaxCode {
+  VAT
+  CONSUMPTION
+  SERVICE_CHARGE
+}
+
+enum PaymentMethod {
+  CASH
+  TRANSFER
+  POS
+  CARD_ONLINE
+  COMPLIMENTARY
+  CITY_LEDGER
+}
+
+enum GuestInvoiceKind {
+  PROFORMA
+  FINAL
+}
+
+enum DocumentCounterKind {
+  INVOICE
+  PROFORMA
+  RECEIPT
+}
+
+enum ShiftStatus {
+  OPEN
+  CLOSED
+  APPROVED
+}
+
+enum GuardRule {
+  SHIFT_VARIANCE
+  VOIDED_PAYMENT
+  CHECKOUT_WITH_BALANCE
+  OCCUPIED_WITHOUT_STAY
+  DISCOUNT_OVER_THRESHOLD
+  DIRTY_OVERRIDE_CHECKIN
+  DAY_USE_OVERSTAY
+  LATE_REGISTRATION
+  REPEATED_VOIDS_BY_USER
+  ROOM_STATUS_FLIP
+}
+
+enum GuardSeverity {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum GuardStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+  DISMISSED
+}
+
+enum HousekeepingTaskStatus {
+  PENDING
+  IN_PROGRESS
+  DONE
+}
+
+enum HousekeepingTaskReason {
+  CHECKOUT
+  ROOM_MOVE
+  MANUAL
+}
+
+enum DigestChannel {
+  WHATSAPP
+  LOG
+}
+
+enum DigestStatus {
+  SENT
+  LOGGED
+  FAILED
+}
+
+enum NightAuditStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum JobTrigger {
+  SCHEDULED
+  MANUAL
+}
+
+/// Hotel guest. `idNumberEnc` is AES-256-GCM ciphertext (GUEST_DATA_KEY);
+/// only the last four digits are kept in clear for masking. Deduplicated by
+/// phone per tenant (NULL after NDPA anonymisation).
+model Guest {
+  id                 String    @id @default(uuid()) @db.Uuid
+  tenantId           String    @map("tenant_id") @db.Uuid
+  fullName           String    @map("full_name")
+  phone              String?
+  email              String?
+  gender             Gender?
+  dateOfBirth        DateTime? @map("date_of_birth") @db.Date
+  nationality        String    @default("Nigerian")
+  address            String?
+  idType             IdType?   @map("id_type")
+  idNumberEnc        String?   @map("id_number_enc")
+  idNumberLast4      String?   @map("id_number_last4")
+  idImageKey         String?   @map("id_image_key")
+  idImageContentType String?   @map("id_image_content_type")
+  vehiclePlate       String?   @map("vehicle_plate")
+  company            String?
+  vip                Boolean   @default(false)
+  notes              String    @default("")
+  consentAt          DateTime? @map("consent_at") @db.Timestamptz(3)
+  marketingOptIn     Boolean   @default(false) @map("marketing_opt_in")
+  anonymisedAt       DateTime? @map("anonymised_at") @db.Timestamptz(3)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reservations Reservation[]
+  folios       Folio[]
+
+  @@unique([tenantId, phone])
+  @@index([tenantId, fullName])
+  @@map("guests")
+}
+
+/// A stay. Overlap on the same room is prevented by the exclusion constraint
+/// `reservations_no_overlap` (btree_gist) for PENDING, CONFIRMED, CHECKED_IN.
+model Reservation {
+  id              String            @id @default(uuid()) @db.Uuid
+  tenantId        String            @map("tenant_id") @db.Uuid
+  propertyId      String            @map("property_id") @db.Uuid
+  code            String
+  guestId         String            @map("guest_id") @db.Uuid
+  roomTypeId      String            @map("room_type_id") @db.Uuid
+  roomId          String?           @map("room_id") @db.Uuid
+  stayType        StayType          @default(NIGHTLY) @map("stay_type")
+  arrivalAt       DateTime          @map("arrival_at") @db.Timestamptz(3)
+  departureAt     DateTime          @map("departure_at") @db.Timestamptz(3)
+  adults          Int               @default(1)
+  children        Int               @default(0)
+  source          ReservationSource @default(WALK_IN)
+  status          ReservationStatus @default(CONFIRMED)
+  rateKobo        BigInt            @map("rate_kobo")
+  notes           String            @default("")
+  createdById     String?           @map("created_by_id") @db.Uuid
+  checkedInAt     DateTime?         @map("checked_in_at") @db.Timestamptz(3)
+  checkedInById   String?           @map("checked_in_by_id") @db.Uuid
+  checkedOutAt    DateTime?         @map("checked_out_at") @db.Timestamptz(3)
+  checkedOutById  String?           @map("checked_out_by_id") @db.Uuid
+  cancelledAt     DateTime?         @map("cancelled_at") @db.Timestamptz(3)
+  cancelReason    String?           @map("cancel_reason")
+  noShowAt        DateTime?         @map("no_show_at") @db.Timestamptz(3)
+  clientCreatedAt DateTime?         @map("client_created_at") @db.Timestamptz(3)
+
+  // Guest register entry (police / security book).
+  regArrivingFrom           String?       @map("reg_arriving_from")
+  regGoingTo                String?       @map("reg_going_to")
+  regPurpose                VisitPurpose? @map("reg_purpose")
+  regVehiclePlate           String?       @map("reg_vehicle_plate")
+  registrationCompletedAt   DateTime?     @map("registration_completed_at") @db.Timestamptz(3)
+  registrationCompletedById String?       @map("registration_completed_by_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property          Property           @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  guest             Guest              @relation(fields: [guestId], references: [id], onDelete: Restrict)
+  roomType          RoomType           @relation(fields: [roomTypeId], references: [id], onDelete: Restrict)
+  room              Room?              @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  folio             Folio?
+  housekeepingTasks HousekeepingTask[]
+  guardFlags        GuardFlag[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, status])
+  @@index([tenantId, arrivalAt])
+  @@index([tenantId, departureAt])
+  @@index([guestId])
+  @@index([roomTypeId])
+  @@index([roomId])
+  @@map("reservations")
+}
+
+model Folio {
+  id            String      @id @default(uuid()) @db.Uuid
+  tenantId      String      @map("tenant_id") @db.Uuid
+  propertyId    String      @map("property_id") @db.Uuid
+  kind          FolioKind   @default(RESERVATION)
+  status        FolioStatus @default(OPEN)
+  reservationId String?     @unique @map("reservation_id") @db.Uuid
+  guestId       String?     @map("guest_id") @db.Uuid
+  name          String
+  notes         String      @default("")
+  createdById   String?     @map("created_by_id") @db.Uuid
+  closedAt      DateTime?   @map("closed_at") @db.Timestamptz(3)
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant      Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property    Property       @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  reservation Reservation?   @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+  guest       Guest?         @relation(fields: [guestId], references: [id], onDelete: Restrict)
+  entries     FolioEntry[]
+  invoices    GuestInvoice[]
+  receipts    Receipt[]
+
+  @@index([tenantId, status])
+  @@map("folios")
+}
+
+/// Immutable ledger line (trigger blocks UPDATE/DELETE). Corrections are VOID
+/// entries; `refEntryId` is unique, so an entry can be voided only once.
+model FolioEntry {
+  id              String         @id @default(uuid()) @db.Uuid
+  tenantId        String         @map("tenant_id") @db.Uuid
+  folioId         String         @map("folio_id") @db.Uuid
+  type            FolioEntryType
+  amountKobo      BigInt         @map("amount_kobo")
+  description     String
+  businessDate    DateTime       @map("business_date") @db.Date
+  parentEntryId   String?        @map("parent_entry_id") @db.Uuid
+  refEntryId      String?        @unique @map("ref_entry_id") @db.Uuid
+  taxCode         TaxCode?       @map("tax_code")
+  rateBps         Int?           @map("rate_bps")
+  inclusive       Boolean?
+  paymentMethod   PaymentMethod? @map("payment_method")
+  paymentRef      String?        @map("payment_ref")
+  shiftId         String?        @map("shift_id") @db.Uuid
+  reason          String?
+  approvedById    String?        @map("approved_by_id") @db.Uuid
+  createdById     String?        @map("created_by_id") @db.Uuid
+  clientCreatedAt DateTime?      @map("client_created_at") @db.Timestamptz(3)
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant  Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  folio   Folio         @relation(fields: [folioId], references: [id], onDelete: Restrict)
+  shift   CashierShift? @relation(fields: [shiftId], references: [id], onDelete: Restrict)
+  receipt Receipt?
+
+  @@index([folioId, createdAt])
+  @@index([tenantId, businessDate])
+  @@index([tenantId, type, createdAt])
+  @@index([shiftId])
+  @@index([parentEntryId])
+  @@map("folio_entries")
+}
+
+/// Gapless per-tenant, per-year document numbers. Incremented with
+/// `INSERT .. ON CONFLICT DO UPDATE .. RETURNING` inside the issuing
+/// transaction: the row lock serialises issuers and a rollback returns the
+/// number, so there are no gaps.
+model DocumentCounter {
+  tenantId  String              @map("tenant_id") @db.Uuid
+  kind      DocumentCounterKind
+  year      Int
+  lastValue Int                 @default(0) @map("last_value")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, kind, year])
+  @@map("document_counters")
+}
+
+model GuestInvoice {
+  id              String           @id @default(uuid()) @db.Uuid
+  tenantId        String           @map("tenant_id") @db.Uuid
+  folioId         String           @map("folio_id") @db.Uuid
+  kind            GuestInvoiceKind
+  number          String
+  year            Int
+  seq             Int
+  issuedAt        DateTime         @default(now()) @map("issued_at") @db.Timestamptz(3)
+  businessDate    DateTime         @map("business_date") @db.Date
+  totalKobo       BigInt           @map("total_kobo")
+  balanceKobo     BigInt           @map("balance_kobo")
+  guestName       String?          @map("guest_name")
+  reservationCode String?          @map("reservation_code")
+  /// Snapshot of the printable document at issue time.
+  document        Json
+  issuedById      String?          @map("issued_by_id") @db.Uuid
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  folio  Folio  @relation(fields: [folioId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, number])
+  @@index([tenantId, issuedAt])
+  @@index([folioId])
+  @@map("guest_invoices")
+}
+
+model Receipt {
+  id              String        @id @default(uuid()) @db.Uuid
+  tenantId        String        @map("tenant_id") @db.Uuid
+  folioId         String        @map("folio_id") @db.Uuid
+  entryId         String        @unique @map("entry_id") @db.Uuid
+  number          String
+  year            Int
+  seq             Int
+  issuedAt        DateTime      @default(now()) @map("issued_at") @db.Timestamptz(3)
+  method          PaymentMethod
+  amountKobo      BigInt        @map("amount_kobo")
+  guestName       String?       @map("guest_name")
+  reservationCode String?       @map("reservation_code")
+  document        Json
+  issuedById      String?       @map("issued_by_id") @db.Uuid
+
+  tenant Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  folio  Folio      @relation(fields: [folioId], references: [id], onDelete: Restrict)
+  entry  FolioEntry @relation(fields: [entryId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, number])
+  @@index([tenantId, issuedAt])
+  @@map("receipts")
+}
+
+model TaxSetting {
+  id                           String   @id @default(uuid()) @db.Uuid
+  tenantId                     String   @map("tenant_id") @db.Uuid
+  propertyId                   String   @unique @map("property_id") @db.Uuid
+  vatEnabled                   Boolean  @default(true) @map("vat_enabled")
+  vatRateBps                   Int      @default(750) @map("vat_rate_bps")
+  vatInclusive                 Boolean  @default(false) @map("vat_inclusive")
+  consumptionEnabled           Boolean  @default(false) @map("consumption_enabled")
+  consumptionRateBps           Int      @default(500) @map("consumption_rate_bps")
+  consumptionInclusive         Boolean  @default(false) @map("consumption_inclusive")
+  consumptionLabel             String   @default("Lagos consumption tax") @map("consumption_label")
+  serviceChargeEnabled         Boolean  @default(false) @map("service_charge_enabled")
+  serviceChargeRateBps         Int      @default(1000) @map("service_charge_rate_bps")
+  serviceChargeInclusive       Boolean  @default(false) @map("service_charge_inclusive")
+  discountApprovalThresholdBps Int      @default(1000) @map("discount_approval_threshold_bps")
+  createdAt                    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("tax_settings")
+}
+
+model DigestSetting {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  propertyId String   @unique @map("property_id") @db.Uuid
+  enabled    Boolean  @default(true)
+  recipients String[] @default([])
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("digest_settings")
+}
+
+/// Cashier shift. One OPEN shift per user (partial unique index).
+model CashierShift {
+  id                   String      @id @default(uuid()) @db.Uuid
+  tenantId             String      @map("tenant_id") @db.Uuid
+  userId               String      @map("user_id") @db.Uuid
+  userName             String      @map("user_name")
+  status               ShiftStatus @default(OPEN)
+  openedAt             DateTime    @default(now()) @map("opened_at") @db.Timestamptz(3)
+  openingFloatKobo     BigInt      @map("opening_float_kobo")
+  closedAt             DateTime?   @map("closed_at") @db.Timestamptz(3)
+  closedById           String?     @map("closed_by_id") @db.Uuid
+  countedCashKobo      BigInt?     @map("counted_cash_kobo")
+  declaredPosKobo      BigInt?     @map("declared_pos_kobo")
+  declaredTransferKobo BigInt?     @map("declared_transfer_kobo")
+  denominations        Json?
+  expectedCashKobo     BigInt?     @map("expected_cash_kobo")
+  expectedPosKobo      BigInt?     @map("expected_pos_kobo")
+  expectedTransferKobo BigInt?     @map("expected_transfer_kobo")
+  paymentsCount        Int?        @map("payments_count")
+  notes                String      @default("")
+  closeNotes           String?     @map("close_notes")
+  approvedById         String?     @map("approved_by_id") @db.Uuid
+  approvedByName       String?     @map("approved_by_name")
+  approvedAt           DateTime?   @map("approved_at") @db.Timestamptz(3)
+  approvalNotes        String?     @map("approval_notes")
+  createdAt            DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant  Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  entries FolioEntry[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, openedAt])
+  @@index([userId])
+  @@map("cashier_shifts")
+}
+
+/// Revenue Guard finding. `dedupeKey` is unique per tenant while the flag is
+/// OPEN or ACKNOWLEDGED (partial unique index), so sweeps never duplicate.
+model GuardFlag {
+  id             String        @id @default(uuid()) @db.Uuid
+  tenantId       String        @map("tenant_id") @db.Uuid
+  rule           GuardRule
+  severity       GuardSeverity
+  status         GuardStatus   @default(OPEN)
+  title          String
+  detail         String        @default("")
+  amountKobo     BigInt?       @map("amount_kobo")
+  roomId         String?       @map("room_id") @db.Uuid
+  reservationId  String?       @map("reservation_id") @db.Uuid
+  shiftId        String?       @map("shift_id") @db.Uuid
+  userId         String?       @map("user_id") @db.Uuid
+  userName       String?       @map("user_name")
+  evidence       Json          @default("{}")
+  suggestion     String?
+  dedupeKey      String        @map("dedupe_key")
+  resolvedById   String?       @map("resolved_by_id") @db.Uuid
+  resolvedByName String?       @map("resolved_by_name")
+  resolvedAt     DateTime?     @map("resolved_at") @db.Timestamptz(3)
+  resolution     String?
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  room        Room?        @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  reservation Reservation? @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status, createdAt(sort: Desc)])
+  @@index([tenantId, rule])
+  @@map("guard_flags")
+}
+
+model OwnerDigest {
+  id           String        @id @default(uuid()) @db.Uuid
+  tenantId     String        @map("tenant_id") @db.Uuid
+  businessDate DateTime      @map("business_date") @db.Date
+  trigger      JobTrigger    @default(SCHEDULED)
+  channel      DigestChannel
+  status       DigestStatus
+  recipients   String[]      @default([])
+  body         String
+  data         Json
+  error        String?
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@index([tenantId, businessDate])
+  @@map("owner_digests")
+}
+
+model NightAuditRun {
+  id           String           @id @default(uuid()) @db.Uuid
+  tenantId     String           @map("tenant_id") @db.Uuid
+  businessDate DateTime         @map("business_date") @db.Date
+  status       NightAuditStatus @default(RUNNING)
+  trigger      JobTrigger       @default(SCHEDULED)
+  startedAt    DateTime         @default(now()) @map("started_at") @db.Timestamptz(3)
+  finishedAt   DateTime?        @map("finished_at") @db.Timestamptz(3)
+  summary      Json?
+  error        String?
+  runById      String?          @map("run_by_id") @db.Uuid
+  runByName    String?          @map("run_by_name")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, businessDate])
+  @@map("night_audit_runs")
+}
+
+/// Snapshot of the daily flash report, written by the night audit.
+model DailyStat {
+  id                String   @id @default(uuid()) @db.Uuid
+  tenantId          String   @map("tenant_id") @db.Uuid
+  date              DateTime @db.Date
+  roomsAvailable    Int      @map("rooms_available")
+  roomsSold         Int      @map("rooms_sold")
+  occupancyRate     Float    @map("occupancy_rate")
+  adrKobo           BigInt   @map("adr_kobo")
+  revparKobo        BigInt   @map("revpar_kobo")
+  roomRevenueKobo   BigInt   @map("room_revenue_kobo")
+  totalRevenueKobo  BigInt   @map("total_revenue_kobo")
+  paymentsTotalKobo BigInt   @map("payments_total_kobo")
+  dayUseCount       Int      @map("day_use_count")
+  /// Full DailyFlash payload (see API contract).
+  data              Json
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, date])
+  @@map("daily_stats")
+}
+
+model HousekeepingTask {
+  id              String                 @id @default(uuid()) @db.Uuid
+  tenantId        String                 @map("tenant_id") @db.Uuid
+  roomId          String                 @map("room_id") @db.Uuid
+  reservationId   String?                @map("reservation_id") @db.Uuid
+  status          HousekeepingTaskStatus @default(PENDING)
+  reason          HousekeepingTaskReason @default(CHECKOUT)
+  notes           String                 @default("")
+  completedAt     DateTime?              @map("completed_at") @db.Timestamptz(3)
+  completedById   String?                @map("completed_by_id") @db.Uuid
+  completedByName String?                @map("completed_by_name")
+  createdAt       DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  room        Room         @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  reservation Reservation? @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status])
+  @@map("housekeeping_tasks")
+}
+
+/// Stored responses for the Idempotency-Key header (72h).
+model IdempotencyKey {
+  tenantId       String   @map("tenant_id") @db.Uuid
+  key            String
+  fingerprint    String
+  completed      Boolean  @default(false)
+  responseStatus Int?     @map("response_status")
+  responseBody   Json?    @map("response_body")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt      DateTime @map("expires_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, key])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
 }
