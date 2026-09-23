@@ -551,7 +551,10 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
     const departureAt = p.departureAt ?? at(p.departure, property.checkOutTime);
     const nights = dayUse ? 0 : Math.round((Date.parse(p.departure) - Date.parse(p.arrival)) / 86_400_000);
     const hours = dayUse ? Math.ceil((departureAt.getTime() - arrivalAt.getTime()) / HOUR) : 0;
-    const createdAt = new Date(arrivalAt.getTime() - (p.kind === 'future' ? 2 : 1 + Math.floor(rand() * 5)) * 24 * HOUR);
+    // Booked one to five days ahead of arrival, and never after the seed runs.
+    const createdAt = new Date(
+      Math.min(arrivalAt.getTime() - (1 + Math.floor(rand() * 5)) * 24 * HOUR, now.getTime() - (2 + Math.floor(rand() * 40)) * HOUR),
+    );
     const resId = randomUUID();
     const folioId = randomUUID();
 
