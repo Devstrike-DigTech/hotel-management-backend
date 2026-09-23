@@ -62,8 +62,8 @@ export class PricingController {
   }
 
   @Delete('events/:id') @RequirePermission('pricing.manage')
-  deleteEvent(@CurrentUser() u: AuthUser, @Param('id') id: string, @ClientIp() ip?: string) {
-    if (!id.startsWith('national:')) new ParseUUIDPipe().transform(id, { type: 'param' });
+  async deleteEvent(@CurrentUser() u: AuthUser, @Param('id') id: string, @ClientIp() ip?: string) {
+    if (!id.startsWith('national:')) await new ParseUUIDPipe().transform(id, { type: 'param' });
     return this.pricing.deleteEvent(u, id, ip);
   }
 

@@ -132,7 +132,7 @@ export class DocumentsService {
     });
     const amount = document.amountKobo;
     // M5: POS receipts carry the order (lines, table, tip); null elsewhere.
-    Object.assign(document, { pos: null, ...(extra ?? {}) });
+    Object.assign(document, { pos: null, ...extra });
     const receipt = await tx.receipt.create({
       data: {
         tenantId,

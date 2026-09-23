@@ -699,7 +699,7 @@ export class DynamicPricingService {
     let accepted = 0;
     let rejected = 0;
     const failed: { id: string; reason: string }[] = [];
-    for (const id of [...new Set(dto.ids)]) {
+    for (const id of new Set(dto.ids)) {
       try {
         await this.db.tenant(user.tenantId, (tx) => this.decide(tx, user, id, dto.action));
         if (dto.action === 'ACCEPT') accepted++;
