@@ -114,7 +114,7 @@ export interface HotelSeed {
   rooms: RoomSeed[];
 }
 
-const STANDARD_POLICIES = [
+export const STANDARD_POLICIES = [
   'Check-in from 2:00 PM; check-out by 12:00 noon.',
   'A valid government-issued photo ID is required at check-in.',
   'Smoking is not permitted in rooms; designated areas are available.',
@@ -155,8 +155,8 @@ const MIX: RoomStatus[] = [
 ];
 
 // -----------------------------------------------------------------------------
-// Demo hotel: The Palmwine House (Growth, ACTIVE). 3 room types, 24 rooms on
-// floors 1-3, 5 staff accounts (owner + 4).
+// Demo hotel: The Palmwine House (Pro since M5, ACTIVE). 3 room types, 24 rooms
+// on floors 1-3. The M5 seed (pro.ts) adds its second property, Palmwine House Ikoyi.
 // -----------------------------------------------------------------------------
 export const DEMO_HOTEL: HotelSeed = {
   slug: 'palmwine-house',
@@ -195,7 +195,7 @@ export const DEMO_HOTEL: HotelSeed = {
   policies: STANDARD_POLICIES,
   accentColor: '#B4452A',
   featured: true,
-  plan: 'growth',
+  plan: 'pro',
   status: 'ACTIVE',
   interval: 'MONTHLY',
   periodEndsInDays: 20,

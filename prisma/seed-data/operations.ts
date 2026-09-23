@@ -226,8 +226,8 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
     new Date(Math.min(at(T, time).getTime(), now.getTime() - minutesBeforeNow * MIN));
 
   for (const u of await prisma.user.findMany({ where: { tenantId: tenant.id } })) ctx.users.set(u.email, { id: u.id, fullName: u.fullName });
-  for (const r of await prisma.room.findMany({ where: { tenantId: tenant.id } })) ctx.rooms.set(r.number, r);
-  for (const t of await prisma.roomType.findMany({ where: { tenantId: tenant.id } })) ctx.types.set(t.name, t);
+  for (const r of await prisma.room.findMany({ where: { tenantId: tenant.id, propertyId: property.id } })) ctx.rooms.set(r.number, r);
+  for (const t of await prisma.roomType.findMany({ where: { tenantId: tenant.id, propertyId: property.id } })) ctx.types.set(t.name, t);
   const U = (email: string) => ctx.users.get(email)!;
   const owner = U('demo@palmwine.ng');
   const tunde = U('tunde@palmwine.ng');
@@ -1035,7 +1035,7 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
   // ---------------------------------------------------------------------------
   // Night audit runs, daily statistics and owner digests for the past 30 days.
   // ---------------------------------------------------------------------------
-  const flashes = await computeDailyFlashes(prisma as unknown as Parameters<typeof computeDailyFlashes>[0], tenant.id, addDays(T, -30), addDays(T, -1));
+  const flashes = await computeDailyFlashes(prisma as unknown as Parameters<typeof computeDailyFlashes>[0], tenant.id, addDays(T, -30), addDays(T, -1), [property.id]);
   const allFlags = flagRows.map((f) => ({ created: new Date(f.createdAt as Date), resolved: f.resolvedAt ? new Date(f.resolvedAt as Date) : null, rule: f.rule as GuardRule, severity: f.severity as GuardSeverity, title: f.title }));
   const digestRows: Prisma.OwnerDigestCreateManyInput[] = [];
   for (const f of flashes) {

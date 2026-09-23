@@ -150,9 +150,9 @@ export async function seedGrowth(prisma: PrismaClient, tenantSlug: string): Prom
   const emeka = U('emeka@palmwine.ng');
   const funmi = U('funmi@palmwine.ng');
 
-  const rooms = new Map((await prisma.room.findMany({ where: { tenantId } })).map((r) => [r.number, r]));
+  const rooms = new Map((await prisma.room.findMany({ where: { tenantId, propertyId: property.id } })).map((r) => [r.number, r]));
   const R = (n: string) => rooms.get(n)!;
-  const types = new Map((await prisma.roomType.findMany({ where: { tenantId } })).map((t) => [t.name, t]));
+  const types = new Map((await prisma.roomType.findMany({ where: { tenantId, propertyId: property.id } })).map((t) => [t.name, t]));
   const standard = types.get('Standard Queen')!;
   const deluxe = types.get('Deluxe King')!;
   const suite = types.get('Palm Suite')!;

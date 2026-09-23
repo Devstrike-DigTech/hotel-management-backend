@@ -14,6 +14,8 @@ import { ALL_HOTELS, DEMO_HOTEL, type HotelSeed } from './seed-data/hotels.js';
 import { DEMO_GUEST, seedGuestSide } from './seed-data/guest-side.js';
 import { DEMO_PINS, seedOperations } from './seed-data/operations.js';
 import { seedGrowth, seedRatePlansEverywhere } from './seed-data/growth.js';
+import { prepareProTenant } from './seed-data/pro.js';
+import { seedPro } from './seed-data/pro-data.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const NAIRA = 100;
@@ -331,6 +333,8 @@ async function main() {
     const r = await seedHotel(h, passwordHash);
     console.log(`  ${h.slug.padEnd(22)} ${h.plan.padEnd(10)} ${h.status.padEnd(9)} rooms=${r.rooms} users=${r.users}`);
   }
+  console.log('Preparing the Pro group for %s (second property, access)...', DEMO_HOTEL.slug);
+  await prepareProTenant(prisma, DEMO_HOTEL.slug, passwordHash);
   console.log('Seeding operations for %s...', DEMO_HOTEL.slug);
   const ops = await seedOperations(prisma, DEMO_HOTEL.slug, process.env.APP_NAME ?? 'HotelOS');
   console.log('  %s', Object.entries(ops).map(([k, v]) => `${k}=${v}`).join(' '));
@@ -343,6 +347,9 @@ async function main() {
   const properties = await seedRatePlansEverywhere(prisma);
   const growth = await seedGrowth(prisma, DEMO_HOTEL.slug);
   console.log('  BAR plans=%d %s', properties, Object.entries(growth).map(([k, v]) => `${k}=${v}`).join(' '));
+  console.log('Seeding Pro-tier data (Ikoyi, POS, channels, pricing, inbox, loyalty, domains)...');
+  const pro = await seedPro(prisma, DEMO_HOTEL.slug);
+  console.log('  %s', Object.entries(pro).map(([k, v]) => `${k}=${v}`).join(' '));
   console.log('Done. Hotel logins use password "%s"; demo owner: %s', HOTEL_PASSWORD, DEMO_HOTEL.owner.email);
 }
 

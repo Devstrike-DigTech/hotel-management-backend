@@ -84,7 +84,8 @@ export class DbService {
    * suggestions). RLS still limits it to the tenant.
    */
   withAllProperties<T>(_tenantId: string, fn: () => Promise<T>): Promise<T> {
-    return propertyScopeStore.exit(() => activePropertyFilter.run(null, fn));
+    // Awaited inside the context: Prisma queries are lazy and run when awaited.
+    return propertyScopeStore.exit(() => activePropertyFilter.run(null, async () => await fn()));
   }
 
   public<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
