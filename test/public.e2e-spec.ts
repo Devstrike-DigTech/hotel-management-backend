@@ -76,7 +76,11 @@ describe('Public API', () => {
   });
 
   it('GET /public/resolve-host maps subdomains and rejects reserved hosts', async () => {
-    await get('/public/resolve-host?host=palmwine-house.hotelos.test').expect(200, { slug: 'palmwine-house' });
+    // M5: the demo group has two properties, so its own subdomain is the group root.
+    const group = await get('/public/resolve-host?host=palmwine-house.hotelos.test').expect(200);
+    expect(group.body).toMatchObject({ slug: 'palmwine-house', kind: 'GROUP', groupSlug: 'palmwine-house' });
+    const ikoyi = await get('/public/resolve-host?host=palmwine-house-ikoyi.hotelos.test').expect(200);
+    expect(ikoyi.body).toMatchObject({ slug: 'palmwine-house-ikoyi', kind: 'PROPERTY', groupSlug: 'palmwine-house' });
     await get('/public/resolve-host?host=www.hotelos.test').expect(404);
     await get('/public/resolve-host?host=unknown.example.com').expect(404);
   });

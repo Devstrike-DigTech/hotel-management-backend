@@ -544,6 +544,8 @@ export class LoyaltyService implements OnModuleInit {
       redactedText: `(code hidden) ${out.p.name} redemption of ${dto.points} points at ${out.hotel}`,
       html: null,
       waTemplate: { name: 'otp_code', language: 'en', params: [out.code] },
+      // The development outbox shows the code (as for guest sign-in codes); providers ignore meta.
+      meta: { otpCode: out.code, challengeId: out.c.id },
     });
     return {
       challengeId: out.c.id,
@@ -673,7 +675,41 @@ export class LoyaltyService implements OnModuleInit {
   }
 
   async runScheduled() {
-    return this.runExpiry();
+    const expired = await this.runExpiry();
+    const retiered = await this.retierAllTenants();
+    return { ...expired, retiered };
+  }
+
+  /** Nightly: nights in the last 12 months move members up and down the tiers. */
+  async retierAllTenants() {
+    const programmes = await this.db.system((tx) => tx.loyaltyProgramme.findMany({ where: { enabled: true }, select: { tenantId: true } }));
+    let changed = 0;
+    for (const { tenantId } of programmes) {
+      try {
+        changed += await this.db.tenant(tenantId, async (tx) => {
+          const tiers = await this.tiers(tx, tenantId);
+          const nights = await tx.$queryRaw<{ guest_id: string; n: number }[]>`
+            SELECT guest_id::text, COALESCE(SUM(GREATEST(1, (departure_at AT TIME ZONE 'Africa/Lagos')::date - (arrival_at AT TIME ZONE 'Africa/Lagos')::date)), 0)::int AS n
+              FROM reservations
+             WHERE tenant_id = ${tenantId}::uuid AND status = 'CHECKED_OUT' AND stay_type = 'NIGHTLY' AND departure_at >= now() - interval '365 days'
+             GROUP BY guest_id`;
+          const by = new Map(nights.map((r) => [r.guest_id, Number(r.n)]));
+          let n = 0;
+          for (const m of await tx.loyaltyMember.findMany({ where: { tenantId }, select: { id: true, guestId: true, tierId: true, nights12m: true } })) {
+            const nights12m = by.get(m.guestId) ?? 0;
+            const tierId = tierFor(tiers, nights12m)?.id ?? null;
+            if (nights12m !== m.nights12m || tierId !== m.tierId) {
+              await tx.loyaltyMember.update({ where: { id: m.id }, data: { nights12m, tierId } });
+              n++;
+            }
+          }
+          return n;
+        });
+      } catch (e) {
+        this.logger.error(`Loyalty tiers for ${tenantId} failed: ${(e as Error).message}`);
+      }
+    }
+    return changed;
   }
 
   expiryNow(user: AuthUser) {

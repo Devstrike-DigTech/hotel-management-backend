@@ -53,7 +53,7 @@ export function parseArrivalTime(text: string): string | null {
   const t = text.toLowerCase().trim();
   if (/\bnoon\b|\bmidday\b/.test(t)) return '12:00';
   if (/\bmidnight\b/.test(t)) return '00:00';
-  const m = t.match(/\b(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?\b/);
+  const m = t.match(/\b(\d{1,2})(?:[:.](\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?(?![a-z0-9])/);
   if (!m) return null;
   let h = Number(m[1]);
   const min = m[2] ? Number(m[2]) : 0;

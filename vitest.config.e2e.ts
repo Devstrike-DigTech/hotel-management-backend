@@ -22,6 +22,8 @@ const env: Record<string, string> = {
   PAYSTACK_SECRET_KEY: 'sk_test_e2e_0123456789abcdef',
   PAYSTACK_BASE_URL: 'http://127.0.0.1:48999',
   APP_NAME: 'HotelOS',
+  CHANNEX_WEBHOOK_SECRET: 'e2e-channex-webhook-secret',
+  DNS_PROVIDER: 'mock',
   APP_DOMAIN: 'hotelos.test',
   SUPPORT_EMAIL: 'support@hotelos.test',
   JWT_ACCESS_SECRET: 'e2e-access-secret-0123456789abcdef0123',
