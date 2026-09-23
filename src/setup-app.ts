@@ -24,7 +24,8 @@ export function setupApp(app: INestApplication): void {
     origin: config.get('CORS_ORIGINS'),
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key'],
+    exposedHeaders: ['Idempotent-Replayed', 'Content-Disposition'],
     maxAge: 600,
   });
   app.useGlobalPipes(createValidationPipe());

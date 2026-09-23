@@ -1,0 +1,221 @@
+import { Injectable, Logger } from '@nestjs/common';
+import type { NightAuditRun, Prisma } from '../../generated/prisma/client.js';
+import type { JobTrigger } from '../../generated/prisma/enums.js';
+import type { AuthUser } from '../../common/auth-types.js';
+import { addDays, dbDate, fromDbDate, isIsoDate, lagosDate, lagosStartOfDay } from '../../common/time/lagos.js';
+import { DbService } from '../../prisma/db.service.js';
+import { AuditService, SYSTEM_ACTOR, userActor } from '../audit/audit.service.js';
+import { LedgerService, SYSTEM } from '../folios/ledger.service.js';
+import { GuardService } from '../guard/guard.service.js';
+import { DocumentsService } from '../invoices/documents.service.js';
+import { advisoryLock, Err, k, paginate } from '../ops/ops.helpers.js';
+import { computeDailyFlashes } from '../reports/stats.compute.js';
+
+export interface AuditSummary {
+  roomChargesPosted: number;
+  roomChargesKobo: number;
+  noShows: number;
+  flagsCreated: number;
+}
+
+const STALE_RUN_MS = 15 * 60_000;
+
+function toView(r: NightAuditRun) {
+  return {
+    id: r.id,
+    businessDate: fromDbDate(r.businessDate),
+    status: r.status,
+    trigger: r.trigger,
+    startedAt: r.startedAt.toISOString(),
+    finishedAt: r.finishedAt?.toISOString() ?? null,
+    summary: (r.summary as AuditSummary | null) ?? null,
+    error: r.error,
+    runBy: r.runById ? { id: r.runById, fullName: r.runByName ?? '' } : null,
+  };
+}
+
+/**
+ * Night audit for one business date, idempotent per (tenant, date): posts the
+ * night's room charges, marks no-shows, runs the Revenue Guard sweep and
+ * snapshots the daily statistics.
+ */
+@Injectable()
+export class NightAuditService {
+  private readonly logger = new Logger(NightAuditService.name);
+
+  constructor(
+    private readonly db: DbService,
+    private readonly ledger: LedgerService,
+    private readonly docs: DocumentsService,
+    private readonly guard: GuardService,
+    private readonly audit: AuditService,
+  ) {}
+
+  list(user: AuthUser, page?: number, pageSize?: number) {
+    const pg = paginate(page, pageSize);
+    return this.db.tenant(user.tenantId, async (tx) => {
+      const where = { tenantId: user.tenantId };
+      const rows = await tx.nightAuditRun.findMany({ where, orderBy: { businessDate: 'desc' }, skip: pg.skip, take: pg.take });
+      const total = await tx.nightAuditRun.count({ where });
+      return { items: rows.map(toView), total, page: pg.page, pageSize: pg.pageSize };
+    });
+  }
+
+  runManual(user: AuthUser, businessDate?: string) {
+    const date = businessDate ?? addDays(lagosDate(), -1);
+    if (!isIsoDate(date)) throw Err.validation('businessDate', 'businessDate must be YYYY-MM-DD');
+    if (date >= lagosDate()) throw Err.validation('businessDate', 'The night audit runs for a business date that has ended (before today)');
+    return this.run(user.tenantId, date, 'MANUAL', user);
+  }
+
+  async run(tenantId: string, businessDate: string, trigger: JobTrigger, user?: AuthUser) {
+    const now = new Date();
+    // Claim the run (or find that it is already done).
+    const claim = await this.db.tenant(tenantId, async (tx) => {
+      await advisoryLock(tx, `night-audit:${tenantId}`);
+      const existing = await tx.nightAuditRun.findUnique({ where: { tenantId_businessDate: { tenantId, businessDate: dbDate(businessDate) } } });
+      if (existing?.status === 'COMPLETED') return { run: existing, already: true };
+      if (existing?.status === 'RUNNING' && now.getTime() - existing.startedAt.getTime() < STALE_RUN_MS) {
+        return { run: existing, already: true };
+      }
+      const data = {
+        status: 'RUNNING' as const,
+        trigger,
+        startedAt: now,
+        finishedAt: null,
+        error: null,
+        runById: user?.userId ?? null,
+        runByName: user?.fullName ?? null,
+      };
+      const run = existing
+        ? await tx.nightAuditRun.update({ where: { id: existing.id }, data })
+        : await tx.nightAuditRun.create({ data: { tenantId, businessDate: dbDate(businessDate), ...data } });
+      return { run, already: false };
+    });
+    if (claim.already) return { ...toView(claim.run), alreadyRun: true };
+
+    try {
+      const run = await this.db.tenant(tenantId, async (tx) => {
+        await advisoryLock(tx, `night-audit:${tenantId}`);
+        const summary: AuditSummary = { roomChargesPosted: 0, roomChargesKobo: 0, noShows: 0, flagsCreated: 0 };
+        const dayStart = lagosStartOfDay(businessDate);
+        const dayEnd = lagosStartOfDay(addDays(businessDate, 1));
+
+        // 1. Room charges for every in-house nightly stay covering the night.
+        const inHouse = await tx.reservation.findMany({
+          where: { tenantId, status: 'CHECKED_IN', stayType: 'NIGHTLY', arrivalAt: { lt: dayEnd }, departureAt: { gt: dayEnd } },
+          include: { room: true, folio: { select: { id: true } } },
+        });
+        for (const r of inHouse) {
+          if (!r.folio) continue;
+          const posted = await tx.folioEntry.findMany({
+            where: { folioId: r.folio.id, type: 'ROOM', businessDate: dbDate(businessDate) },
+            select: { id: true },
+          });
+          const liveCount = posted.length
+            ? posted.length - (await tx.folioEntry.count({ where: { refEntryId: { in: posted.map((p) => p.id) } } }))
+            : 0;
+          if (liveCount > 0) continue;
+          const folio = await this.docs.loadFolio(tx, tenantId, r.folio.id);
+          if (folio.status !== 'OPEN') continue;
+          await this.ledger.postCharge(
+            tx,
+            tenantId,
+            folio,
+            { type: 'ROOM', description: `Room ${r.room?.number ?? ''}, night of ${businessDate}`, amountKobo: k(r.rateKobo), businessDate },
+            SYSTEM,
+          );
+          summary.roomChargesPosted += 1;
+          summary.roomChargesKobo += k(r.rateKobo);
+        }
+
+        // 2. No-shows: confirmed or pending stays that should have arrived by the business date.
+        const unarrived = await tx.reservation.findMany({
+          where: { tenantId, status: { in: ['PENDING', 'CONFIRMED'] }, arrivalAt: { lt: dayEnd } },
+          select: { id: true, code: true },
+        });
+        if (unarrived.length) {
+          await tx.reservation.updateMany({
+            where: { id: { in: unarrived.map((u) => u.id) } },
+            data: { status: 'NO_SHOW', noShowAt: new Date(), cancelReason: `Not checked in by the night audit of ${businessDate}` },
+          });
+          summary.noShows = unarrived.length;
+        }
+
+        // 3. Revenue Guard sweep.
+        summary.flagsCreated = await this.guard.sweepTx(tx, tenantId);
+
+        // 4. Daily statistics snapshot.
+        const [flash] = await computeDailyFlashes(tx, tenantId, businessDate, businessDate);
+        const snapshot = { ...flash, live: false };
+        await tx.dailyStat.upsert({
+          where: { tenantId_date: { tenantId, date: dbDate(businessDate) } },
+          create: {
+            tenantId,
+            date: dbDate(businessDate),
+            roomsAvailable: flash.roomsAvailable,
+            roomsSold: flash.roomsSold,
+            occupancyRate: flash.occupancyRate,
+            adrKobo: flash.adrKobo,
+            revparKobo: flash.revparKobo,
+            roomRevenueKobo: flash.roomRevenueKobo,
+            totalRevenueKobo: flash.totalRevenueKobo,
+            paymentsTotalKobo: flash.paymentsTotalKobo,
+            dayUseCount: flash.dayUseCount,
+            data: snapshot as unknown as Prisma.InputJsonValue,
+          },
+          update: {
+            roomsAvailable: flash.roomsAvailable,
+            roomsSold: flash.roomsSold,
+            occupancyRate: flash.occupancyRate,
+            adrKobo: flash.adrKobo,
+            revparKobo: flash.revparKobo,
+            roomRevenueKobo: flash.roomRevenueKobo,
+            totalRevenueKobo: flash.totalRevenueKobo,
+            paymentsTotalKobo: flash.paymentsTotalKobo,
+            dayUseCount: flash.dayUseCount,
+            data: snapshot as unknown as Prisma.InputJsonValue,
+          },
+        });
+
+        await this.audit.record(tx, {
+          tenantId,
+          actor: user ? userActor(user) : SYSTEM_ACTOR,
+          action: 'night_audit.completed',
+          entityType: 'night_audit_run',
+          entityId: claim.run.id,
+          metadata: { businessDate, ...summary, noShowCodes: unarrived.map((u) => u.code), dayStart: dayStart.toISOString() },
+        });
+        return tx.nightAuditRun.update({
+          where: { id: claim.run.id },
+          data: { status: 'COMPLETED', finishedAt: new Date(), summary: summary as unknown as Prisma.InputJsonValue },
+        });
+      });
+      return { ...toView(run), alreadyRun: false };
+    } catch (e) {
+      this.logger.error(`Night audit ${businessDate} failed for ${tenantId}: ${(e as Error).message}`);
+      const failed = await this.db.tenant(tenantId, (tx) =>
+        tx.nightAuditRun.update({
+          where: { id: claim.run.id },
+          data: { status: 'FAILED', finishedAt: new Date(), error: (e as Error).message.slice(0, 500) },
+        }),
+      );
+      return { ...toView(failed), alreadyRun: false };
+    }
+  }
+
+  /** Scheduled entry point (02:00 Lagos): yesterday, for every live tenant. */
+  async runAll(now = new Date()) {
+    const businessDate = addDays(lagosDate(now), -1);
+    const tenants = await this.db.system((tx) =>
+      tx.tenant.findMany({ where: { subscription: { status: { not: 'SUSPENDED' } } }, select: { id: true } }),
+    );
+    let completed = 0;
+    for (const t of tenants) {
+      const r = await this.run(t.id, businessDate, 'SCHEDULED');
+      if (r.status === 'COMPLETED') completed++;
+    }
+    this.logger.log(`Night audit ${businessDate}: ${completed}/${tenants.length} tenants completed`);
+    return { businessDate, tenants: tenants.length, completed };
+  }
+}

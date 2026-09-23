@@ -5,6 +5,14 @@ export const DUNNING_SCHEDULER_ID = 'dunning-daily';
 export const DUNNING_CRON = '0 2 * * *';
 export const DUNNING_TZ = 'Africa/Lagos';
 
+export const OPERATIONS_QUEUE = 'operations';
+export const OPS_JOBS = {
+  nightAudit: { name: 'night-audit', scheduler: 'night-audit-daily', cron: '0 2 * * *' },
+  ownerDigest: { name: 'owner-digest', scheduler: 'owner-digest-daily', cron: '0 23 * * *' },
+  guardSweep: { name: 'guard-sweep', scheduler: 'guard-sweep-hourly', cron: '5 * * * *' },
+  idempotencyPurge: { name: 'idempotency-purge', scheduler: 'idempotency-purge-hourly', cron: '35 * * * *' },
+} as const;
+
 /** ioredis connection options from a redis:// URL. */
 export function redisConnection(url: string) {
   const u = new URL(url);

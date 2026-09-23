@@ -5,7 +5,8 @@ import { AppConfigService } from '../../config/app-config.service.js';
 import { BillingModule } from '../billing/billing.module.js';
 import { BillingProcessor } from './dunning.processor.js';
 import { DunningScheduler } from './dunning.scheduler.js';
-import { BILLING_QUEUE, redisConnection } from './jobs.constants.js';
+import { BILLING_QUEUE, OPERATIONS_QUEUE, redisConnection } from './jobs.constants.js';
+import { OperationsProcessor, OperationsScheduler } from './operations.processor.js';
 
 /**
  * BullMQ wiring. Imported only when JOBS_ENABLED is true (see AppModule), so
@@ -23,8 +24,9 @@ import { BILLING_QUEUE, redisConnection } from './jobs.constants.js';
       }),
     }),
     BullModule.registerQueue({ name: BILLING_QUEUE }),
+    BullModule.registerQueue({ name: OPERATIONS_QUEUE }),
     BillingModule,
   ],
-  providers: [BillingProcessor, DunningScheduler],
+  providers: [BillingProcessor, DunningScheduler, OperationsProcessor, OperationsScheduler],
 })
 export class JobsModule {}
