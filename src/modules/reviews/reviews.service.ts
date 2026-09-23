@@ -226,14 +226,14 @@ export class ReviewsService {
     });
   }
 
+  /** Computed from the review rows themselves (the property columns are a cache of the same numbers). */
   summary(user: AuthUser, months = 12) {
     return this.db.tenant(user.tenantId, async (tx) => {
-      const p = await tx.property.findFirst({ where: { tenantId: user.tenantId }, orderBy: { createdAt: 'asc' } });
-      if (!p) throw AppException.notFound('Property');
       const rows = await tx.review.findMany({
         where: { tenantId: user.tenantId, status: { in: [...VISIBLE] } },
-        select: { overall: true, createdAt: true, hotelReply: true },
+        select: { overall: true, cleanliness: true, service: true, location: true, value: true, travellerType: true, createdAt: true, hotelReply: true },
       });
+      const a = aggregate(rows);
       const now = lagosDate();
       const monthsList: string[] = [];
       let y = Number(now.slice(0, 4));
@@ -252,7 +252,11 @@ export class ReviewsService {
         byMonth.set(key, [...(byMonth.get(key) ?? []), r.overall]);
       }
       return {
-        ...reviewSummaryOf(p),
+        rating: a.rating,
+        count: a.count,
+        subscores: { cleanliness: a.cleanliness, service: a.service, location: a.location, value: a.value },
+        distribution: a.stars,
+        byTravellerType: a.byTravellerType,
         unreplied: rows.filter((r) => !r.hotelReply).length,
         trend: monthsList.map((month) => {
           const xs = byMonth.get(month) ?? [];

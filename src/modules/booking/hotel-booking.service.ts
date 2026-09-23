@@ -16,6 +16,22 @@ import { CommissionService } from './commission.service.js';
 
 const BANKS_CACHE_KEY = 'paystack:banks:ng';
 
+export type CommissionStatus = 'PENDING' | 'COLLECTED' | 'REVERSED' | 'NONE';
+
+/**
+ * Where a payment attempt's commission stands: PENDING = expected but not
+ * taken (attempt not paid yet), COLLECTED = taken by the split (net of any
+ * partial reversal), REVERSED = taken and given back in full (refund /
+ * orphaned payment), NONE = no commission (booking site, failed attempt).
+ */
+export function commissionStatusOf(p: { status: string; commissionKobo: bigint | number }, collected: number, reversed: number): CommissionStatus {
+  if (Number(p.commissionKobo) <= 0) return 'NONE';
+  if (p.status === 'INITIALIZED') return 'PENDING';
+  if (p.status === 'FAILED') return 'NONE';
+  if (collected > 0 && reversed >= collected) return 'REVERSED';
+  return collected > 0 ? 'COLLECTED' : 'PENDING';
+}
+
 function range(from?: string, to?: string) {
   const t = to ?? lagosDate();
   const f = from ?? addDays(t, -29);
@@ -185,7 +201,7 @@ export class HotelBookingService {
       const entries = await tx.commissionEntry.findMany({ where: { tenantId: user.tenantId, createdAt: { gte: r.start, lt: r.end } } });
       const sum = (f: (e: (typeof entries)[number]) => boolean) => entries.filter(f).reduce((a, e) => a + k(e.amountKobo), 0);
       const online = pays.reduce((a, p) => a + k(p.paidAmountKobo ?? p.amountKobo), 0);
-      const refunds = pays.flatMap((p) => p.refunds).filter((x) => x.status !== 'FAILED').reduce((a, x) => a + k(x.amountKobo), 0);
+      const refunds = pays.flatMap((p) => p.refunds).reduce((a, x) => a + k(x.amountKobo), 0);
       const commission = sum((e) => e.kind === 'COLLECTED') - sum((e) => e.kind === 'REVERSED' && !e.accrual);
       const payAtHotel = await tx.reservation.count({
         where: { tenantId: user.tenantId, paymentMode: 'PAY_AT_HOTEL', createdAt: { gte: r.start, lt: r.end }, status: { notIn: ['CANCELLED'] } },
@@ -226,7 +242,9 @@ export class HotelBookingService {
       return {
         items: rows.map((p) => {
           const amount = k(p.paidAmountKobo ?? p.amountKobo);
-          const refunded = p.refunds.filter((x) => x.status !== 'FAILED').reduce((a, x) => a + k(x.amountKobo), 0);
+          // Every refund decided for this payment (orphan auto-refunds included), whatever its provider status.
+          const refunded = p.refunds.reduce((a, x) => a + k(x.amountKobo), 0);
+          const lastRefund = [...p.refunds].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0] ?? null;
           const comm = p.commission.filter((c) => c.kind === 'COLLECTED').reduce((a, c) => a + k(c.amountKobo), 0);
           const rev = p.commission.filter((c) => c.kind === 'REVERSED').reduce((a, c) => a + k(c.amountKobo), 0);
           return {
@@ -243,6 +261,9 @@ export class HotelBookingService {
             commissionKobo: comm,
             refundedKobo: refunded,
             commissionReversedKobo: rev,
+            commissionStatus: commissionStatusOf(p, comm, rev),
+            refundStatus: lastRefund?.status ?? null,
+            orphanReason: p.orphanReason,
             netKobo: amount - comm - refunded + rev,
           };
         }),
@@ -419,7 +440,7 @@ export class HotelBookingService {
 
   async onlineInfo(tx: Tx, r: { id: string; paymentMode: string | null; source: string; guaranteeType: string | null; commissionBps: number | null; quotedTotalKobo: bigint | null; holdExpiresAt: Date | null; contactPhone: string | null; contactEmail: string | null; specialRequests: string; guestAccountId: string | null; cancelledBy: string | null; cancellationFeeKobo: bigint | null; status: string }, guestAccountId: string | null) {
     if (!r.paymentMode) return null;
-    const payments = await tx.bookingPayment.findMany({ where: { reservationId: r.id }, orderBy: { createdAt: 'asc' } });
+    const payments = await tx.bookingPayment.findMany({ where: { reservationId: r.id }, orderBy: { createdAt: 'asc' }, include: { commission: true } });
     const refunds = await tx.bookingRefund.findMany({ where: { reservationId: r.id }, orderBy: { createdAt: 'asc' } });
     const c = await this.commission.totals(tx, r.id);
     return {
@@ -434,16 +455,22 @@ export class HotelBookingService {
       guestAccountLinked: !!(r.guestAccountId ?? guestAccountId),
       cancelledBy: r.cancelledBy,
       cancellationFeeKobo: r.cancellationFeeKobo === null ? null : k(r.cancellationFeeKobo),
-      payments: payments.map((p) => ({
-        id: p.id,
-        reference: p.reference,
-        status: p.status,
-        amountKobo: k(p.paidAmountKobo ?? p.amountKobo),
-        commissionKobo: k(p.commissionKobo),
-        paidAt: p.paidAt?.toISOString() ?? null,
-        channel: p.channel,
-        orphanReason: p.orphanReason,
-      })),
+      payments: payments.map((p) => {
+        const taken = p.commission.filter((c) => c.kind === 'COLLECTED').reduce((a, c) => a + k(c.amountKobo), 0);
+        const back = p.commission.filter((c) => c.kind === 'REVERSED').reduce((a, c) => a + k(c.amountKobo), 0);
+        return {
+          id: p.id,
+          reference: p.reference,
+          status: p.status,
+          amountKobo: k(p.paidAmountKobo ?? p.amountKobo),
+          commissionKobo: k(p.commissionKobo),
+          commissionStatus: commissionStatusOf(p, taken, back),
+          commissionTakenKobo: taken - back,
+          paidAt: p.paidAt?.toISOString() ?? null,
+          channel: p.channel,
+          orphanReason: p.orphanReason,
+        };
+      }),
       refunds: refunds.map((x) => ({
         id: x.id,
         amountKobo: k(x.amountKobo),
@@ -453,7 +480,17 @@ export class HotelBookingService {
         processedAt: x.processedAt?.toISOString() ?? null,
         error: x.error,
       })),
-      commission: { collectedKobo: c.collectedKobo, accruedKobo: c.accruedKobo, reversedKobo: c.reversedKobo, netKobo: c.netKobo },
+      commission: {
+        collectedKobo: c.collectedKobo,
+        accruedKobo: c.accruedKobo,
+        reversedKobo: c.reversedKobo,
+        netKobo: c.netKobo,
+        // Expected on an unpaid online hold; becomes COLLECTED when the payment lands.
+        pendingKobo:
+          r.paymentMode === 'ONLINE' && !payments.some((p) => ['SUCCEEDED', 'PARTIALLY_REFUNDED', 'REFUNDED'].includes(p.status))
+            ? k(payments.find((p) => p.status === 'INITIALIZED')?.commissionKobo ?? 0)
+            : 0,
+      },
     };
   }
 }

@@ -87,8 +87,6 @@ export interface HotelSeed {
   policies: string[];
   accentColor: string | null;
   featured: boolean;
-  rating: number | null;
-  reviewCount: number;
   plan: 'starter' | 'growth' | 'pro' | 'enterprise';
   status: SubscriptionStatus;
   interval: 'MONTHLY' | 'YEARLY';
@@ -183,8 +181,6 @@ export const DEMO_HOTEL: HotelSeed = {
   policies: STANDARD_POLICIES,
   accentColor: '#B4452A',
   featured: true,
-  rating: 4.7,
-  reviewCount: 312,
   plan: 'growth',
   status: 'ACTIVE',
   interval: 'MONTHLY',
@@ -307,8 +303,6 @@ export const MARKETPLACE_HOTELS: HotelSeed[] = [
     policies: STANDARD_POLICIES,
     accentColor: '#22324F',
     featured: true,
-    rating: 4.9,
-    reviewCount: 468,
     plan: 'pro',
     status: 'ACTIVE',
     interval: 'YEARLY',
@@ -383,8 +377,6 @@ export const MARKETPLACE_HOTELS: HotelSeed[] = [
     policies: STANDARD_POLICIES,
     accentColor: null,
     featured: false,
-    rating: 4.5,
-    reviewCount: 291,
     plan: 'growth',
     status: 'ACTIVE',
     interval: 'MONTHLY',
@@ -460,8 +452,6 @@ export const MARKETPLACE_HOTELS: HotelSeed[] = [
     policies: STANDARD_POLICIES,
     accentColor: '#2F5A43',
     featured: true,
-    rating: 4.8,
-    reviewCount: 377,
     plan: 'enterprise',
     status: 'ACTIVE',
     interval: 'YEARLY',
@@ -537,8 +527,6 @@ export const MARKETPLACE_HOTELS: HotelSeed[] = [
     policies: STANDARD_POLICIES,
     accentColor: null,
     featured: false,
-    rating: 4.3,
-    reviewCount: 96,
     plan: 'starter',
     status: 'TRIALING',
     interval: 'MONTHLY',
@@ -602,8 +590,6 @@ export const MARKETPLACE_HOTELS: HotelSeed[] = [
     policies: STANDARD_POLICIES,
     accentColor: null,
     featured: false,
-    rating: 4.4,
-    reviewCount: 183,
     plan: 'growth',
     status: 'ACTIVE',
     interval: 'MONTHLY',
@@ -677,8 +663,6 @@ export const MARKETPLACE_HOTELS: HotelSeed[] = [
     policies: STANDARD_POLICIES,
     accentColor: null,
     featured: false,
-    rating: 4.2,
-    reviewCount: 74,
     plan: 'starter',
     status: 'PAST_DUE',
     interval: 'MONTHLY',
@@ -741,8 +725,6 @@ export const MARKETPLACE_HOTELS: HotelSeed[] = [
     policies: STANDARD_POLICIES,
     accentColor: null,
     featured: false,
-    rating: 4.1,
-    reviewCount: 58,
     plan: 'starter',
     status: 'ACTIVE',
     interval: 'MONTHLY',
@@ -817,8 +799,6 @@ export const MARKETPLACE_HOTELS: HotelSeed[] = [
     policies: STANDARD_POLICIES,
     accentColor: '#B98A2E',
     featured: true,
-    rating: 4.6,
-    reviewCount: 142,
     plan: 'growth',
     status: 'ACTIVE',
     interval: 'YEARLY',

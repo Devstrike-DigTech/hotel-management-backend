@@ -115,8 +115,6 @@ async function seedHotel(h: HotelSeed, passwordHash: string) {
     accentColor: h.accentColor,
     listedOnMarketplace: true,
     featured: h.featured,
-    rating: h.rating,
-    reviewCount: h.reviewCount,
   };
   const property = await prisma.property.upsert({
     where: { slug: h.slug },
