@@ -53,7 +53,7 @@ export class LoyaltyService implements OnModuleInit {
       checkedInTx: (tx, tenantId, id, opts) => (opts.enrolLoyalty ? this.enrolAtCheckIn(tx, tenantId, id).then(() => undefined) : Promise.resolve()),
       checkedOutTx: (tx, tenantId, id) => this.earnForStay(tx, tenantId, id).then(() => undefined),
       entriesVoidedTx: (tx, tenantId, ids) => this.reverseForEntries(tx, tenantId, ids),
-      releasedTx: (tx, tenantId, id, opts) => this.returnForReservation(tx, tenantId, id, String(opts.why ?? 'Booking cancelled')),
+      releasedTx: (tx, tenantId, id, opts) => this.returnForReservation(tx, tenantId, id, typeof opts.why === 'string' ? opts.why : 'Booking cancelled'),
       detailTx: (tx, tenantId, id) => this.reservationLoyalty(tx, tenantId, id).then((loyalty) => ({ loyalty })),
     });
   }
