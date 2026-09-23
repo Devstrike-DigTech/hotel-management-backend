@@ -1,14 +1,5 @@
 import { Transform, Type } from 'class-transformer';
-import {
-  IsIn,
-  IsInt,
-  IsOptional,
-  Matches,
-  IsString,
-  Max,
-  MaxLength,
-  Min,
-} from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, ValidateIf } from 'class-validator';
 
 const trim = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : value;
@@ -72,7 +63,14 @@ export class HotelSearchQueryDto {
 }
 
 export class ResolveHostQueryDto {
+  @ValidateIf((o: ResolveHostQueryDto) => !o.domain)
   @IsString()
   @MaxLength(253)
-  host!: string;
+  host?: string;
+
+  /** M5: alias used by Caddy's on-demand TLS `ask` endpoint (`?domain=`). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(253)
+  domain?: string;
 }

@@ -30,6 +30,12 @@ The product name is not final, so the code never hard-codes it. It comes from
   restrictions and promo codes behind one pricing function, corporate
   accounts with a city ledger, WhatsApp templates with real-time owner
   alerts and inbound replies, and a trusted client-IP header for rate limits
+- Pro tier (M5): hotel groups with several properties (`X-Property-Id` scope,
+  per-property numbering, group reports), point of sale with a kitchen
+  display, stock and minibar, a channel manager (iCal and Channex) with
+  debounced availability pushes and an overbooking guard, dynamic pricing
+  (forecast, pace, Nigerian events, guardrails, suggest or autopilot), a
+  guest WhatsApp inbox, a group loyalty programme, and custom domains
 - Vitest (unit and e2e, with supertest), oxlint
 
 Base URL: `http://localhost:4000/api/v1`. Swagger UI: `http://localhost:4000/docs`
@@ -73,8 +79,10 @@ The migrations create missing roles `NOLOGIN`, so the grants still apply.
 | who | email | password |
 |---|---|---|
 | Platform console (Devstrike) | `admin@devstrike.ng` | `Admin1234!` |
-| Demo hotel owner, The Palmwine House (Growth, ACTIVE, 24 rooms, Lekki Phase 1) | `demo@palmwine.ng` | `Demo1234!` |
-| Palmwine staff | `tunde@` (manager), `ngozi@` (front desk, morning), `chidinma@` (front desk, evening), `musa@` and `blessing@` (housekeeping), `grace@` (housekeeping supervisor), `emeka@` (maintenance), `seun@` (custom role "Night Auditor"), `funmi@palmwine.ng` (accountant) | `Demo1234!` |
+| Demo group owner, The Palmwine House (Pro, ACTIVE): The Palmwine House (Lekki Phase 1, 24 rooms, prefix `PWH`) and Palmwine House Ikoyi (12 rooms, prefix `PWI`) | `demo@palmwine.ng` | `Demo1234!` |
+| Palmwine staff | `tunde@` (manager), `ngozi@` (front desk, morning), `chidinma@` (front desk, evening, Lekki only), `musa@` and `blessing@` (housekeeping), `grace@` (housekeeping supervisor), `emeka@` (maintenance), `seun@` (custom role "Night Auditor"), `funmi@palmwine.ng` (accountant) | `Demo1234!` |
+| Palmwine M5 staff | `kelechi@` (front desk, Ikoyi only), `yemi@` (waiter / cashier, Lekki), `bisi@palmwine.ng` (kitchen / bar, Lekki) | `Demo1234!` |
+| Growth hotel (every Pro feature locked) | `owner@ekotides.ng` | `Demo1234!` |
 | Starter hotel on trial (housekeeping is locked) | `owner@wusegarden.ng` | `Demo1234!` |
 | Starter hotel, PAST_DUE | `owner@marinacreek.ng` | `Demo1234!` |
 | Demo guest account (platform level) | phone `+2348030000001` (Adaeze Okafor) | sign in with an OTP; read the code from `GET /api/v1/public/dev/outbox` |
@@ -139,6 +147,33 @@ invoices in every aging bucket and part payments; two guests in house are
 billed to company accounts. Owner WhatsApp alerts are configured (quiet hours
 23:30-06:00) with a sent, a deferred, an acknowledged and a test alert. The
 owner's phone is `+2348031234567`. Every other hotel gets its BAR plan.
+
+**Pro-tier demo data (M5).** The Palmwine House group is on Pro with a second
+property, Palmwine House Ikoyi (`palmwine-house-ikoyi`): three room types, 12
+rooms, past, in-house and arriving stays (some top Lekki guests stay in Ikoyi
+too), The Terrace outlet. Lekki has POS outlets The Yard, Palm Bar (happy hour
+17:00-19:00, 20% off cocktails and beer), Room service and Minibar with a
+Nigerian menu (party jollof, ofada and ayamase, suya, peppered snail, asun,
+catfish pepper soup, chapman, zobo, Star, Gulder, Hennessy...) and modifiers,
+30 days of sales (cash, card, transfer, charges to rooms, voids), open orders
+and kitchen tickets in every state today, stock with purchases, a Palm Bar
+count short by two bottles of Hennessy (flagged) and minibar par levels. An
+Airbnb iCal connection with an import feed and a (mock) Channex connection
+mapped to every room type, Booking.com and Expedia stays over the last and next
+30 days with commissions, one overbooked Palm Suite night and a sync log.
+Dynamic pricing is in SUGGEST mode at Lekki (guardrails, a Burna Boy concert,
+an AFCON qualifier, a conference, competitor prices, a frozen wedding date,
+pending suggestions for 30 days and a month of accepted changes for the
+"what it earned" report) and on AUTOPILOT at Ikoyi. Eight guest conversations
+(towels with a pending suggestion, an AC complaint turned into a ticket, a
+pre-arrival arrival-time confirmation, one outside the 24-hour window, one
+unassigned and overdue, a closed late check-out, an airport pickup, a
+breakfast question) and quick replies. The Palmwine Circle programme (Member,
+Silver 10+ nights, Gold 25+ nights) with 30 members, earn, redeem, adjust
+(one flagged) and expiry history; the demo guest is a Silver member. Lekki's
+booking site is on `book.thepalmwinehouse.com` (VERIFIED); Ikoyi's
+`stay.palmwineikoyi.com` is PENDING (CNAME missing). Eko Tides stays on
+Growth to show the locks.
 
 The seed is idempotent. It upserts everything by natural key (codes, slugs,
 emails, room numbers) and writes a hotel's audit history only once, because
@@ -211,6 +246,12 @@ process refuses to start and lists every missing or invalid value.
 | `ADMIN_URL`, `WEB_URL` | yes | frontend origins, used for payment callbacks |
 | `CORS_ORIGINS` | no | comma-separated; defaults to both local frontends |
 | `AUTH_RATE_LIMIT` | no (20) | requests per minute per IP on auth endpoints |
+| `CHANNEX_API_KEY` | no; required in production for Channex | empty = in-process mock Channex (development) |
+| `CHANNEX_BASE_URL` | no (`https://staging.channex.io/api/v1`) | use `https://app.channex.io/api/v1` in production |
+| `CHANNEX_WEBHOOK_SECRET` | no | verifies `X-Channex-Signature` (hex HMAC-SHA256 of the raw body) on `POST /webhooks/channex`; empty = every delivery rejected |
+| `ICAL_POLL_MINUTES` | no (15) | minutes between iCal imports of a connection (5-1440) |
+| `DNS_PROVIDER` | no (`system` in production, else `mock`) | custom-domain checks: `node:dns` or the in-memory mock |
+| `CUSTOM_DOMAIN_TARGET` | no (`sites.<APP_DOMAIN>`) | the CNAME target hotels point their domain at |
 | `JOBS_ENABLED` | no (true) | `false` starts no BullMQ workers or schedules (dunning, night audit, digest, guard sweep, M4 jobs) |
 | `SWAGGER_ENABLED` | no (true) | serve `/docs` |
 
@@ -864,6 +905,158 @@ header from a browser changes nothing. Audit `ip` fields are unchanged.
 | owner alerts due | every minute |
 | city ledger statements | 1st of the month, 06:00 |
 | city ledger overdue reminders | 09:00 |
+| channel manager: push pending availability and rates (debounced 30 s) | every minute |
+| channel manager: safety sweep of the whole horizon (diffed) | every 15 minutes |
+| iCal imports (each connection every `ICAL_POLL_MINUTES`) | checked every 5 minutes |
+| dynamic pricing run (SUGGEST / AUTOPILOT properties) | 03:00 |
+| autopilot pace-spike check | every 10 minutes |
+| loyalty expiry and tier recalculation | 04:00 |
+| custom domain checks (PENDING; VERIFIED daily) | every 10 minutes |
+
+---
+
+## Pro tier (M5)
+
+The contract is `API-M5.md` (shared with the admin and web apps). Every M5
+table carries `tenant_id` and is under row-level security like the rest.
+
+### Property scope
+
+A tenant is a hotel group; each operational row also carries `property_id`.
+Staff requests run in one current property: the `X-Property-Id` header, else
+the user's default, else the first property they may open. The
+`PermissionGuard` checks it against the user's access (`allProperties` or
+`user_property_access`; owners always see every property) and answers
+`403 PROPERTY_ACCESS_DENIED` otherwise; responses echo `X-Property-Id`.
+
+The scope lives in an AsyncLocalStorage store (`src/common/property-scope.ts`).
+`DbService.tenant()` runs on a Prisma client extension that adds
+`AND property_id IN (scope)` to every read, update and delete of a
+property-scoped model and refuses creates for another property, so a query that
+forgets its filter still cannot cross properties (the same belt-and-braces idea
+as RLS for tenants). An id from another property is a 404, never a 403. Group
+work (group reports, loyalty) lifts the filter explicitly
+(`withAllProperties`, `withProperties`). Jobs (night audit, digests, guard
+sweep, stayovers, preventive maintenance, room blocks, pricing) loop per
+property. Invoice, proforma, receipt, POS order and kitchen ticket numbers are
+per property; a property prefix gives `INV-PWH-2026-000123`. Guests, staff,
+corporate accounts, promo codes (with optional `propertyIds`) and loyalty are
+group-wide. `POST /properties` is limited by `max_properties` (Pro: 3).
+Stay lifecycle hooks (`src/common/stay-hooks.ts`) let the inbox and loyalty
+react to check-in, check-out, cancellations and folio voids without the
+reservations module depending on them.
+
+### Point of sale
+
+Outlets (restaurant, bar, room service, minibar...), categories with a kitchen
+or bar station, items with modifiers, stock links and happy-hour price rules.
+Orders are sent to the kitchen display as one ticket per station
+(NEW -> PREPARING -> READY -> SERVED, polled with `?since=`). Settlement uses
+the M2 ledger: cash, transfer or card need the waiter's open shift and post to
+a POS folio with receipts; a room charge posts the sale to the guest's folio
+after a surname check (a manager override raises `ROOM_CHARGE_NO_GUEST`); a
+city-ledger charge goes to a corporate account. Totals are computed exactly as
+the ledger posts them (`orderTotals`). Voids after sending raise
+`POS_VOID_AFTER_SEND` (second key above the property's limit), sending deducts
+linked stock, counts compute variance (`STOCK_VARIANCE`), and a shift that
+closes with open tabs raises `POS_OPEN_TABS_AT_SHIFT_CLOSE`.
+
+### Channel manager
+
+Two providers behind one interface (`src/modules/channels/channel-provider.ts`):
+
+- **iCal** for Airbnb, VRBO and similar: signed export URLs per room and room
+  type (`/public/ical/:token.ics`, blocked nights only, rotatable) and import
+  feeds polled every `ICAL_POLL_MINUTES`. Events that vanish from a feed cancel
+  their reservation.
+- **Channex** (Booking.com, Expedia, Agoda...): room types and rate plans are
+  mapped to Channex; availability, the price from `resolveNightlyRates` and
+  restrictions are pushed. Anything that changes availability or rates (the
+  audit trail knows every such write) marks the connection dirty; a job pushes
+  after 30 s of quiet, and only values that changed since the last push (a
+  hash per room type, rate plan and night). Bookings arrive on
+  `POST /webhooks/channex` (HMAC-SHA256 signature over the raw body); the API
+  fetches and acknowledges the revision. Without `CHANNEX_API_KEY` a mock
+  provider stands in (development only), with a dev endpoint that delivers a
+  signed booking webhook.
+
+OTA reservations keep `otaChannel`, `otaRef` and the commission. A booking for
+a night with no free room is still accepted, unassigned, and raises a HIGH
+`OVERBOOKED` flag with relocation options (other room types, then other
+properties of the group). `GET /channels/cost` compares what each channel cost
+against the booking site.
+
+### Dynamic pricing
+
+`src/modules/pricing/engine.ts` is a pure function: for a room type and night
+it forecasts occupancy (on the books plus the pickup the same weekday got in the
+last four weeks), reads pace, lead time, weekends, the strongest event (the
+Nigerian calendar in `events.ts`: Easter, Workers' Day, Democracy Day,
+Independence Day weekend, Christmas, Detty December in Lagos, Eid dates flagged
+as moon dependent; plus custom events) and competitor prices, then applies the
+guardrails (floor, ceiling, maximum change per run, minimum change) and rounds
+to ₦500. Every suggestion explains itself ("78% booked 12 days out, 20 points
+ahead of usual pace; Independence Day weekend: +18%"). SUGGEST mode leaves
+suggestions to accept or reject; AUTOPILOT applies them at 03:00 and after a
+booking pace spike. Applied prices are rate overrides with source `PRICING`
+(manual overrides are never touched, frozen dates are skipped), logged as price
+changes with revert, and `GET /pricing/report` estimates what the engine
+earned against the earlier prices.
+
+### Guest WhatsApp inbox
+
+Guest messages on the M4 webhook (from a number that is not staff) are routed
+to the property of the guest's most relevant stay (in house, then arriving,
+then recently departed; or the business number's property) and threaded per
+phone. Staff reply in the 24-hour window; after it only approved templates go
+out (`WHATSAPP_WINDOW_CLOSED`); the new templates `guest_message`,
+`pre_arrival_confirm` and `in_stay_welcome` are in `docs/whatsapp-templates.md`.
+Quick replies fill placeholders (Wi-Fi, directions, check-out time...).
+In-house requests containing keywords (towels, AC, shower, Wi-Fi...) become
+housekeeping or maintenance suggestions to accept with one tap. The
+pre-arrival message asks the guest to reply 1, then for a time, which is saved
+as `expectedArrivalTime`. Delivery statuses update each message; an SLA marks
+unanswered conversations overdue. `POST /inbox/dev/inbound` runs the same
+pipeline in development.
+
+### Loyalty
+
+One programme per group. Points are earned once per stay at check-out, on
+pre-tax spend net of discounts (room, day use and extras, POS charges
+included), with the tier bonus; tiers follow nights in the last 12 months
+across properties and are recomputed on each earn and nightly. At the desk a
+member redeems as a folio discount after a one-time code sent to their phone,
+or with a manager's PIN; voiding the line returns the points. Online, a
+signed-in member can redeem in the quote (spread over the nights like a promo);
+the booking holds the points and returns them if the hold expires or the
+booking is cancelled. Adjustments are audited and large ones raise
+`LOYALTY_ADJUSTMENT`. Earned lots expire first-in, first-out at 04:00.
+
+### Custom domains and TLS
+
+A property connects a subdomain (apex domains are refused): a TXT record
+`_<app>-verify.<domain>` proves ownership and a CNAME points it at
+`CUSTOM_DOMAIN_TARGET`. Pending domains are re-checked every 10 minutes (FAILED
+after 72 hours), verified ones daily (FAILED after 3 days of missing records).
+Only verified domains resolve through `GET /public/resolve-host`, which is also
+the `ask` endpoint for on-demand TLS: with Caddy,
+
+```
+{
+  on_demand_tls {
+    ask https://api.hotelos.ng/api/v1/public/resolve-host
+  }
+}
+https:// {
+  tls { on_demand }
+  reverse_proxy web:3000
+}
+```
+
+issues a certificate only for hosts the API answers 200 for (Cloudflare for
+SaaS custom hostnames works the same way). In development `DNS_PROVIDER=mock`
+keeps records in memory; `POST /domains/:id/dev/publish` writes the expected
+ones.
 
 ---
 
@@ -1045,7 +1238,9 @@ pnpm test        # unit (Vitest): tax maths, availability, guard rules, shift va
                  # folio totals, encryption, tokens, phone numbers, codes, reports,
                  # quotes, commission, cancellation fees, OTP, reviews, .ics, templates,
                  # rate resolution, restrictions, promo discounts, permissions,
-                 # trusted IP, auto-balance, SLA, aging, quiet hours, webhook signatures
+                 # trusted IP, auto-balance, SLA, aging, quiet hours, webhook signatures,
+                 # M5: pricing engine and events calendar, POS totals and happy hour,
+                 # iCal, inbox rules, loyalty rules, custom domain checks
 pnpm test:e2e    # needs local Postgres (roles hotel, hotel_app, hotel_platform) and Redis
 ```
 
@@ -1117,6 +1312,29 @@ M4 suite (`m4-growth`):
   body), duplicates.
 - trusted client IP: a spoofed `X-Client-IP` without the secret is ignored;
   with it, visitors behind one web server are limited separately.
+
+M5 suite (`m5-pro`):
+
+- properties: Growth locked, rooms, types and reservations never crossing
+  properties (404 across, 403 `PROPERTY_ACCESS_DENIED` for staff without
+  access, malformed ids refused), `max_properties`.
+- point of sale: kitchen and bar tickets, the KDS status flow, stock deducted on
+  send, `SHIFT_REQUIRED` and `PAYMENT_MISMATCH` for cash, receipts, room charges
+  on the guest folio with the surname check, `POS_VOID_AFTER_SEND`.
+- channel manager: iCal export of booked nights, import from a local feed and
+  cancellation when the event disappears; Channex webhook signatures, mapping,
+  the 30-second push debounce and diffed pushes (mock provider), the
+  overbooking flag and a cancellation through the webhook.
+- dynamic pricing: guardrails, preview explanations, manual overrides blocking
+  the engine, autopilot changes logged and audited, the rates calendar source,
+  revert.
+- inbox: routing to the stay, threading, keyword suggestions, accepting one as
+  a housekeeping task, the 24-hour window and templates, unknown senders.
+- loyalty: enrolment at check-in, flagged adjustment, OTP redemption (wrong
+  code, used code), void returning points, PIN redemption and its limit, earn
+  at check-out moving the member up a tier, expiry.
+- custom domains: apex refused, verification with the mock DNS, resolve-host
+  only once verified, `DOMAIN_TAKEN`, removal.
 
 ## Docker
 

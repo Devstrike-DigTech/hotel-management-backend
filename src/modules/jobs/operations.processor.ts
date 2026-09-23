@@ -57,6 +57,8 @@ export class OperationsProcessor extends WorkerHost {
   }
 }
 
+const RETIRED_SCHEDULERS = ['ical-import-15m'];
+
 /** Registers the repeatable operations jobs (idempotent upserts), all in Lagos time. */
 @Injectable()
 export class OperationsScheduler implements OnApplicationBootstrap {
@@ -65,6 +67,8 @@ export class OperationsScheduler implements OnApplicationBootstrap {
   constructor(@InjectQueue(OPERATIONS_QUEUE) private readonly queue: Queue) {}
 
   async onApplicationBootstrap(): Promise<void> {
+    // Schedulers renamed since an earlier release (removed so they do not run twice).
+    for (const stale of RETIRED_SCHEDULERS) await this.queue.removeJobScheduler(stale).catch(() => undefined);
     for (const j of Object.values(OPS_JOBS)) {
       await this.queue.upsertJobScheduler(
         j.scheduler,
@@ -72,6 +76,6 @@ export class OperationsScheduler implements OnApplicationBootstrap {
         { name: j.name, opts: { removeOnComplete: 50, removeOnFail: 100, attempts: 2, backoff: { type: 'exponential', delay: 60_000 } } },
       );
     }
-    this.logger.log('Scheduled night audit 02:00, owner digest 23:00, guard sweep hourly, stayover 07:00, maintenance 06:00, room blocks hourly, guard alerts every minute, city ledger statements (1st) and reminders 09:00; M5: channel pushes every minute (debounced) and sweep / iCal import every 15 min, dynamic pricing 03:00, loyalty expiry 04:00, domain checks every 10 min (Africa/Lagos)');
+    this.logger.log('Scheduled night audit 02:00, owner digest 23:00, guard sweep hourly, stayover 07:00, maintenance 06:00, room blocks hourly, guard alerts every minute, city ledger statements (1st) and reminders 09:00; M5: channel pushes every minute (debounced), sweep every 15 min, iCal import checks every 5 min, dynamic pricing 03:00 and pace checks every 10 min, loyalty expiry 04:00, domain checks every 10 min (Africa/Lagos)');
   }
 }

@@ -474,8 +474,12 @@ export class OtaBookingsService {
   }
 
   /** Job: every iCal connection (15 minutes). */
-  async importAll() {
-    const conns = await this.db.system((tx) => tx.channelConnection.findMany({ where: { provider: 'ICAL', status: { not: 'PAUSED' } }, select: { id: true, tenantId: true } }));
+  /** Job (every 5 minutes): imports connections not synced for ICAL_POLL_MINUTES. */
+  async importAll(now = new Date()) {
+    const due = new Date(now.getTime() - this.config.get('ICAL_POLL_MINUTES') * 60_000 + 30_000);
+    const conns = await this.db.system((tx) =>
+      tx.channelConnection.findMany({ where: { provider: 'ICAL', status: { not: 'PAUSED' }, OR: [{ lastSyncAt: null }, { lastSyncAt: { lte: due } }] }, select: { id: true, tenantId: true } }),
+    );
     let created = 0;
     for (const c of conns) {
       try {

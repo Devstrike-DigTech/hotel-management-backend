@@ -59,6 +59,6 @@ export class PublicController {
     summary: 'Resolve a microsite host (subdomain or custom domain) to a slug',
   })
   resolveHost(@Query() q: ResolveHostQueryDto) {
-    return this.svc.resolveHost(q.host);
+    return this.svc.resolveHost(q.host ?? q.domain ?? '');
   }
 }

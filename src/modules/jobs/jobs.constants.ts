@@ -21,7 +21,8 @@ export const OPS_JOBS = {
   // M5 (Pro)
   channelAriFlush: { name: 'channel-ari-flush', scheduler: 'channel-ari-flush-minutely', cron: '* * * * *' },
   channelAriSweep: { name: 'channel-ari-sweep', scheduler: 'channel-ari-sweep-15m', cron: '*/15 * * * *' },
-  icalImport: { name: 'ical-import', scheduler: 'ical-import-15m', cron: '*/15 * * * *' },
+  /** Runs every 5 minutes; each connection is imported every ICAL_POLL_MINUTES (default 15). */
+  icalImport: { name: 'ical-import', scheduler: 'ical-import-5m', cron: '*/5 * * * *' },
   pricingNightly: { name: 'pricing-nightly', scheduler: 'pricing-nightly', cron: '0 3 * * *' },
   pricingPace: { name: 'pricing-pace', scheduler: 'pricing-pace-10m', cron: '*/10 * * * *' },
   loyaltyExpiry: { name: 'loyalty-expiry', scheduler: 'loyalty-expiry-daily', cron: '0 4 * * *' },
