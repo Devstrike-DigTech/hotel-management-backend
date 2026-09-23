@@ -38,6 +38,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://hotel_app:hotel_app@postgres:5432/hotel
+      DATABASE_PLATFORM_URL: postgresql://hotel_platform:hotel_platform@postgres:5432/hotel
       DATABASE_MIGRATION_URL: postgresql://hotel:hotel@postgres:5432/hotel
       REDIS_URL: redis://redis:6379
     # Apply migrations, then start the API.
