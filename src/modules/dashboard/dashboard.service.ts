@@ -4,6 +4,7 @@ import type { AuthUser } from '../../common/auth-types.js';
 import { DbService } from '../../prisma/db.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { EntitlementsService } from '../entitlements/entitlements.service.js';
+import { FrontDeskService } from '../front-desk/front-desk.service.js';
 
 @Injectable()
 export class DashboardService {
@@ -11,6 +12,7 @@ export class DashboardService {
     private readonly db: DbService,
     private readonly audit: AuditService,
     private readonly entitlements: EntitlementsService,
+    private readonly frontDesk: FrontDeskService,
   ) {}
 
   summary(user: AuthUser) {
@@ -34,6 +36,7 @@ export class DashboardService {
       const ent = await this.entitlements.getEntitlements(user.tenantId, tx);
       const usage = await this.entitlements.getUsage(user.tenantId, tx);
       const recentActivity = await this.audit.recent(tx, user.tenantId, 5);
+      const ops = await this.frontDesk.summaryTx(tx, user);
 
       return {
         rooms: { total, byStatus },
@@ -43,6 +46,7 @@ export class DashboardService {
         usage,
         limits: ent.limits,
         recentActivity,
+        ...ops,
       };
     });
   }

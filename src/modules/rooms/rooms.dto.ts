@@ -1,6 +1,7 @@
 import { PartialType } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
+  IsISO8601,
   IsEnum,
   IsInt,
   IsNotEmpty,
@@ -100,4 +101,9 @@ export class UpdateRoomStatusDto {
   @IsString()
   @MaxLength(500)
   note?: string;
+
+  /** When the change really happened (offline outbox). */
+  @IsOptional()
+  @IsISO8601()
+  clientCreatedAt?: string;
 }

@@ -22,6 +22,12 @@ import { StaffService } from './staff.service.js';
 export class StaffController {
   constructor(private readonly svc: StaffService) {}
 
+  @Get('approvers')
+  @Roles('OWNER', 'MANAGER', 'FRONT_DESK')
+  approvers(@CurrentUser() user: AuthUser) {
+    return this.svc.approvers(user);
+  }
+
   @Get()
   list(@CurrentUser() user: AuthUser) {
     return this.svc.list(user);

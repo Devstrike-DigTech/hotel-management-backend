@@ -5,6 +5,9 @@ import { AppException } from '../../common/errors/app-exception.js';
 import { DbService, type Tx } from '../../prisma/db.service.js';
 import { AuditService, userActor } from '../audit/audit.service.js';
 import { EntitlementsService } from '../entitlements/entitlements.service.js';
+import { GuardService } from '../guard/guard.service.js';
+import { lagosDate } from '../../common/time/lagos.js';
+import { parseClientCreatedAt } from '../ops/ops.helpers.js';
 import type {
   BulkCreateRoomsDto,
   CreateRoomDto,
@@ -41,6 +44,7 @@ export class RoomsService {
     private readonly db: DbService,
     private readonly audit: AuditService,
     private readonly entitlements: EntitlementsService,
+    private readonly guard: GuardService,
   ) {}
 
   list(user: AuthUser, q: RoomQueryDto) {
@@ -226,11 +230,20 @@ export class RoomsService {
     dto: UpdateRoomStatusDto,
     ip?: string,
   ) {
+    const clientCreatedAt = parseClientCreatedAt(dto.clientCreatedAt);
     return this.db.tenant(user.tenantId, async (tx) => {
       const existing = await tx.room.findFirst({
         where: { id, tenantId: user.tenantId },
       });
       if (!existing) throw AppException.notFound('Room');
+      if (
+        user.role === 'HOUSEKEEPING' &&
+        !(existing.status === 'VACANT_DIRTY' && dto.status === 'VACANT_CLEAN')
+      ) {
+        throw AppException.forbidden(
+          'Housekeeping can only mark a dirty room as clean',
+        );
+      }
       const room = await tx.room.update({
         where: { id },
         data: {
@@ -239,6 +252,7 @@ export class RoomsService {
         },
         include: roomInclude,
       });
+      await this.revenueGuard(tx, user, existing.status, room.status, room.id, room.number);
       await this.audit.record(tx, {
         tenantId: user.tenantId,
         actor: userActor(user),
@@ -250,10 +264,61 @@ export class RoomsService {
           from: existing.status,
           to: dto.status,
           ...(dto.note && { note: dto.note }),
+          ...(clientCreatedAt && { clientCreatedAt: clientCreatedAt.toISOString() }),
         },
         ip,
       });
       return toRoomView(room);
+    });
+  }
+
+  /**
+   * Manual status changes that bypass the front desk: OCCUPIED -> VACANT_DIRTY
+   * with no check-out (ROOM_STATUS_FLIP) and OCCUPIED with nobody checked in
+   * (OCCUPIED_WITHOUT_STAY).
+   */
+  private async revenueGuard(
+    tx: Tx,
+    user: AuthUser,
+    from: string,
+    to: string,
+    roomId: string,
+    number: string,
+  ) {
+    if (from === to || (to !== 'OCCUPIED' && !(from === 'OCCUPIED' && to === 'VACANT_DIRTY'))) return;
+    const inHouse = await tx.reservation.count({
+      where: { tenantId: user.tenantId, roomId, status: 'CHECKED_IN' },
+    });
+    if (inHouse) return;
+    const features = await this.guard.features(tx, user.tenantId);
+    const today = lagosDate();
+    if (to === 'OCCUPIED') {
+      await this.guard.raise(tx, user.tenantId, features, {
+        rule: 'OCCUPIED_WITHOUT_STAY',
+        title: `Room ${number} set to occupied with no guest checked in`,
+        detail: `${user.fullName} marked the room occupied by hand. No checked-in stay covers it.`,
+        dedupeKey: `OCCUPIED_WITHOUT_STAY:${roomId}:${today}`,
+        roomId,
+        userId: user.userId,
+        userName: user.fullName,
+        evidence: { roomNumber: number, from, to },
+      });
+      return;
+    }
+    const since = new Date(Date.now() - 2 * 3_600_000);
+    const checkedOut = await tx.reservation.count({
+      where: { tenantId: user.tenantId, roomId, checkedOutAt: { gte: since } },
+    });
+    if (checkedOut) return;
+    await this.guard.raise(tx, user.tenantId, features, {
+      rule: 'ROOM_STATUS_FLIP',
+      title: `Room ${number} flipped from occupied to dirty without a check-out`,
+      detail: `${user.fullName} changed the status by hand. A stay may have been sold and not recorded.`,
+      dedupeKey: `ROOM_STATUS_FLIP:${roomId}:${today}`,
+      roomId,
+      userId: user.userId,
+      userName: user.fullName,
+      evidence: { roomNumber: number, from, to },
     });
   }
 

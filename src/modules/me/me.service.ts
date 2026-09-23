@@ -27,6 +27,7 @@ export class MeService {
           email: user.email,
           phone: user.phone,
           role: user.role,
+          hasApprovalPin: !!user.approvalPinHash,
         },
         tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug },
         subscription: ent.subscription,

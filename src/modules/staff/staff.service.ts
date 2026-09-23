@@ -17,6 +17,7 @@ export function toStaffView(u: User) {
     role: u.role,
     isActive: u.isActive,
     lastLoginAt: u.lastLoginAt?.toISOString() ?? null,
+    hasApprovalPin: !!u.approvalPinHash,
     createdAt: u.createdAt.toISOString(),
   };
 }
@@ -44,6 +45,18 @@ export class StaffService {
         orderBy: [{ isActive: 'desc' }, { createdAt: 'asc' }],
       });
       return rows.map(toStaffView);
+    });
+  }
+
+  /** Active managers and owners who can approve with a PIN (second key). */
+  approvers(user: AuthUser) {
+    return this.db.tenant(user.tenantId, async (tx) => {
+      const rows = await tx.user.findMany({
+        where: { tenantId: user.tenantId, isActive: true, role: { in: ['OWNER', 'MANAGER'] }, approvalPinHash: { not: null } },
+        orderBy: { fullName: 'asc' },
+        select: { id: true, fullName: true, role: true },
+      });
+      return rows;
     });
   }
 
