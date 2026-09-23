@@ -199,6 +199,7 @@ export const DEMO_HOTEL: HotelSeed = {
   staff: [
     { fullName: 'Tunde Bakare', email: 'tunde@palmwine.ng', phone: '+234 805 555 0102', role: 'MANAGER' },
     { fullName: 'Ngozi Eze', email: 'ngozi@palmwine.ng', phone: '+234 806 555 0103', role: 'FRONT_DESK' },
+    { fullName: 'Chidinma Obi', email: 'chidinma@palmwine.ng', phone: '+234 809 555 0106', role: 'FRONT_DESK' },
     { fullName: 'Musa Abdullahi', email: 'musa@palmwine.ng', phone: '+234 807 555 0104', role: 'HOUSEKEEPING' },
     { fullName: 'Funmilayo Adeyemi', email: 'funmi@palmwine.ng', phone: '+234 808 555 0105', role: 'ACCOUNTANT' },
   ],
