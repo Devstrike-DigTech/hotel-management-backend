@@ -36,6 +36,10 @@ enum StaffRole {
   FRONT_DESK
   HOUSEKEEPING
   ACCOUNTANT
+  SUPERVISOR
+  MAINTENANCE
+  /// The user holds a custom role (users.custom_role_id).
+  CUSTOM
 }
 
 enum RoomStatus {
@@ -105,6 +109,28 @@ model Tenant {
   reviews           Review[]
   notificationLogs  NotificationLog[]
 
+  customRoles            CustomRole[]
+  housekeepingChecklists HousekeepingChecklist[]
+  lostFoundItems         LostFoundItem[]
+  maintenanceTickets     MaintenanceTicket[]
+  maintenanceEvents      MaintenanceTicketEvent[]
+  roomBlocks             RoomBlock[]
+  maintenanceSchedules   MaintenanceSchedule[]
+  fuelLogs               FuelLog[]
+  ratePlans              RatePlan[]
+  rateRules              RateRule[]
+  rateOverrides          RateOverride[]
+  rateRestrictions       RateRestriction[]
+  promoCodes             PromoCode[]
+  promoRedemptions       PromoRedemption[]
+  corporateAccounts      CorporateAccount[]
+  cityLedgerCharges      CityLedgerCharge[]
+  cityLedgerInvoices     CityLedgerInvoice[]
+  cityLedgerPayments     CityLedgerPayment[]
+  cityLedgerAllocations  CityLedgerAllocation[]
+  notificationSettings   NotificationSetting[]
+  guardAlerts            GuardAlert[]
+
   @@map("tenants")
 }
 
@@ -154,6 +180,9 @@ model Property {
   ratingValue              Float?  @map("rating_value")
   /// { "1": n, ..., "5": n, "byTravellerType": { ... } }
   ratingDistribution       Json    @default("{}") @map("rating_distribution")
+  // M4: housekeeping settings.
+  requireInspection        Boolean @default(false) @map("require_inspection")
+  stayoverEnabled          Boolean @default(true) @map("stayover_enabled")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -173,27 +202,30 @@ model Property {
 }
 
 model RoomType {
-  id              String   @id @default(uuid()) @db.Uuid
-  tenantId        String   @map("tenant_id") @db.Uuid
-  propertyId      String   @map("property_id") @db.Uuid
-  name            String
-  description     String   @default("")
-  basePriceKobo   Int      @map("base_price_kobo")
-  hourlyPriceKobo Int?     @map("hourly_price_kobo")
-  capacity        Int      @default(2)
-  bedType         String   @default("Queen") @map("bed_type")
-  sizeSqm         Int      @default(20) @map("size_sqm")
-  amenities       String[] @default([])
+  id                  String   @id @default(uuid()) @db.Uuid
+  tenantId            String   @map("tenant_id") @db.Uuid
+  propertyId          String   @map("property_id") @db.Uuid
+  name                String
+  description         String   @default("")
+  basePriceKobo       Int      @map("base_price_kobo")
+  hourlyPriceKobo     Int?     @map("hourly_price_kobo")
+  capacity            Int      @default(2)
+  bedType             String   @default("Queen") @map("bed_type")
+  sizeSqm             Int      @default(20) @map("size_sqm")
+  amenities           String[] @default([])
   /// Array of `{ url, alt }`.
-  images          Json     @default("[]")
-  sortOrder       Int      @default(0) @map("sort_order")
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  images              Json     @default("[]")
+  sortOrder           Int      @default(0) @map("sort_order")
+  /// M4: every N check-outs of a room of this type, the cleaning is a deep clean.
+  deepCleanEveryStays Int?     @map("deep_clean_every_stays")
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  property     Property      @relation(fields: [propertyId], references: [id], onDelete: Cascade)
-  rooms        Room[]
-  reservations Reservation[]
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property      Property       @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  rooms         Room[]
+  reservations  Reservation[]
+  rateOverrides RateOverride[]
 
   @@unique([propertyId, name])
   @@index([tenantId])
@@ -201,23 +233,28 @@ model RoomType {
 }
 
 model Room {
-  id         String     @id @default(uuid()) @db.Uuid
-  tenantId   String     @map("tenant_id") @db.Uuid
-  propertyId String     @map("property_id") @db.Uuid
-  roomTypeId String     @map("room_type_id") @db.Uuid
-  number     String
-  floor      Int
-  status     RoomStatus @default(VACANT_CLEAN)
-  notes      String?
-  createdAt  DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt  DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id                  String     @id @default(uuid()) @db.Uuid
+  tenantId            String     @map("tenant_id") @db.Uuid
+  propertyId          String     @map("property_id") @db.Uuid
+  roomTypeId          String     @map("room_type_id") @db.Uuid
+  number              String
+  floor               Int
+  status              RoomStatus @default(VACANT_CLEAN)
+  notes               String?
+  /// M4: check-outs since the last deep clean.
+  staysSinceDeepClean Int        @default(0) @map("stays_since_deep_clean")
+  createdAt           DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  property          Property           @relation(fields: [propertyId], references: [id], onDelete: Cascade)
-  roomType          RoomType           @relation(fields: [roomTypeId], references: [id], onDelete: Restrict)
+  tenant            Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property          Property            @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  roomType          RoomType            @relation(fields: [roomTypeId], references: [id], onDelete: Restrict)
   reservations      Reservation[]
   housekeepingTasks HousekeepingTask[]
   guardFlags        GuardFlag[]
+  roomBlocks        RoomBlock[]
+  tickets           MaintenanceTicket[]
+  lostFound         LostFoundItem[]
 
   @@unique([propertyId, number])
   @@index([tenantId, status])
@@ -236,6 +273,8 @@ model User {
   fullName        String    @map("full_name")
   phone           String    @default("")
   role            StaffRole
+  /// Set when role = CUSTOM.
+  customRoleId    String?   @map("custom_role_id") @db.Uuid
   passwordHash    String    @map("password_hash")
   isActive        Boolean   @default(true) @map("is_active")
   lastLoginAt     DateTime? @map("last_login_at") @db.Timestamptz(3)
@@ -247,9 +286,11 @@ model User {
   updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customRole    CustomRole?    @relation(fields: [customRoleId], references: [id], onDelete: Restrict)
   refreshTokens RefreshToken[]
 
   @@index([tenantId])
+  @@index([customRoleId])
   @@map("users")
 }
 
@@ -563,6 +604,8 @@ enum DocumentCounterKind {
   INVOICE
   PROFORMA
   RECEIPT
+  MAINTENANCE_TICKET
+  CITY_LEDGER
 }
 
 enum ShiftStatus {
@@ -599,15 +642,39 @@ enum GuardStatus {
 }
 
 enum HousekeepingTaskStatus {
-  PENDING
+  OPEN
   IN_PROGRESS
   DONE
+  ASSIGNED
+  INSPECTED
+  REJECTED
+  SKIPPED
 }
 
+/// Where a task came from (API field `source`).
 enum HousekeepingTaskReason {
   CHECKOUT
   ROOM_MOVE
   MANUAL
+  STAYOVER_JOB
+  DEEP_CLEAN_RULE
+  MAINTENANCE
+}
+
+enum HousekeepingTaskType {
+  CHECKOUT_CLEAN
+  STAYOVER
+  DEEP_CLEAN
+  TURNDOWN
+  INSPECTION
+  CUSTOM
+}
+
+enum TaskPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
 }
 
 enum DigestChannel {
@@ -727,6 +794,15 @@ model Reservation {
   cancelledBy         CancelledBy?   @map("cancelled_by")
   cancellationFeeKobo BigInt?        @map("cancellation_fee_kobo")
 
+  // M4: rates, promotions, corporate.
+  ratePlanId         String? @map("rate_plan_id") @db.Uuid
+  promoCodeId        String? @map("promo_code_id") @db.Uuid
+  corporateAccountId String? @map("corporate_account_id") @db.Uuid
+  /// Per-night price snapshot: { date, rateKobo, baseRateKobo, source, ruleId, ruleName, discountKobo }[].
+  nightlyRates       Json    @default("[]") @map("nightly_rates")
+  /// Cancellation policy of the rate plan at booking (null = hotel policy).
+  cancelPolicy       Json?   @map("cancel_policy")
+
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -743,6 +819,11 @@ model Reservation {
   commissionEntries CommissionEntry[]
   review            Review?
   notificationLogs  NotificationLog[]
+  ratePlan          RatePlan?          @relation(fields: [ratePlanId], references: [id], onDelete: Restrict)
+  promoCode         PromoCode?         @relation(fields: [promoCodeId], references: [id], onDelete: Restrict)
+  corporateAccount  CorporateAccount?  @relation(fields: [corporateAccountId], references: [id], onDelete: Restrict)
+  promoRedemption   PromoRedemption?
+  cityLedgerCharges CityLedgerCharge[]
 
   @@unique([tenantId, code])
   @@unique([tenantId, quoteRef])
@@ -1070,8 +1151,26 @@ model HousekeepingTask {
   tenantId        String                 @map("tenant_id") @db.Uuid
   roomId          String                 @map("room_id") @db.Uuid
   reservationId   String?                @map("reservation_id") @db.Uuid
-  status          HousekeepingTaskStatus @default(PENDING)
+  status          HousekeepingTaskStatus @default(OPEN)
   reason          HousekeepingTaskReason @default(CHECKOUT)
+  type            HousekeepingTaskType   @default(CHECKOUT_CLEAN)
+  priority        TaskPriority           @default(NORMAL)
+  /// Lagos date the task belongs to.
+  businessDate    DateTime               @default(dbgenerated("(now() AT TIME ZONE 'Africa/Lagos')::date")) @map("business_date") @db.Date
+  assigneeId      String?                @map("assignee_id") @db.Uuid
+  assigneeName    String?                @map("assignee_name")
+  dueAt           DateTime?              @map("due_at") @db.Timestamptz(3)
+  startedAt       DateTime?              @map("started_at") @db.Timestamptz(3)
+  /// Snapshot of the checklist: { id, label, done }[].
+  checklist       Json                   @default("[]")
+  /// { key, uploadedAt }[] (object storage keys).
+  photos          Json                   @default("[]")
+  inspectedAt     DateTime?              @map("inspected_at") @db.Timestamptz(3)
+  inspectedById   String?                @map("inspected_by_id") @db.Uuid
+  inspectedByName String?                @map("inspected_by_name")
+  inspectionNote  String?                @map("inspection_note")
+  skippedReason   String?                @map("skipped_reason")
+  clientCreatedAt DateTime?              @map("client_created_at") @db.Timestamptz(3)
   notes           String                 @default("")
   completedAt     DateTime?              @map("completed_at") @db.Timestamptz(3)
   completedById   String?                @map("completed_by_id") @db.Uuid
@@ -1079,11 +1178,14 @@ model HousekeepingTask {
   createdAt       DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  room        Room         @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  reservation Reservation? @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+  tenant      Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  room        Room                @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  reservation Reservation?        @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+  tickets     MaintenanceTicket[]
 
   @@index([tenantId, status])
+  @@index([tenantId, businessDate])
+  @@index([assigneeId])
   @@map("housekeeping_tasks")
 }
 
@@ -1387,6 +1489,8 @@ model NotificationLog {
   providerMessageId String?              @map("provider_message_id")
   attempts          Int                  @default(0)
   error             String?
+  /// M4: approved WhatsApp template and parameters ({ name, language, params }) used outside the 24-hour window.
+  waTemplate        Json?                @map("wa_template")
   /// e.g. "PRE_ARRIVAL:<reservationId>:EMAIL"; unique so scheduled messages go out once.
   dedupeKey         String?              @unique @map("dedupe_key")
   sentAt            DateTime?            @map("sent_at") @db.Timestamptz(3)
@@ -1459,4 +1563,632 @@ model GuestRefreshToken {
   @@index([guestAccountId])
   @@index([familyId])
   @@map("guest_refresh_tokens")
+}
+
+// ===========================================================================
+// M4: permissions, housekeeping, maintenance, rates, promotions, corporate,
+// WhatsApp alerts. Every table is tenant-scoped with RLS (see the
+// *_m4_growth migration) except the platform-level WhatsApp inbound log.
+// ===========================================================================
+
+/// Custom staff role (system roles live in code). `permissions` are catalogue codes.
+model CustomRole {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  name        String
+  description String   @default("")
+  permissions String[] @default([])
+  basedOn     String?  @map("based_on")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  users  User[]
+
+  @@unique([tenantId, name])
+  @@map("custom_roles")
+}
+
+/// Checklist template per room type (null = every type) and task type.
+model HousekeepingChecklist {
+  id         String               @id @default(uuid()) @db.Uuid
+  tenantId   String               @map("tenant_id") @db.Uuid
+  roomTypeId String?              @map("room_type_id") @db.Uuid
+  taskType   HousekeepingTaskType @map("task_type")
+  /// { id, label }[]
+  items      Json                 @default("[]")
+  createdAt  DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("housekeeping_checklists")
+}
+
+enum LostFoundStatus {
+  HELD
+  RETURNED
+  DISPOSED
+}
+
+model LostFoundItem {
+  id              String          @id @default(uuid()) @db.Uuid
+  tenantId        String          @map("tenant_id") @db.Uuid
+  description     String
+  category        String          @default("Other")
+  roomId          String?         @map("room_id") @db.Uuid
+  location        String?
+  foundById       String?         @map("found_by_id") @db.Uuid
+  foundByName     String?         @map("found_by_name")
+  foundAt         DateTime        @default(now()) @map("found_at") @db.Timestamptz(3)
+  status          LostFoundStatus @default(HELD)
+  storageLocation String?         @map("storage_location")
+  guestId         String?         @map("guest_id") @db.Uuid
+  reservationId   String?         @map("reservation_id") @db.Uuid
+  returnedTo      String?         @map("returned_to")
+  returnedAt      DateTime?       @map("returned_at") @db.Timestamptz(3)
+  disposedAt      DateTime?       @map("disposed_at") @db.Timestamptz(3)
+  notes           String          @default("")
+  photos          Json            @default("[]")
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  room   Room?  @relation(fields: [roomId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status, foundAt(sort: Desc)])
+  @@map("lost_found_items")
+}
+
+enum MaintenanceCategory {
+  ELECTRICAL
+  PLUMBING
+  AC_HVAC
+  FURNITURE
+  APPLIANCE
+  GENERATOR
+  CIVIL
+  IT
+  OTHER
+}
+
+enum TicketStatus {
+  OPEN
+  ASSIGNED
+  IN_PROGRESS
+  ON_HOLD
+  RESOLVED
+  CLOSED
+}
+
+model MaintenanceTicket {
+  id                 String              @id @default(uuid()) @db.Uuid
+  tenantId           String              @map("tenant_id") @db.Uuid
+  number             String
+  roomId             String?             @map("room_id") @db.Uuid
+  area               String?
+  category           MaintenanceCategory
+  priority           TaskPriority        @default(NORMAL)
+  status             TicketStatus        @default(OPEN)
+  title              String
+  description        String              @default("")
+  photos             Json                @default("[]")
+  reportedById       String?             @map("reported_by_id") @db.Uuid
+  reportedByName     String?             @map("reported_by_name")
+  assigneeId         String?             @map("assignee_id") @db.Uuid
+  assigneeName       String?             @map("assignee_name")
+  vendorName         String?             @map("vendor_name")
+  vendorPhone        String?             @map("vendor_phone")
+  blocksRoom         Boolean             @default(false) @map("blocks_room")
+  costKobo           BigInt?             @map("cost_kobo")
+  resolutionNote     String?             @map("resolution_note")
+  slaDueAt           DateTime            @map("sla_due_at") @db.Timestamptz(3)
+  housekeepingTaskId String?             @map("housekeeping_task_id") @db.Uuid
+  scheduleId         String?             @map("schedule_id") @db.Uuid
+  startedAt          DateTime?           @map("started_at") @db.Timestamptz(3)
+  resolvedAt         DateTime?           @map("resolved_at") @db.Timestamptz(3)
+  closedAt           DateTime?           @map("closed_at") @db.Timestamptz(3)
+  clientCreatedAt    DateTime?           @map("client_created_at") @db.Timestamptz(3)
+  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant           Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  room             Room?                    @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  housekeepingTask HousekeepingTask?        @relation(fields: [housekeepingTaskId], references: [id], onDelete: SetNull)
+  schedule         MaintenanceSchedule?     @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  events           MaintenanceTicketEvent[]
+  blocks           RoomBlock[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, status])
+  @@index([roomId])
+  @@map("maintenance_tickets")
+}
+
+model MaintenanceTicketEvent {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  ticketId  String   @map("ticket_id") @db.Uuid
+  kind      String
+  fromValue String?  @map("from_value")
+  toValue   String?  @map("to_value")
+  note      String?
+  byId      String?  @map("by_id") @db.Uuid
+  byName    String?  @map("by_name")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticket MaintenanceTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId, createdAt])
+  @@map("maintenance_ticket_events")
+}
+
+/// Out-of-order window for a room: availability excludes every night it overlaps.
+model RoomBlock {
+  id            String    @id @default(uuid()) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  roomId        String    @map("room_id") @db.Uuid
+  roomTypeId    String    @map("room_type_id") @db.Uuid
+  startsAt      DateTime  @map("starts_at") @db.Timestamptz(3)
+  endsAt        DateTime  @map("ends_at") @db.Timestamptz(3)
+  reason        String
+  ticketId      String?   @map("ticket_id") @db.Uuid
+  createdById   String?   @map("created_by_id") @db.Uuid
+  createdByName String?   @map("created_by_name")
+  releasedAt    DateTime? @map("released_at") @db.Timestamptz(3)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  room   Room               @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  ticket MaintenanceTicket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, startsAt, endsAt])
+  @@index([roomId])
+  @@map("room_blocks")
+}
+
+model MaintenanceSchedule {
+  id        String              @id @default(uuid()) @db.Uuid
+  tenantId  String              @map("tenant_id") @db.Uuid
+  title     String
+  category  MaintenanceCategory
+  priority  TaskPriority        @default(NORMAL)
+  roomIds   String[]            @default([]) @map("room_ids") @db.Uuid
+  area      String?
+  everyDays Int                 @map("every_days")
+  nextDueAt DateTime            @map("next_due_at") @db.Timestamptz(3)
+  lastRunAt DateTime?           @map("last_run_at") @db.Timestamptz(3)
+  checklist String[]            @default([])
+  active    Boolean             @default(true)
+  createdAt DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant  Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tickets MaintenanceTicket[]
+
+  @@index([tenantId, active, nextDueAt])
+  @@map("maintenance_schedules")
+}
+
+/// Generator / diesel log.
+model FuelLog {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  date         DateTime @db.Date
+  litres       Float
+  costKobo     BigInt   @map("cost_kobo")
+  supplier     String   @default("")
+  runHours     Float?   @map("run_hours")
+  generator    String?
+  notes        String   @default("")
+  loggedById   String?  @map("logged_by_id") @db.Uuid
+  loggedByName String?  @map("logged_by_name")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, date])
+  @@map("fuel_logs")
+}
+
+enum RatePlanKind {
+  BAR
+  NON_REFUNDABLE
+  CORPORATE
+  LONG_STAY
+  PACKAGE
+}
+
+enum RatePlanPricing {
+  DERIVED
+  FIXED
+}
+
+enum AdjustmentType {
+  PERCENT
+  AMOUNT
+  FIXED
+}
+
+model RatePlan {
+  id                String          @id @default(uuid()) @db.Uuid
+  tenantId          String          @map("tenant_id") @db.Uuid
+  propertyId        String          @map("property_id") @db.Uuid
+  code              String
+  name              String
+  description       String          @default("")
+  kind              RatePlanKind
+  isBar             Boolean         @default(false) @map("is_bar")
+  pricing           RatePlanPricing @default(DERIVED)
+  adjustmentType    AdjustmentType? @map("adjustment_type")
+  adjustmentValue   Int?            @map("adjustment_value")
+  /// { roomTypeId, rateKobo }[]
+  fixedPrices       Json            @default("[]") @map("fixed_prices")
+  /// { nonRefundable, freeCancellationHours, lateCancellationFeePct } or null (hotel policy)
+  cancelPolicy      Json?           @map("cancel_policy")
+  minNights         Int?            @map("min_nights")
+  maxNights         Int?            @map("max_nights")
+  includesBreakfast Boolean         @default(false) @map("includes_breakfast")
+  channels          String[]        @default(["FRONT_DESK", "BOOKING_SITE", "MARKETPLACE"])
+  roomTypeIds       String[]        @default([]) @map("room_type_ids") @db.Uuid
+  active            Boolean         @default(true)
+  sortOrder         Int             @default(0) @map("sort_order")
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reservations      Reservation[]
+  corporateAccounts CorporateAccount[]
+
+  @@unique([tenantId, code])
+  @@index([propertyId])
+  @@map("rate_plans")
+}
+
+model RateRule {
+  id              String         @id @default(uuid()) @db.Uuid
+  tenantId        String         @map("tenant_id") @db.Uuid
+  propertyId      String         @map("property_id") @db.Uuid
+  name            String
+  roomTypeIds     String[]       @default([]) @map("room_type_ids") @db.Uuid
+  dateFrom        DateTime       @map("date_from") @db.Date
+  dateTo          DateTime       @map("date_to") @db.Date
+  daysOfWeek      Int[]          @default([]) @map("days_of_week")
+  adjustmentType  AdjustmentType @map("adjustment_type")
+  adjustmentValue Int            @map("adjustment_value")
+  priority        Int            @default(0)
+  color           String         @default("brass")
+  active          Boolean        @default(true)
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, dateFrom, dateTo])
+  @@map("rate_rules")
+}
+
+/// Single-date BAR price for a room type (the rates calendar).
+model RateOverride {
+  tenantId      String   @map("tenant_id") @db.Uuid
+  roomTypeId    String   @map("room_type_id") @db.Uuid
+  date          DateTime @db.Date
+  rateKobo      Int      @map("rate_kobo")
+  note          String?
+  updatedById   String?  @map("updated_by_id") @db.Uuid
+  updatedByName String?  @map("updated_by_name")
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  roomType RoomType @relation(fields: [roomTypeId], references: [id], onDelete: Cascade)
+
+  @@id([roomTypeId, date])
+  @@index([tenantId, date])
+  @@map("rate_overrides")
+}
+
+/// Per-date restriction; roomTypeId null = every room type.
+model RateRestriction {
+  id                String   @id @default(uuid()) @db.Uuid
+  tenantId          String   @map("tenant_id") @db.Uuid
+  roomTypeId        String?  @map("room_type_id") @db.Uuid
+  date              DateTime @db.Date
+  closedToArrival   Boolean  @default(false) @map("closed_to_arrival")
+  closedToDeparture Boolean  @default(false) @map("closed_to_departure")
+  stopSell          Boolean  @default(false) @map("stop_sell")
+  minNights         Int?     @map("min_nights")
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, date])
+  @@map("rate_restrictions")
+}
+
+enum PromoType {
+  PERCENT
+  AMOUNT
+  FREE_NIGHT
+}
+
+enum PromoRedemptionStatus {
+  HELD
+  CONFIRMED
+  RELEASED
+}
+
+model PromoCode {
+  id               String    @id @default(uuid()) @db.Uuid
+  tenantId         String    @map("tenant_id") @db.Uuid
+  code             String
+  description      String    @default("")
+  type             PromoType
+  value            Int
+  validFrom        DateTime? @map("valid_from") @db.Date
+  validTo          DateTime? @map("valid_to") @db.Date
+  stayFrom         DateTime? @map("stay_from") @db.Date
+  stayTo           DateTime? @map("stay_to") @db.Date
+  minNights        Int?      @map("min_nights")
+  maxUses          Int?      @map("max_uses")
+  perGuestLimit    Int?      @map("per_guest_limit")
+  channels         String[]  @default(["FRONT_DESK", "BOOKING_SITE", "MARKETPLACE"])
+  roomTypeIds      String[]  @default([]) @map("room_type_ids") @db.Uuid
+  firstBookingOnly Boolean   @default(false) @map("first_booking_only")
+  active           Boolean   @default(true)
+  uses             Int       @default(0)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant       Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reservations Reservation[]
+  redemptions  PromoRedemption[]
+
+  @@unique([tenantId, code])
+  @@map("promo_codes")
+}
+
+model PromoRedemption {
+  id            String                @id @default(uuid()) @db.Uuid
+  tenantId      String                @map("tenant_id") @db.Uuid
+  promoCodeId   String                @map("promo_code_id") @db.Uuid
+  reservationId String                @unique @map("reservation_id") @db.Uuid
+  guestPhone    String?               @map("guest_phone")
+  channel       String
+  status        PromoRedemptionStatus @default(HELD)
+  discountKobo  BigInt                @map("discount_kobo")
+  nights        Int                   @default(1)
+  confirmedAt   DateTime?             @map("confirmed_at") @db.Timestamptz(3)
+  releasedAt    DateTime?             @map("released_at") @db.Timestamptz(3)
+  createdAt     DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  promoCode   PromoCode   @relation(fields: [promoCodeId], references: [id], onDelete: Cascade)
+  reservation Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+
+  @@index([promoCodeId, status])
+  @@index([tenantId, guestPhone])
+  @@map("promo_redemptions")
+}
+
+enum BillingCycle {
+  PER_STAY
+  MONTHLY
+}
+
+enum CityLedgerInvoiceStatus {
+  OPEN
+  PARTIALLY_PAID
+  PAID
+  VOID
+}
+
+enum CityLedgerInvoiceKind {
+  PER_STAY
+  STATEMENT
+}
+
+enum LedgerPaymentMethod {
+  TRANSFER
+  CHEQUE
+  CASH
+  POS
+}
+
+model CorporateAccount {
+  id               String       @id @default(uuid()) @db.Uuid
+  tenantId         String       @map("tenant_id") @db.Uuid
+  name             String
+  contactName      String       @default("") @map("contact_name")
+  email            String
+  phone            String       @default("")
+  address          String       @default("")
+  taxId            String       @default("") @map("tax_id")
+  ratePlanId       String?      @map("rate_plan_id") @db.Uuid
+  creditLimitKobo  BigInt       @map("credit_limit_kobo")
+  paymentTermsDays Int          @default(30) @map("payment_terms_days")
+  billingCycle     BillingCycle @default(MONTHLY) @map("billing_cycle")
+  active           Boolean      @default(true)
+  notes            String       @default("")
+  createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant       Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ratePlan     RatePlan?           @relation(fields: [ratePlanId], references: [id], onDelete: SetNull)
+  reservations Reservation[]
+  charges      CityLedgerCharge[]
+  invoices     CityLedgerInvoice[]
+  payments     CityLedgerPayment[]
+
+  @@unique([tenantId, name])
+  @@map("corporate_accounts")
+}
+
+model CityLedgerCharge {
+  id              String   @id @default(uuid()) @db.Uuid
+  tenantId        String   @map("tenant_id") @db.Uuid
+  accountId       String   @map("account_id") @db.Uuid
+  reservationId   String?  @map("reservation_id") @db.Uuid
+  folioId         String?  @map("folio_id") @db.Uuid
+  folioEntryId    String?  @map("folio_entry_id") @db.Uuid
+  date            DateTime @db.Date
+  description     String
+  amountKobo      BigInt   @map("amount_kobo")
+  guestName       String?  @map("guest_name")
+  reservationCode String?  @map("reservation_code")
+  invoiceId       String?  @map("invoice_id") @db.Uuid
+  createdById     String?  @map("created_by_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant      Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  account     CorporateAccount   @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  reservation Reservation?       @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+  invoice     CityLedgerInvoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@index([accountId, invoiceId])
+  @@index([tenantId, date])
+  @@map("city_ledger_charges")
+}
+
+model CityLedgerInvoice {
+  id             String                  @id @default(uuid()) @db.Uuid
+  tenantId       String                  @map("tenant_id") @db.Uuid
+  accountId      String                  @map("account_id") @db.Uuid
+  number         String
+  year           Int
+  seq            Int
+  kind           CityLedgerInvoiceKind
+  periodFrom     DateTime?               @map("period_from") @db.Date
+  periodTo       DateTime?               @map("period_to") @db.Date
+  issueDate      DateTime                @map("issue_date") @db.Date
+  dueDate        DateTime                @map("due_date") @db.Date
+  totalKobo      BigInt                  @map("total_kobo")
+  paidKobo       BigInt                  @default(0) @map("paid_kobo")
+  status         CityLedgerInvoiceStatus @default(OPEN)
+  notes          String                  @default("")
+  issuedById     String?                 @map("issued_by_id") @db.Uuid
+  issuedByName   String?                 @map("issued_by_name")
+  remindersSent  Int                     @default(0) @map("reminders_sent")
+  lastReminderAt DateTime?               @map("last_reminder_at") @db.Timestamptz(3)
+  voidedAt       DateTime?               @map("voided_at") @db.Timestamptz(3)
+  voidReason     String?                 @map("void_reason")
+  createdAt      DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant      Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  account     CorporateAccount       @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  charges     CityLedgerCharge[]
+  allocations CityLedgerAllocation[]
+
+  @@unique([tenantId, number])
+  @@index([accountId, status])
+  @@map("city_ledger_invoices")
+}
+
+model CityLedgerPayment {
+  id             String              @id @default(uuid()) @db.Uuid
+  tenantId       String              @map("tenant_id") @db.Uuid
+  accountId      String              @map("account_id") @db.Uuid
+  amountKobo     BigInt              @map("amount_kobo")
+  method         LedgerPaymentMethod
+  reference      String?
+  receivedAt     DateTime            @map("received_at") @db.Timestamptz(3)
+  note           String?
+  recordedById   String?             @map("recorded_by_id") @db.Uuid
+  recordedByName String?             @map("recorded_by_name")
+  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant      Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  account     CorporateAccount       @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  allocations CityLedgerAllocation[]
+
+  @@index([accountId, receivedAt])
+  @@map("city_ledger_payments")
+}
+
+model CityLedgerAllocation {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  paymentId  String   @map("payment_id") @db.Uuid
+  invoiceId  String   @map("invoice_id") @db.Uuid
+  amountKobo BigInt   @map("amount_kobo")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant  Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  payment CityLedgerPayment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  invoice CityLedgerInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@index([paymentId])
+  @@map("city_ledger_allocations")
+}
+
+/// Alert and quiet-hours settings per property (digest recipients stay in digest_settings).
+model NotificationSetting {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  propertyId  String   @unique @map("property_id") @db.Uuid
+  guardAlerts Json     @default("{}") @map("guard_alerts")
+  quietHours  Json     @default("{}") @map("quiet_hours")
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("notification_settings")
+}
+
+enum GuardAlertStatus {
+  PENDING
+  SENT
+  DEFERRED
+  FAILED
+  ACKNOWLEDGED
+}
+
+/// A WhatsApp alert to owners / managers about one or more HIGH flags.
+model GuardAlert {
+  id                 String           @id @default(uuid()) @db.Uuid
+  tenantId           String           @map("tenant_id") @db.Uuid
+  status             GuardAlertStatus @default(PENDING)
+  urgent             Boolean          @default(false)
+  flagIds            String[]         @default([]) @map("flag_ids") @db.Uuid
+  recipients         String[]         @default([])
+  recipientUserIds   String[]         @default([]) @map("recipient_user_ids") @db.Uuid
+  scheduledFor       DateTime         @map("scheduled_for") @db.Timestamptz(3)
+  sentAt             DateTime?        @map("sent_at") @db.Timestamptz(3)
+  deferredReason     String?          @map("deferred_reason")
+  acknowledgedAt     DateTime?        @map("acknowledged_at") @db.Timestamptz(3)
+  acknowledgedById   String?          @map("acknowledged_by_id") @db.Uuid
+  acknowledgedByName String?          @map("acknowledged_by_name")
+  error              String?
+  test               Boolean          @default(false)
+  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@index([status, scheduledFor])
+  @@map("guard_alerts")
+}
+
+/// Inbound WhatsApp messages (platform level; hotel_platform only).
+model WhatsAppInbound {
+  id        String    @id @default(uuid()) @db.Uuid
+  messageId String    @unique @map("message_id")
+  fromPhone String    @map("from_phone")
+  body      String    @default("")
+  tenantId  String?   @map("tenant_id") @db.Uuid
+  userId    String?   @map("user_id") @db.Uuid
+  command   String?
+  result    String?
+  handledAt DateTime? @map("handled_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([fromPhone, createdAt])
+  @@map("whatsapp_inbound")
 }
