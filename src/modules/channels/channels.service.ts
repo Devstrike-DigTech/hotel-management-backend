@@ -4,6 +4,7 @@ import type { ChannelConnection, Prisma } from '../../generated/prisma/client.js
 import type { OtaChannel, SyncDirection, SyncKind, SyncStatus } from '../../generated/prisma/enums.js';
 import type { AuthUser } from '../../common/auth-types.js';
 import { FieldCipher } from '../../common/crypto/field-cipher.js';
+import { UnsafeUrlError, vetUrl } from '../../common/net/safe-fetch.js';
 import { signToken, verifyToken } from '../../common/crypto/signed-token.js';
 import { AppException } from '../../common/errors/app-exception.js';
 import { runInProperty } from '../../common/property-scope.js';
@@ -418,7 +419,7 @@ export class ChannelsService {
 
   addFeed(user: AuthUser, id: string, dto: { roomId?: string; roomTypeId?: string; url: string }, ip?: string) {
     if (!dto.roomId && !dto.roomTypeId) throw Err.validation('roomTypeId', 'Give a room or a room type');
-    return this.db.tenant(user.tenantId, async (tx) => {
+    return this.vetFeedUrl(dto.url).then(() => this.db.tenant(user.tenantId, async (tx) => {
       const c = await this.load(tx, user.tenantId, id);
       if (c.provider !== 'ICAL') throw appError(HttpStatus.CONFLICT, 'CONFLICT', 'Import feeds belong to iCal connections');
       let roomTypeId = dto.roomTypeId ?? null;
@@ -432,7 +433,17 @@ export class ChannelsService {
       const f = await tx.icalFeed.create({ data: { tenantId: user.tenantId, propertyId: c.propertyId, connectionId: c.id, roomId: dto.roomId ?? null, roomTypeId: roomTypeId!, url: dto.url } });
       await this.audit.record(tx, { tenantId: user.tenantId, actor: userActor(user), action: 'channel.ical_feed_added', entityType: 'ical_feed', entityId: f.id, metadata: { connection: c.name }, ip });
       return (await this.feedViews(tx, c.id)).find((x) => x.id === f.id)!;
-    });
+    }));
+  }
+
+  /** Refuses feed URLs the importer would not fetch (scheme, credentials, private or unresolvable hosts). */
+  private async vetFeedUrl(url: string) {
+    try {
+      await vetUrl(url, { production: this.config.get('NODE_ENV') === 'production', allowPrivateHosts: this.config.get('OUTBOUND_ALLOW_PRIVATE_HOSTS') });
+    } catch (e) {
+      if (e instanceof UnsafeUrlError) throw appError(HttpStatus.BAD_REQUEST, 'VALIDATION_ERROR', e.message, { fields: { url: [e.message] }, reason: e.reason });
+      throw e;
+    }
   }
 
   removeFeed(user: AuthUser, id: string, feedId: string, ip?: string) {

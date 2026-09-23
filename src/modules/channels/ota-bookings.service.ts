@@ -3,6 +3,7 @@ import { timingSafeEqual } from 'node:crypto';
 import type { ChannelConnection, Prisma, Property } from '../../generated/prisma/client.js';
 import type { OtaChannel } from '../../generated/prisma/enums.js';
 import type { AuthUser } from '../../common/auth-types.js';
+import { safeFetchText } from '../../common/net/safe-fetch.js';
 import { AppException } from '../../common/errors/app-exception.js';
 import { runInProperty } from '../../common/property-scope.js';
 import { normalisePhone } from '../../common/utils/phone.js';
@@ -402,7 +403,12 @@ export class OtaBookingsService {
   // ---------------------------------------------------------------------------
 
   /** Imports one iCal connection's feeds (fetch + apply + cancel removed events). */
-  async importConnection(tenantId: string, connectionId: string, fetchText: (url: string) => Promise<string> = defaultFetch) {
+  /** Fetches an OTA feed under the SSRF guard (public https hosts, pinned address, size / time / type caps). */
+  fetchFeed(url: string): Promise<string> {
+    return safeFetchText(url, { production: this.config.get('NODE_ENV') === 'production', allowPrivateHosts: this.config.get('OUTBOUND_ALLOW_PRIVATE_HOSTS') });
+  }
+
+  async importConnection(tenantId: string, connectionId: string, fetchText: (url: string) => Promise<string> = (u) => this.fetchFeed(u)) {
     const conn = await this.db.tenant(tenantId, (tx) => tx.channelConnection.findFirst({ where: { id: connectionId, tenantId } }));
     if (!conn || conn.provider !== 'ICAL' || conn.status === 'PAUSED') return { feeds: 0, created: 0, cancelled: 0, errors: 0 };
     const feeds = await runInProperty(tenantId, conn.propertyId, () => this.db.tenant(tenantId, (tx) => tx.icalFeed.findMany({ where: { connectionId } })));
@@ -559,8 +565,3 @@ export class OtaBookingsService {
   }
 }
 
-async function defaultFetch(url: string): Promise<string> {
-  const res = await fetch(url, { signal: AbortSignal.timeout(20_000), headers: { accept: 'text/calendar' } });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.text();
-}

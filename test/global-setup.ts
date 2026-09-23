@@ -7,7 +7,7 @@ import pg from 'pg';
 
 export default async function setup(): Promise<void> {
   const db = process.env.E2E_DB_NAME ?? 'hotel_test';
-  if (!/^[a-z_][a-z0-9_]*$/.test(db)) throw new Error(`Bad E2E_DB_NAME ${db}`);
+  if (!/^[a-z_][a-z0-9_]*$/.test(db) || !db.includes('test')) throw new Error(`Bad E2E_DB_NAME ${db} (must name a test database)`);
   const ownerUrl = process.env.DATABASE_MIGRATION_URL!;
   const adminUrl = new URL(ownerUrl);
   adminUrl.pathname = '/postgres';

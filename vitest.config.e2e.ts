@@ -24,6 +24,8 @@ const env: Record<string, string> = {
   APP_NAME: 'HotelOS',
   CHANNEX_WEBHOOK_SECRET: 'e2e-channex-webhook-secret',
   DNS_PROVIDER: 'mock',
+  // iCal feed stubs listen on localhost; every other private address stays refused.
+  OUTBOUND_ALLOW_PRIVATE_HOSTS: 'localhost',
   APP_DOMAIN: 'hotelos.test',
   SUPPORT_EMAIL: 'support@hotelos.test',
   JWT_ACCESS_SECRET: 'e2e-access-secret-0123456789abcdef0123',

@@ -250,6 +250,7 @@ process refuses to start and lists every missing or invalid value.
 | `CHANNEX_BASE_URL` | no (`https://staging.channex.io/api/v1`) | use `https://app.channex.io/api/v1` in production |
 | `CHANNEX_WEBHOOK_SECRET` | no | verifies `X-Channex-Signature` (hex HMAC-SHA256 of the raw body) on `POST /webhooks/channex`; empty = every delivery rejected |
 | `ICAL_POLL_MINUTES` | no (15) | minutes between iCal imports of a connection (5-1440) |
+| `OUTBOUND_ALLOW_PRIVATE_HOSTS` | no; must be empty in production | development and tests: hostnames (e.g. `localhost`) whose feed URLs may resolve to private addresses |
 | `DNS_PROVIDER` | no (`system` in production, else `mock`) | custom-domain checks: `node:dns` or the in-memory mock |
 | `CUSTOM_DOMAIN_TARGET` | no (`sites.<APP_DOMAIN>`) | the CNAME target hotels point their domain at |
 | `JOBS_ENABLED` | no (true) | `false` starts no BullMQ workers or schedules (dunning, night audit, digest, guard sweep, M4 jobs) |
@@ -969,6 +970,18 @@ Two providers behind one interface (`src/modules/channels/channel-provider.ts`):
   type (`/public/ical/:token.ics`, blocked nights only, rotatable) and import
   feeds polled every `ICAL_POLL_MINUTES`. Events that vanish from a feed cancel
   their reservation.
+  Feed URLs are user input, so they are fetched under an SSRF guard
+  (`src/common/net/safe-fetch.ts`), checked when the feed is added and again on
+  every fetch: https only in production; the hostname is resolved and every
+  address must be public (loopback, private, link-local including
+  169.254.169.254, CGNAT, multicast, reserved and documentation ranges are
+  refused for IPv4 and IPv6, and IPv4 inside mapped, NAT64 and 6to4 IPv6
+  addresses is checked too); the socket is pinned to the vetted address so a
+  second DNS answer cannot rebind it; each redirect is re-checked (at most 3);
+  responses are capped at 2 MB and 10 s and must be `text/calendar` or
+  `text/plain`. It is the only server-side fetch of a user-supplied URL (image
+  and logo URLs are stored and served to browsers, never fetched by the API;
+  payment, messaging and Channex calls go to configured hosts).
 - **Channex** (Booking.com, Expedia, Agoda...): room types and rate plans are
   mapped to Channex; availability, the price from `resolveNightlyRates` and
   restrictions are pushed. Anything that changes availability or rates (the

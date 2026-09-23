@@ -95,6 +95,14 @@ export const envSchema = z.object({
   CHANNEX_WEBHOOK_SECRET: z.string().optional().transform((v) => v || undefined),
   /** Minutes between iCal imports (default 15). */
   ICAL_POLL_MINUTES: z.coerce.number().int().min(5).max(1440).default(15),
+  /**
+   * Development / tests only: hostnames whose feed URLs may resolve to private
+   * addresses (e.g. "localhost" for a local stub). Refused in production.
+   */
+  OUTBOUND_ALLOW_PRIVATE_HOSTS: z
+    .string()
+    .optional()
+    .transform((v) => (v ?? '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean)),
   // M5: custom domains.
   /** DNS lookups for custom domains: system (node:dns) or mock (in-memory; dev and tests). */
   DNS_PROVIDER: z.enum(['system', 'mock']).optional(),
@@ -178,6 +186,12 @@ function checkStorage(env: Env): string[] {
   return missing.map((k) => `  - ${k}: required when STORAGE_DRIVER=s3`);
 }
 
+function checkOutbound(env: Env): string[] {
+  return env.NODE_ENV === 'production' && env.OUTBOUND_ALLOW_PRIVATE_HOSTS.length
+    ? ['  - OUTBOUND_ALLOW_PRIVATE_HOSTS: must be empty in production']
+    : [];
+}
+
 export function validateEnv(raw: Record<string, unknown>): Env {
   const parsed = envSchema.safeParse(raw);
   if (!parsed.success) {
@@ -186,7 +200,7 @@ export function validateEnv(raw: Record<string, unknown>): Env {
       .join('\n');
     throw new Error(`Invalid environment configuration:\n${problems}`);
   }
-  const extra = checkStorage(parsed.data);
+  const extra = [...checkStorage(parsed.data), ...checkOutbound(parsed.data)];
   if (extra.length) {
     throw new Error(`Invalid environment configuration:\n${extra.join('\n')}`);
   }

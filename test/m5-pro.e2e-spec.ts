@@ -168,12 +168,22 @@ describe('M5 Pro tier', () => {
 
     beforeAll(async () => {
       h = await proHotel(2);
-      feedServer = createServer((_req, res) => {
+      feedServer = createServer((req, res) => {
+        if (req.url === '/redirect.ics') {
+          res.writeHead(302, { Location: `http://127.0.0.1:${(feedServer.address() as AddressInfo).port}/airbnb.ics` });
+          res.end();
+          return;
+        }
+        if (req.url === '/page.html') {
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end('<html></html>');
+          return;
+        }
         res.writeHead(200, { 'Content-Type': 'text/calendar' });
         res.end(ics);
       });
       await new Promise<void>((resolve) => feedServer.listen(0, '127.0.0.1', resolve));
-      feedUrl = `http://127.0.0.1:${(feedServer.address() as AddressInfo).port}/airbnb.ics`;
+      feedUrl = `http://localhost:${(feedServer.address() as AddressInfo).port}/airbnb.ics`;
     });
 
     afterAll(async () => {
@@ -208,6 +218,38 @@ describe('M5 Pro tier', () => {
       await request(server()).post(`${API}/channels/connections/${conn.body.id}/sync`).set(auth).send({}).expect(200);
       const after = await request(server()).get(`${API}/reservations/${ota.id}`).set(auth).expect(200);
       expect(after.body.status).toBe('CANCELLED');
+    });
+
+    it('refuses feed URLs that point inside the network, and fetches nothing unsafe (SSRF guard)', async () => {
+      const auth = h.owner.auth;
+      const conn = await request(server()).post(`${API}/channels/connections`).set(auth).send({ provider: 'ICAL', channel: 'VRBO' }).expect(201);
+      const port = (feedServer.address() as AddressInfo).port;
+      for (const url of [
+        `http://127.0.0.1:${port}/airbnb.ics`,
+        'http://169.254.169.254/latest/meta-data/',
+        'http://[::1]/feed.ics',
+        'http://[::ffff:10.0.0.1]/feed.ics',
+        'http://10.0.0.8/feed.ics',
+        'http://100.64.1.1/feed.ics',
+        'http://user:secret@localhost/feed.ics',
+      ]) {
+        const res = await request(server()).post(`${API}/channels/connections/${conn.body.id}/ical/feeds`).set(auth).send({ roomTypeId: h.typeId, url }).expect(400);
+        expect([url, res.body.code]).toEqual([url, 'VALIDATION_ERROR']);
+      }
+      await request(server()).post(`${API}/channels/connections/${conn.body.id}/ical/feeds`).set(auth).send({ roomTypeId: h.typeId, url: 'file:///etc/passwd' }).expect(400);
+
+      // A vetted host that redirects into private space, or serves HTML, imports nothing.
+      await request(server()).post(`${API}/channels/connections/${conn.body.id}/ical/feeds`).set(auth).send({ roomTypeId: h.typeId, url: `http://localhost:${port}/redirect.ics` }).expect(201);
+      await request(server()).post(`${API}/channels/connections/${conn.body.id}/ical/feeds`).set(auth).send({ roomTypeId: h.typeId, url: `http://localhost:${port}/page.html` }).expect(201);
+      await request(server()).post(`${API}/channels/connections/${conn.body.id}/sync`).set(auth).send({}).expect(200);
+      const feeds = await request(server()).get(`${API}/channels/connections/${conn.body.id}/ical/feeds`).set(auth).expect(200);
+      const errors = feeds.body.map((f: { lastStatus: string; lastError: string | null }) => [f.lastStatus, f.lastError]);
+      expect(errors).toEqual(
+        expect.arrayContaining([
+          ['ERROR', expect.stringContaining('not reachable from the internet')],
+          ['ERROR', expect.stringContaining('Unexpected content type text/html')],
+        ]),
+      );
     });
 
     it('Channex: signed webhooks only, mapping, debounced diffed pushes and the overbooking flag', async () => {

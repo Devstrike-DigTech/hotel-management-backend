@@ -9,7 +9,17 @@ import { signContext } from '../src/prisma/db.service.js';
 
 export const API = '/api/v1';
 
+/** e2e must only ever talk to the throwaway test database. */
+export function assertTestDatabase(): void {
+  const db = process.env.E2E_DB_NAME ?? 'hotel_test';
+  for (const key of ['DATABASE_URL', 'DATABASE_MIGRATION_URL', 'DATABASE_PLATFORM_URL']) {
+    const name = new URL(process.env[key] ?? 'postgresql://x/none').pathname.slice(1);
+    if (name !== db || !/test/.test(name)) throw new Error(`${key} points at "${name}", not the e2e database "${db}"; refusing to run`);
+  }
+}
+
 export async function createApp(): Promise<INestApplication> {
+  assertTestDatabase();
   const moduleRef = await Test.createTestingModule({
     imports: [AppModule],
   }).compile();

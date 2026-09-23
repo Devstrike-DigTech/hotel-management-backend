@@ -9,6 +9,8 @@ import { validateEnv } from './env.schema.js';
     ConfigModule.forRoot({
       isGlobal: true,
       cache: true,
+      // Tests take every value from their own config (never the developer's .env and its database).
+      ignoreEnvFile: process.env.NODE_ENV === 'test',
       validate: validateEnv,
     }),
   ],
