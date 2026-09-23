@@ -17,10 +17,18 @@ import { RateLimitService } from '../infra/rate-limit.js';
 import { NotificationService } from '../notifications/notification.service.js';
 import { appError, Err, isExclusionViolation, k } from '../ops/ops.helpers.js';
 import { toImages, toRoomTypePublic } from '../public/hotel.mapper.js';
-import { maxConcurrent } from '../reservations/availability.logic.js';
-import { ACTIVE, AvailabilityService } from '../reservations/availability.service.js';
+import { AvailabilityService } from '../reservations/availability.service.js';
+import { dateRange, dbDate } from '../../common/time/lagos.js';
+import { freeRoomsOverWindow, loadCapacity } from '../rates/capacity.js';
+import { PricingService, type StayPricing } from '../rates/pricing.service.js';
+import { PromosService } from '../rates/promos.service.js';
+import { planUnavailable, resolveNights, restrictionHits, restrictionOn, stayDates, type NightlyRate, type PlanLike } from '../rates/rates.logic.js';
+import { planLabel, RatesService, type RateContext } from '../rates/rates.service.js';
 import {
   checkStayDates,
+  effectivePolicy,
+  priceNights,
+  type PolicyInput,
   commissionFor,
   effectiveCommissionBps,
   freeCancellationUntil,
@@ -32,7 +40,7 @@ import {
   type BookingChannel,
   type PriceBreakdown,
 } from './booking.logic.js';
-import type { AvailabilityQueryDto, CreateBookingDto, QuoteDto } from './booking.dto.js';
+import type { AvailabilityQueryDto, CreateBookingDto, PriceCalendarQueryDto, QuoteDto } from './booking.dto.js';
 import { BookingNotifier } from './booking-notifier.service.js';
 import { BookingPaymentsService, runAfter, type PaymentInit } from './booking-payments.service.js';
 import { BookingTokens } from './booking-tokens.service.js';
@@ -91,6 +99,9 @@ export class PublicBookingService {
     private readonly audit: AuditService,
     private readonly limits: RateLimitService,
     private readonly jobs: GuestJobsService,
+    private readonly rates: RatesService,
+    private readonly pricing: PricingService,
+    private readonly promos: PromosService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -147,23 +158,30 @@ export class PublicBookingService {
     };
   }
 
-  /** roomTypeId -> rooms free for the whole window (sellable minus peak of active stays). */
+  /** roomTypeId -> rooms free for the whole window (blocks and out-of-order rooms excluded). */
   private async availableByType(tx: Tx, tenantId: string, p: HotelRow, w: { arrivalAt: Date; departureAt: Date }): Promise<Map<string, number>> {
-    const stays = await tx.reservation.findMany({
-      where: { tenantId, propertyId: p.id, status: { in: ACTIVE }, arrivalAt: { lt: w.departureAt }, departureAt: { gt: w.arrivalAt } },
-      select: { roomTypeId: true, arrivalAt: true, departureAt: true },
-    });
-    const out = new Map<string, number>();
-    for (const rt of p.roomTypes) {
-      const sellable = rt.rooms.filter((r) => r.status !== 'OUT_OF_ORDER').length;
-      const peak = maxConcurrent(
-        stays.filter((s) => s.roomTypeId === rt.id).map((s) => ({ start: s.arrivalAt, end: s.departureAt })),
-        w.arrivalAt,
-        w.departureAt,
-      );
-      out.set(rt.id, Math.max(0, sellable - peak));
-    }
-    return out;
+    return this.availability.freeByType(tx, tenantId, p.roomTypes.map((rt) => rt.id), w.arrivalAt, w.departureAt);
+  }
+
+  /** Plans a guest can book on this channel, BAR first. */
+  publicPlans(ctx: RateContext, channel: BookingChannel): PlanLike[] {
+    return ctx.plans.filter((pl) => pl.active && pl.channels.includes(channel));
+  }
+
+  planPublic(pl: PlanLike, hotel: PolicyInput) {
+    const policy = effectivePolicy(hotel, pl.cancelPolicy);
+    return {
+      id: pl.id ?? '',
+      code: pl.code,
+      name: pl.name,
+      kind: pl.kind,
+      description: pl.description ?? '',
+      includesBreakfast: pl.includesBreakfast,
+      refundable: !policy.nonRefundable,
+      cancellationSummary: policyView(policy).summary,
+      label: planLabel(pl),
+      minNights: pl.minNights,
+    };
   }
 
   private price(rt: RoomType, w: StayWindow, comps: TaxComponent[]): PriceBreakdown | null {
@@ -205,6 +223,68 @@ export class PublicBookingService {
       const comps = componentsFrom(await this.taxes.forProperty(tx, ref.tenantId, p.id));
       const avail = await this.availableByType(tx, ref.tenantId, p, w);
       const payOnline = p.payoutReady;
+      const channel: BookingChannel = q.channel ?? (p.listedOnMarketplace ? 'MARKETPLACE' : 'BOOKING_SITE');
+      const ctx = w.stayType === 'NIGHTLY' ? await this.rates.context(tx, ref.tenantId, w.checkIn!, w.checkOut!) : null;
+      let promo: { code: string; valid: boolean; reason: string | null; message: string | null } | null = null;
+      const roomTypes = [];
+      for (const rt of p.roomTypes) {
+        const available = avail.get(rt.id) ?? 0;
+        let quote: PriceBreakdown | null;
+        let restriction: { reason: string; date: string; minNights?: number } | null = null;
+        const ratePlans: { ratePlan: ReturnType<PublicBookingService['planPublic']>; bookable: boolean; unavailableReason: string | null; quote: PriceBreakdown | null }[] = [];
+        if (w.stayType === 'NIGHTLY' && ctx) {
+          const hits = ctx.promotions ? restrictionHits(ctx.restrictions, rt.id, w.checkIn!, w.checkOut!) : [];
+          restriction = hits[0] ? { reason: hits[0].reason, date: hits[0].date, ...(hits[0].minNights && { minNights: hits[0].minNights }) } : null;
+          quote = null;
+          for (const pl of this.publicPlans(ctx, channel)) {
+            const why = planUnavailable(pl, rt.id, w.nights!, channel);
+            let planQuote: PriceBreakdown | null = null;
+            if (why !== 'ROOM_TYPE') {
+              try {
+                const priced = await this.pricing.price(
+                  tx,
+                  ref.tenantId,
+                  { roomType: rt, arrivalDate: w.checkIn!, departureDate: w.checkOut!, ratePlanId: pl.id, promoCode: q.promoCode, channel, enforceRestrictions: false, promoStrict: false, skipPlanChecks: true },
+                  { ctx, components: comps },
+                );
+                planQuote = priced.breakdown;
+                if (q.promoCode && pl.isBar && !promo) {
+                  promo = { code: q.promoCode.trim().toUpperCase(), valid: !priced.promoError, reason: priced.promoError?.reason ?? null, message: priced.promoError?.message ?? null };
+                }
+              } catch {
+                planQuote = null;
+              }
+            }
+            if (pl.isBar) quote = planQuote;
+            if (why === 'ROOM_TYPE' || !planQuote) continue;
+            const reason = why ?? (available < 1 ? 'SOLD_OUT' : restriction ? 'RESTRICTED' : null);
+            ratePlans.push({ ratePlan: this.planPublic(pl, p), bookable: !reason && p.onlineBookingEnabled && adults + children <= rt.capacity, unavailableReason: reason, quote: planQuote });
+          }
+        } else {
+          quote = this.price(rt, w, comps);
+        }
+        const reason = !p.onlineBookingEnabled
+          ? 'ONLINE_BOOKING_DISABLED'
+          : quote === null && w.stayType === 'DAY_USE'
+            ? 'NO_HOURLY_RATE'
+            : adults + children > rt.capacity
+              ? 'CAPACITY'
+              : available < 1
+                ? 'SOLD_OUT'
+                : restriction
+                  ? 'RESTRICTED'
+                  : null;
+        roomTypes.push({
+          roomType: toRoomTypePublic(rt, available),
+          available,
+          bookable: reason === null,
+          unavailableReason: reason,
+          lowAvailability: available >= 1 && available <= 2,
+          quote,
+          ratePlans,
+          restriction,
+        });
+      }
       return {
         slug: p.slug,
         stayType: w.stayType,
@@ -218,30 +298,86 @@ export class PublicBookingService {
         nights: w.nights,
         adults,
         children,
+        channel,
         onlineBookingEnabled: p.onlineBookingEnabled,
         payOnlineAvailable: p.onlineBookingEnabled && payOnline,
         payAtHotelAvailable: p.onlineBookingEnabled && p.allowPayAtHotel,
         cancellationPolicy: policyView(p),
         freeCancellationUntil: freeCancellationUntil(w.arrivalAt, p)?.toISOString() ?? null,
-        roomTypes: p.roomTypes.map((rt) => {
-          const available = avail.get(rt.id) ?? 0;
-          const quote = this.price(rt, w, comps);
-          const reason = !p.onlineBookingEnabled
-            ? 'ONLINE_BOOKING_DISABLED'
-            : quote === null
-              ? 'NO_HOURLY_RATE'
-              : adults + children > rt.capacity
-                ? 'CAPACITY'
-                : available < 1
-                  ? 'SOLD_OUT'
-                  : null;
+        roomTypes,
+        promo,
+      };
+    });
+  }
+
+  /**
+   * Price calendar for the date picker: per date, the cheapest nightly price
+   * of a room type (capacity >= guests) with a room free that night, and the
+   * restrictions that apply to arrivals on that date.
+   */
+  async priceCalendar(slug: string, q: PriceCalendarQueryDto) {
+    const today = lagosDate();
+    if (q.from < today) throw Err.validation('from', 'from cannot be in the past');
+    if (q.to < q.from) throw Err.validation('to', '"to" must not be before "from"');
+    if (diffDays(q.from, q.to) + 1 > 62) throw Err.validation('to', 'The range can be at most 62 days');
+    const ref = await this.hotelRef(slug);
+    return this.db.tenant(ref.tenantId, async (tx) => {
+      const p = await this.loadHotel(tx, ref);
+      const guests = (q.adults ?? 1) + (q.children ?? 0);
+      const channel: BookingChannel = q.channel ?? (p.listedOnMarketplace ? 'MARKETPLACE' : 'BOOKING_SITE');
+      const ctx = await this.rates.context(tx, ref.tenantId, q.from, addDays(q.to, 1));
+      const plans = this.publicPlans(ctx, channel).filter((pl) => !q.ratePlanId || pl.id === q.ratePlanId);
+      const types = p.roomTypes.filter((rt) => rt.capacity >= guests && (!q.roomTypeId || rt.id === q.roomTypeId));
+      const dates = dateRange(q.from, q.to);
+      const windows = dates.map((d) => ({ date: d, start: lagosDateTime(d, p.checkInTime), end: lagosDateTime(addDays(d, 1), p.checkOutTime) }));
+      const caps = await loadCapacity(tx, ref.tenantId, types.map((t) => t.id), windows[0].start, windows[windows.length - 1].end);
+      return {
+        slug: p.slug,
+        from: q.from,
+        to: q.to,
+        currency: 'NGN' as const,
+        days: windows.map((w) => {
+          let min: number | null = null;
+          let ruleName: string | null = null;
+          let anyFree = false;
+          let minNights: number | null = null;
+          let cta = true;
+          let ctd = true;
+          let stop = true;
+          for (const rt of types) {
+            const free = freeRoomsOverWindow(caps.get(rt.id)!, w.start, w.end) >= 1;
+            const r = ctx.promotions ? restrictionOn(ctx.restrictions, rt.id, w.date) : null;
+            cta = cta && !!r?.closedToArrival;
+            ctd = ctd && !!r?.closedToDeparture;
+            stop = stop && !!r?.stopSell;
+            if (r?.minNights) minNights = minNights === null ? r.minNights : Math.min(minNights, r.minNights);
+            if (!free || r?.stopSell) continue;
+            anyFree = true;
+            for (const pl of plans) {
+              if (pl.roomTypeIds.length && !pl.roomTypeIds.includes(rt.id)) continue;
+              const n = resolveNights({ roomType: rt, plan: pl, dates: [w.date], rules: ctx.rules, overrides: ctx.overrides });
+              if (!n) continue;
+              if (pl.minNights && pl.minNights > 1) continue;
+              if (min === null || n[0].rateKobo < min) {
+                min = n[0].rateKobo;
+                ruleName = n[0].ruleName;
+              }
+            }
+          }
+          if (!types.length) {
+            cta = false;
+            ctd = false;
+            stop = false;
+          }
           return {
-            roomType: toRoomTypePublic(rt, available),
-            available,
-            bookable: reason === null,
-            unavailableReason: reason,
-            lowAvailability: available >= 1 && available <= 2,
-            quote,
+            date: w.date,
+            minRateKobo: anyFree ? min : null,
+            available: anyFree && min !== null,
+            closedToArrival: cta,
+            closedToDeparture: ctd,
+            stopSell: stop,
+            minNights,
+            ruleName: anyFree ? ruleName : null,
           };
         }),
       };
@@ -249,9 +385,12 @@ export class PublicBookingService {
   }
 
   /**
-   * Marketplace search with dates: counts come from the SECURITY DEFINER
-   * function app_public_room_type_peaks, which only answers in the signed
-   * public context and returns per-room-type peaks (no booking details).
+   * Marketplace search with dates: counts come from SECURITY DEFINER
+   * functions that only answer in the signed public context and return counts
+   * (no booking or block details): app_public_room_type_peaks (active stays)
+   * and app_public_unsellable_rooms (blocked / out-of-order rooms per night).
+   * Prices come from the public rate tables (plans, seasons, overrides,
+   * restrictions), resolved exactly like a quote.
    */
   async searchAvailability(
     tx: Tx,
@@ -267,6 +406,7 @@ export class PublicBookingService {
       groups.set(key, [...(groups.get(key) ?? []), p]);
     }
     const nights = diffDays(checkIn, checkOut);
+    const dates = stayDates(checkIn, checkOut);
     for (const [key, list] of groups) {
       const [inTime, outTime] = key.split('|');
       const start = lagosDateTime(checkIn, inTime);
@@ -274,24 +414,37 @@ export class PublicBookingService {
       const ids = list.map((p) => p.id);
       const peaks = await tx.$queryRaw<{ room_type_id: string; peak: number }[]>`SELECT * FROM app_public_room_type_peaks(${ids}::uuid[], ${start}, ${end})`;
       const peakBy = new Map(peaks.map((r) => [r.room_type_id, Number(r.peak)]));
+      const unsellable = await tx.$queryRaw<{ room_type_id: string; night: Date; unsellable: number }[]>`SELECT * FROM app_public_unsellable_rooms(${ids}::uuid[], ${dbDate(checkIn)}::date, ${dbDate(checkOut)}::date)`;
+      const blockedBy = new Map<string, number>();
+      for (const u of unsellable) blockedBy.set(u.room_type_id, Math.max(blockedBy.get(u.room_type_id) ?? 0, Number(u.unsellable)));
       for (const p of list) {
         if (!p.onlineBookingEnabled) {
           out.set(p.id, null);
           continue;
         }
+        const features = (await this.entitlements.getEntitlements(p.tenantId).catch(() => null))?.features ?? [];
+        const ctx = await this.rates.context(tx, p.tenantId, checkIn, checkOut, features);
         const comps = p.taxSetting ? componentsFrom(p.taxSetting) : DEFAULT_TAX;
-        const bookable = p.roomTypes.filter((rt) => {
-          if (guests !== undefined && rt.capacity < guests) return false;
-          const sellable = rt.rooms.filter((r) => r.status !== 'OUT_OF_ORDER').length;
-          return sellable - (peakBy.get(rt.id) ?? 0) >= 1;
-        });
-        if (!bookable.length) {
-          out.set(p.id, null);
-          continue;
+        let best: { rate: number; total: number } | null = null;
+        let bookableTypes = 0;
+        for (const rt of p.roomTypes) {
+          if (guests !== undefined && rt.capacity < guests) continue;
+          const free = rt.rooms.length - (blockedBy.get(rt.id) ?? 0) - (peakBy.get(rt.id) ?? 0);
+          if (free < 1) continue;
+          if (ctx.promotions && restrictionHits(ctx.restrictions, rt.id, checkIn, checkOut).length) continue;
+          let typeBest: { rate: number; total: number } | null = null;
+          for (const pl of this.publicPlans(ctx, 'MARKETPLACE')) {
+            if (planUnavailable(pl, rt.id, nights, 'MARKETPLACE')) continue;
+            const n = resolveNights({ roomType: rt, plan: pl, dates, rules: ctx.rules, overrides: ctx.overrides });
+            if (!n) continue;
+            const avg = Math.round(n.reduce((a, x) => a + x.rateKobo, 0) / n.length);
+            if (!typeBest || avg < typeBest.rate) typeBest = { rate: avg, total: priceNights({ roomTypeName: rt.name, components: comps, nights: n }).totalKobo };
+          }
+          if (!typeBest) continue;
+          bookableTypes++;
+          if (!best || typeBest.rate < best.rate) best = typeBest;
         }
-        const cheapest = bookable.reduce((a, b) => (b.basePriceKobo < a.basePriceKobo ? b : a));
-        const total = priceStay({ stayType: 'NIGHTLY', rateKobo: cheapest.basePriceKobo, roomTypeName: cheapest.name, components: comps, arrivalDate: checkIn, nights }).totalKobo;
-        out.set(p.id, { availableRoomTypes: bookable.length, cheapestRateKobo: cheapest.basePriceKobo, cheapestTotalKobo: total, nights });
+        out.set(p.id, best ? { availableRoomTypes: bookableTypes, cheapestRateKobo: best.rate, cheapestTotalKobo: best.total, nights } : null);
       }
     }
     return out;
@@ -322,7 +475,20 @@ export class PublicBookingService {
         throw appError(HttpStatus.CONFLICT, 'ROOM_UNAVAILABLE', `${rt.name} is sold out for these dates`, { scope: 'ROOM_TYPE', roomTypeId: rt.id });
       }
       const comps = componentsFrom(await this.taxes.forProperty(tx, ref.tenantId, p.id));
-      const breakdown = this.price(rt, w, comps)!;
+      let breakdown: PriceBreakdown;
+      let priced: StayPricing | null = null;
+      if (w.stayType === 'NIGHTLY') {
+        priced = await this.pricing.price(
+          tx,
+          ref.tenantId,
+          { roomType: rt, arrivalDate: w.checkIn!, departureDate: w.checkOut!, ratePlanId: dto.ratePlanId ?? null, promoCode: dto.promoCode, channel: dto.channel, enforceRestrictions: true, promoStrict: true },
+          { components: comps },
+        );
+        breakdown = priced.breakdown;
+      } else {
+        breakdown = this.price(rt, w, comps)!;
+      }
+      const policy = effectivePolicy(p, priced?.plan.cancelPolicy ?? null);
       const signed = this.tokens.signQuote({
         tid: ref.tenantId,
         pid: p.id,
@@ -338,8 +504,16 @@ export class PublicBookingService {
         rate: breakdown.rateKobo,
         tax: comps,
         total: breakdown.totalKobo,
+        ...(priced && {
+          rp: priced.plan.id,
+          nr: priced.nights.map((n) => [n.date, n.rateKobo, n.discountKobo, n.baseRateKobo, n.source, n.ruleName] as [string, number, number, number, string, string | null]),
+          pc: priced.promo?.id ?? null,
+          pk: priced.promo?.code ?? null,
+          cp: priced.plan.cancelPolicy,
+        }),
       });
       const payOnline = p.payoutReady;
+      const payAtHotel = p.allowPayAtHotel && !policy.nonRefundable;
       return {
         quoteToken: signed.token,
         expiresAt: signed.expiresAt.toISOString(),
@@ -384,14 +558,16 @@ export class PublicBookingService {
           },
           {
             mode: 'PAY_AT_HOTEL' as const,
-            available: p.allowPayAtHotel,
+            available: payAtHotel,
             dueNowKobo: 0,
             dueAtHotelKobo: breakdown.totalKobo,
-            reason: p.allowPayAtHotel ? null : `${p.name} asks for payment when you book`,
+            reason: payAtHotel ? null : policy.nonRefundable ? 'Non-refundable rates are paid when you book' : `${p.name} asks for payment when you book`,
           },
         ],
-        cancellationPolicy: policyView(p),
-        freeCancellationUntil: freeCancellationUntil(w.arrivalAt, p)?.toISOString() ?? null,
+        ratePlan: breakdown.ratePlan,
+        promo: breakdown.promo,
+        cancellationPolicy: policyView(policy),
+        freeCancellationUntil: freeCancellationUntil(w.arrivalAt, policy)?.toISOString() ?? null,
         holdMinutes: HOLD_MINUTES,
         quoteTtlMinutes: QUOTE_TTL_MINUTES,
         available,
@@ -467,6 +643,8 @@ export class PublicBookingService {
           if (!payout) throw appError(HttpStatus.CONFLICT, 'ONLINE_PAYMENT_UNAVAILABLE', `${p.name} does not take online payments yet. Choose pay at hotel.`);
         } else if (!p.allowPayAtHotel) {
           throw appError(HttpStatus.CONFLICT, 'PAY_AT_HOTEL_UNAVAILABLE', `${p.name} asks for payment when you book.`);
+        } else if (q.cp?.nonRefundable) {
+          throw appError(HttpStatus.CONFLICT, 'PAY_AT_HOTEL_UNAVAILABLE', 'Non-refundable rates are paid when you book.');
         }
         const arrivalAt = new Date(q.a);
         const departureAt = new Date(q.d);
@@ -480,11 +658,37 @@ export class PublicBookingService {
 
         await this.availability.assertAvailable(tx, q.tid, { roomTypeId: rt.id, arrivalAt, departureAt });
 
+        const frozen: NightlyRate[] | null = q.nr
+          ? q.nr.map(([date, rateKobo, discountKobo, baseRateKobo, source, ruleName]) => ({ date, rateKobo, discountKobo, baseRateKobo, source: source as NightlyRate['source'], ruleId: null, ruleName }))
+          : null;
+        const plan = q.rp ? await tx.ratePlan.findFirst({ where: { id: q.rp, tenantId: q.tid } }) : null;
         const breakdown =
-          q.st === 'NIGHTLY'
-            ? priceStay({ stayType: 'NIGHTLY', rateKobo: q.rate, roomTypeName: rt.name, components: q.tax, arrivalDate: q.day, nights: q.u })
-            : priceStay({ stayType: 'DAY_USE', rateKobo: q.rate, roomTypeName: rt.name, components: q.tax, date: q.day, hours: q.u });
+          q.st === 'NIGHTLY' && frozen
+            ? priceNights({
+                roomTypeName: rt.name,
+                components: q.tax,
+                nights: frozen,
+                ratePlan: plan ? { id: plan.id, code: plan.code, name: plan.name, kind: plan.kind, includesBreakfast: plan.includesBreakfast, refundable: !q.cp?.nonRefundable } : null,
+                promo: q.pk ? { code: q.pk, description: '', type: '' } : null,
+              })
+            : q.st === 'NIGHTLY'
+              ? priceStay({ stayType: 'NIGHTLY', rateKobo: q.rate, roomTypeName: rt.name, components: q.tax, arrivalDate: q.day, nights: q.u })
+              : priceStay({ stayType: 'DAY_USE', rateKobo: q.rate, roomTypeName: rt.name, components: q.tax, date: q.day, hours: q.u });
         if (breakdown.totalKobo !== q.total) throw appError(HttpStatus.BAD_REQUEST, 'QUOTE_INVALID', 'This price quote is not valid.');
+        // The promo's usage limits are checked again now that the guest is known.
+        if (q.pc && q.pk) {
+          const check = await this.promos.check(tx, q.tid, {
+            code: q.pk,
+            roomTypeId: rt.id,
+            arrivalDate: lagosDate(arrivalAt),
+            departureDate: lagosDate(departureAt),
+            channel: q.ch,
+            guestPhone: phone,
+            guestId: guest.id,
+            lock: true,
+          });
+          if (check.reason && check.reason !== 'EXPIRED' && check.reason !== 'NOT_STARTED') throw this.promos.toError(check, q.pk);
+        }
         const bps = effectiveCommissionBps(q.ch, p.tenant.subscription.plan.commissionBps);
         const commissionKobo = commissionFor(breakdown.totalKobo, bps);
         const online = dto.paymentMode === 'ONLINE';
@@ -506,6 +710,10 @@ export class PublicBookingService {
             source: q.ch,
             status: online ? 'PENDING' : 'CONFIRMED',
             rateKobo: q.rate,
+            ratePlanId: q.rp ?? (await this.rates.ensureBar(tx, q.tid)).id,
+            promoCodeId: q.pc ?? null,
+            nightlyRates: (frozen ?? []) as unknown as Prisma.InputJsonValue,
+            ...(q.cp && { cancelPolicy: q.cp as unknown as Prisma.InputJsonValue }),
             notes: dto.specialRequests ? `Guest request: ${dto.specialRequests}` : '',
             paymentMode: dto.paymentMode,
             guaranteeType: 'NONE',
@@ -521,6 +729,17 @@ export class PublicBookingService {
           },
         });
         await tx.folio.create({ data: { tenantId: q.tid, propertyId: p.id, kind: 'RESERVATION', reservationId: r.id, guestId: guest.id, name: guest.fullName } });
+        if (q.pc) {
+          await this.promos.redeem(tx, q.tid, {
+            promoCodeId: q.pc,
+            reservationId: r.id,
+            guestPhone: phone,
+            channel: q.ch,
+            discountKobo: breakdown.discountKobo,
+            nights: frozen?.length ?? q.u,
+            status: online ? 'HELD' : 'CONFIRMED',
+          });
+        }
         let paymentId: string | null = null;
         if (online) {
           const pay = await tx.bookingPayment.create({

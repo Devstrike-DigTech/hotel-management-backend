@@ -1,4 +1,6 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
+import { assertCan, can } from '../../common/permissions/can.js';
+import { permissionsFor } from '../../common/permissions/catalogue.js';
 import * as argon2 from 'argon2';
 import type { FolioEntry, Prisma } from '../../generated/prisma/client.js';
 import type { FolioEntryType, PaymentMethod, TaxCode } from '../../generated/prisma/enums.js';
@@ -10,7 +12,7 @@ import { AuditService, userActor } from '../audit/audit.service.js';
 import { GuardService } from '../guard/guard.service.js';
 import { voidedPaymentSeverity } from '../guard/guard.logic.js';
 import { DocumentsService, folioDocInclude, type FolioForDoc } from '../invoices/documents.service.js';
-import { appError, Err, isManager, k, paginate, parseClientCreatedAt, primaryProperty, userNames } from '../ops/ops.helpers.js';
+import { appError, Err, k, paginate, parseClientCreatedAt, primaryProperty, userNames } from '../ops/ops.helpers.js';
 import { discountBase, entryViews, folioTotals, CHARGE_TYPES } from './folio.logic.js';
 import { componentsFrom, computeCharge, type TaxComponent } from './tax.logic.js';
 import { TaxSettingsService } from './tax-settings.service.js';
@@ -181,6 +183,37 @@ export class LedgerService {
     return main;
   }
 
+  /**
+   * Posts one night of a stay: the ROOM charge at the night's snapshotted
+   * rate and, when the stay has a promo, the night's DISCOUNT "Promo CODE"
+   * with tax lines mirroring the charge's (computed on the net). Promo
+   * discounts are pre-approved: no second key, no Revenue Guard flag.
+   */
+  async postRoomNight(
+    tx: Tx,
+    tenantId: string,
+    folio: { id: string; propertyId: string; status: string },
+    night: { date: string; rateKobo: number; discountKobo?: number; description: string; promoCode?: string | null; clientCreatedAt?: Date | null },
+    actor: Actor,
+  ): Promise<FolioEntry> {
+    const charge = await this.postCharge(tx, tenantId, folio, { type: 'ROOM', description: night.description, amountKobo: night.rateKobo, businessDate: night.date, clientCreatedAt: night.clientCreatedAt ?? null }, actor);
+    const d = night.discountKobo ?? 0;
+    if (d > 0) {
+      const taxLines = await tx.folioEntry.findMany({ where: { parentEntryId: charge.id, type: { in: ['TAX', 'SERVICE_CHARGE'] } } });
+      const comps: TaxComponent[] = taxLines
+        .filter((e) => e.taxCode)
+        .map((e) => ({ code: e.taxCode as TaxCode, label: e.description, rateBps: e.rateBps ?? 0, inclusive: false }));
+      await this.postWithTaxes(tx, tenantId, folio.id, 'DISCOUNT', `Promo ${night.promoCode ?? ''}`.trim(), -d, comps, {
+        businessDate: night.date,
+        actor,
+        clientCreatedAt: night.clientCreatedAt ?? null,
+        parentEntryId: charge.id,
+        reason: night.promoCode ? `Promo code ${night.promoCode}` : 'Promo code',
+      });
+    }
+    return charge;
+  }
+
   /** Records a payment (and its receipt). Enforces the open-shift rule. */
   async postPayment(
     tx: Tx,
@@ -349,9 +382,7 @@ export class LedgerService {
 
   addCharge(user: AuthUser, folioId: string, dto: AddChargeDto, ip?: string) {
     const type = dto.type ?? 'EXTRA';
-    if (type !== 'EXTRA' && !isManager(user.role)) {
-      throw AppException.forbidden('Only a manager can post room or day-use charges by hand');
-    }
+    if (type !== 'EXTRA') assertCan(user, 'rates.manage', 'Only a manager can post room or day-use charges by hand');
     const clientCreatedAt = parseClientCreatedAt(dto.clientCreatedAt);
     return this.db.tenant(user.tenantId, async (tx) => {
       const folio = await this.docs.loadFolio(tx, user.tenantId, folioId);
@@ -388,11 +419,11 @@ export class LedgerService {
    */
   private async verifyApproval(user: AuthUser, approval: { approverId: string; pin: string }) {
     const result = await this.db.tenant(user.tenantId, async (tx) => {
-      const approver = await tx.user.findFirst({ where: { id: approval.approverId, tenantId: user.tenantId } });
-      if (!approver || !approver.isActive || !isManager(approver.role) || !approver.approvalPinHash) {
+      const approver = await tx.user.findFirst({ where: { id: approval.approverId, tenantId: user.tenantId }, include: { customRole: { select: { permissions: true } } } });
+      if (!approver || !approver.isActive || !permissionsFor(approver.role, approver.customRole?.permissions).has('folio.approve') || !approver.approvalPinHash) {
         return { ok: false as const, error: appError(HttpStatus.FORBIDDEN, 'APPROVAL_INVALID', 'The approver must be an active manager or owner with an approval PIN') };
       }
-      if (approver.id === user.userId && !isManager(user.role)) {
+      if (approver.id === user.userId && !can(user, 'folio.approve')) {
         return { ok: false as const, error: appError(HttpStatus.FORBIDDEN, 'APPROVAL_INVALID', 'A second person must approve this discount') };
       }
       const now = new Date();
@@ -536,9 +567,7 @@ export class LedgerService {
   }
 
   addPayment(user: AuthUser, folioId: string, dto: AddPaymentDto, ip?: string) {
-    if (MANAGER_METHODS.includes(dto.method) && !isManager(user.role)) {
-      throw AppException.forbidden(`Only a manager can record ${dto.method.replace('_', ' ').toLowerCase()} payments`);
-    }
+    if (MANAGER_METHODS.includes(dto.method)) assertCan(user, 'payments.special', `Only a manager can record ${dto.method.replace('_', ' ').toLowerCase()} payments`);
     const clientCreatedAt = parseClientCreatedAt(dto.clientCreatedAt);
     return this.db.tenant(user.tenantId, async (tx) => {
       const folio = await this.docs.loadFolio(tx, user.tenantId, folioId);

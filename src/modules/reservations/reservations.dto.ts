@@ -1,5 +1,7 @@
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsIn,
   IsInt,
@@ -23,6 +25,11 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 export const SOURCES = ['WALK_IN', 'PHONE', 'WHATSAPP', 'MARKETPLACE', 'BOOKING_SITE', 'CORPORATE', 'OTA'] as const;
 const METHODS = ['CASH', 'TRANSFER', 'POS', 'CARD_ONLINE', 'COMPLIMENTARY', 'CITY_LEDGER'] as const;
 
+export class NightPriceDto {
+  @Matches(DATE_RE) date!: string;
+  @IsInt() @Min(0) @Max(MAX_AMOUNT_KOBO) rateKobo!: number;
+}
+
 export class CreateReservationDto {
   @IsOptional() @IsUUID() guestId?: string;
   @IsOptional() @ValidateNested() @Type(() => GuestInputDto) guest?: GuestInputDto;
@@ -40,6 +47,11 @@ export class CreateReservationDto {
   @IsOptional() @IsInt() @Min(0) @Max(MAX_AMOUNT_KOBO) rateKobo?: number;
   @IsOptional() @IsString() @MaxLength(1000) notes?: string;
   @IsOptional() @IsISO8601() clientCreatedAt?: string;
+  /** M4 */
+  @IsOptional() @IsUUID() ratePlanId?: string;
+  @IsOptional() @IsString() @MaxLength(30) promoCode?: string;
+  @IsOptional() @IsUUID() corporateAccountId?: string;
+  @IsOptional() @IsArray() @ArrayMaxSize(60) @ValidateNested({ each: true }) @Type(() => NightPriceDto) nightlyRates?: NightPriceDto[];
 }
 
 export class UpdateReservationDto {
@@ -54,6 +66,11 @@ export class UpdateReservationDto {
   @IsOptional() @IsIn(SOURCES) source?: (typeof SOURCES)[number];
   @IsOptional() @IsString() @MaxLength(1000) notes?: string;
   @IsOptional() @IsInt() @Min(0) @Max(MAX_AMOUNT_KOBO) rateKobo?: number;
+  /** M4 */
+  @IsOptional() @IsUUID() ratePlanId?: string;
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @IsString() @MaxLength(30) promoCode?: string | null;
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @IsUUID() corporateAccountId?: string | null;
+  @IsOptional() @IsArray() @ArrayMaxSize(60) @ValidateNested({ each: true }) @Type(() => NightPriceDto) nightlyRates?: NightPriceDto[];
 }
 
 export class ReservationQueryDto extends PaginationQueryDto {
@@ -101,6 +118,8 @@ export class CheckInDto {
 
 export class CheckOutDto {
   @IsOptional() @ValidateNested() @Type(() => OverrideDto) override?: OverrideDto;
+  /** M4: charge the balance to the linked corporate account's City Ledger. */
+  @IsOptional() @IsBoolean() cityLedger?: boolean;
   @IsOptional() @IsISO8601() clientCreatedAt?: string;
 }
 

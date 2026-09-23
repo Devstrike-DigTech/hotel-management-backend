@@ -9,7 +9,8 @@ import { PaystackClient } from '../billing/paystack.client.js';
 import { RateLimit } from '../infra/rate-limit.js';
 import { DevOutboxService } from '../notifications/dev-outbox.service.js';
 import { HOLD_MINUTES, MAX_ADVANCE_DAYS, MAX_ONLINE_NIGHTS, QUOTE_TTL_MINUTES } from './booking.logic.js';
-import { AvailabilityQueryDto, CreateBookingDto, DevConfirmDto, OutboxQueryDto, QuoteDto, TripCancelDto } from './booking.dto.js';
+import { AvailabilityQueryDto,
+  PriceCalendarQueryDto, CreateBookingDto, DevConfirmDto, OutboxQueryDto, QuoteDto, TripCancelDto } from './booking.dto.js';
 import { BookingPaymentsService } from './booking-payments.service.js';
 import { PublicBookingService } from './public-booking.service.js';
 import { TripsService } from './trips.service.js';
@@ -47,6 +48,13 @@ export class PublicBookingController {
   @ApiOperation({ summary: 'Room types with availability and quoted totals for dates (or a day-use slot)' })
   availability(@Param('slug') slug: string, @Query() q: AvailabilityQueryDto) {
     return this.booking.hotelAvailability(slug, q);
+  }
+
+  @Get('hotels/:slug/price-calendar')
+  @RateLimit({ name: 'availability', limit: 120, windowSec: MINUTE })
+  @ApiOperation({ summary: 'Cheapest nightly price per day for the date picker, with closed-to-arrival days and min-stay hints' })
+  priceCalendar(@Param('slug') slug: string, @Query() q: PriceCalendarQueryDto) {
+    return this.booking.priceCalendar(slug, q);
   }
 
   @Post('quotes')

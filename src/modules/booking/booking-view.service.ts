@@ -8,7 +8,10 @@ import { toImages } from '../public/hotel.mapper.js';
 import { k } from '../ops/ops.helpers.js';
 import {
   displayStatus,
+  effectivePolicy,
   freeCancellationUntil,
+  priceNights,
+  type PolicyInput,
   mapUrl,
   policyView,
   priceStay,
@@ -26,7 +29,14 @@ export const stayInclude = {
   bookingPayments: { orderBy: { createdAt: 'asc' } },
   bookingRefunds: { orderBy: { createdAt: 'asc' } },
   review: { select: { id: true } },
+  ratePlan: { select: { id: true, code: true, name: true, includesBreakfast: true } },
+  promoCode: { select: { code: true } },
 } satisfies Prisma.ReservationInclude;
+
+/** Hotel policy with the booking's rate-plan policy applied (non-refundable). */
+export function stayPolicy(r: Pick<StayRow, 'property' | 'cancelPolicy'>): PolicyInput {
+  return effectivePolicy(r.property, r.cancelPolicy as { nonRefundable: boolean; freeCancellationHours: number; lateCancellationFeePct: number } | null);
+}
 
 export type StayRow = Prisma.ReservationGetPayload<{ include: typeof stayInclude }>;
 
@@ -84,6 +94,16 @@ export class BookingViewService {
     if (r.quote && typeof r.quote === 'object') return r.quote as unknown as PriceBreakdown;
     const tax = await tx.taxSetting.findUnique({ where: { propertyId: r.propertyId } });
     const comps = tax ? componentsFrom(tax) : [];
+    const nights = Array.isArray(r.nightlyRates) ? (r.nightlyRates as { date: string; rateKobo: number; discountKobo?: number; ruleName?: string | null }[]) : [];
+    if (r.stayType === 'NIGHTLY' && nights.length) {
+      return priceNights({
+        roomTypeName: r.roomType.name,
+        components: comps,
+        nights,
+        ratePlan: r.ratePlan ? { id: r.ratePlan.id, code: r.ratePlan.code, name: r.ratePlan.name, kind: '', includesBreakfast: r.ratePlan.includesBreakfast, refundable: !stayPolicy(r).nonRefundable } : null,
+        promo: r.promoCode ? { code: r.promoCode.code, description: '', type: '' } : null,
+      });
+    }
     return r.stayType === 'NIGHTLY'
       ? priceStay({ stayType: 'NIGHTLY', rateKobo: k(r.rateKobo), roomTypeName: r.roomType.name, components: comps, arrivalDate: lagosDate(r.arrivalAt), nights: nightsBetween(r.arrivalAt, r.departureAt) })
       : priceStay({ stayType: 'DAY_USE', rateKobo: k(r.rateKobo), roomTypeName: r.roomType.name, components: comps, date: lagosDate(r.arrivalAt), hours: billableHours(r.arrivalAt, r.departureAt) });
@@ -105,7 +125,8 @@ export class BookingViewService {
     const breakdown = await this.breakdown(tx, r);
     const paid = paidOnline(r);
     const refunded = refundedOnline(r);
-    const policy = policyView(r.property);
+    const policyInput = stayPolicy(r);
+    const policy = policyView(policyInput);
     const status = displayStatus(r, now);
     const cancelled = r.status === 'CANCELLED' || r.status === 'NO_SHOW';
     const total = r.quotedTotalKobo !== null ? k(r.quotedTotalKobo) : breakdown.totalKobo;
@@ -172,7 +193,9 @@ export class BookingViewService {
             }
           : null,
       cancellationPolicy: policy,
-      freeCancellationUntil: freeCancellationUntil(r.arrivalAt, r.property, now)?.toISOString() ?? null,
+      freeCancellationUntil: freeCancellationUntil(r.arrivalAt, policyInput, now)?.toISOString() ?? null,
+      ratePlan: r.ratePlan ? { code: r.ratePlan.code, name: r.ratePlan.name, includesBreakfast: r.ratePlan.includesBreakfast, refundable: !policyInput.nonRefundable } : null,
+      promo: r.promoCode ? { code: r.promoCode.code, discountKobo: breakdown.discountKobo } : null,
       canCancel: (r.status === 'PENDING' || r.status === 'CONFIRMED') && status !== 'EXPIRED' && r.arrivalAt > now,
       specialRequests: r.specialRequests,
       calendarUrl: this.tokens.calendarUrl(r.code, token),

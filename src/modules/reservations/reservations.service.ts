@@ -1,5 +1,6 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import type { Guest, Prisma, Reservation, Room, RoomType } from '../../generated/prisma/client.js';
+import { assertCan } from '../../common/permissions/can.js';
+import { Prisma as PrismaNS, type Guest, type Prisma, type Reservation, type Room, type RoomType } from '../../generated/prisma/client.js';
 import type { ReservationStatus } from '../../generated/prisma/enums.js';
 import type { AuthUser } from '../../common/auth-types.js';
 import { AppException } from '../../common/errors/app-exception.js';
@@ -27,7 +28,6 @@ import {
   appError,
   Err,
   isExclusionViolation,
-  isManager,
   k,
   paginate,
   parseClientCreatedAt,
@@ -41,6 +41,11 @@ import { CommissionService } from '../booking/commission.service.js';
 import { GuestJobsService } from '../booking/guest-jobs.service.js';
 import { HotelBookingService } from '../booking/hotel-booking.service.js';
 import { Logger } from '@nestjs/common';
+import { CorporateService } from '../corporate/corporate.service.js';
+import { PricingService, type StayPricing } from '../rates/pricing.service.js';
+import { PromosService } from '../rates/promos.service.js';
+import type { NightlyRate } from '../rates/rates.logic.js';
+import { RatesService } from '../rates/rates.service.js';
 import type {
   CancelDto,
   CheckInDto,
@@ -57,7 +62,16 @@ const include = {
   room: true,
   roomType: true,
   folio: { select: { id: true } },
+  ratePlan: { select: { id: true, code: true, name: true, kind: true, includesBreakfast: true, cancelPolicy: true } },
+  corporateAccount: { select: { id: true, name: true, creditLimitKobo: true } },
+  promoCode: { select: { code: true, description: true, type: true } },
+  promoRedemption: { select: { status: true, discountKobo: true } },
 } satisfies Prisma.ReservationInclude;
+
+/** Per-night snapshot stored on the reservation. */
+export function nightlyOf(r: { nightlyRates: unknown }): NightlyRate[] {
+  return Array.isArray(r.nightlyRates) ? (r.nightlyRates as NightlyRate[]) : [];
+}
 
 type ResRow = Prisma.ReservationGetPayload<{ include: typeof include }>;
 
@@ -103,6 +117,10 @@ export class ReservationsService {
     private readonly cancellation: CancellationService,
     private readonly commission: CommissionService,
     private readonly guestJobs: GuestJobsService,
+    private readonly pricing: PricingService,
+    private readonly rates: RatesService,
+    private readonly promos: PromosService,
+    private readonly corporate: CorporateService,
   ) {}
 
   private readonly logger = new Logger(ReservationsService.name);
@@ -127,6 +145,10 @@ export class ReservationsService {
       adults: r.adults,
       children: r.children,
       rateKobo: k(r.rateKobo),
+      ratePlan: r.ratePlan ? { id: r.ratePlan.id, code: r.ratePlan.code, name: r.ratePlan.name } : null,
+      corporateAccount: r.corporateAccount ? { id: r.corporateAccount.id, name: r.corporateAccount.name } : null,
+      promoCode: r.promoCode?.code ?? null,
+      roomTotalKobo: r.stayType === 'NIGHTLY' ? nightlyOf(r).reduce((a, n) => a + n.rateKobo, 0) : k(r.rateKobo) * billableHours(r.arrivalAt, r.departureAt),
       guest: { id: r.guest.id, fullName: r.guest.fullName, phone: r.guest.phone, vip: r.guest.vip },
       roomType: { id: r.roomType.id, name: r.roomType.name },
       room: roomRef(r.room),
@@ -154,10 +176,28 @@ export class ReservationsService {
     const stats = await this.guests.stats(tx, [r.guestId]);
     const units = r.stayType === 'NIGHTLY' ? nightsBetween(r.arrivalAt, r.departureAt) : billableHours(r.arrivalAt, r.departureAt);
     const hasReg = r.regArrivingFrom || r.regGoingTo || r.regPurpose;
+    const nights = nightlyOf(r);
+    const discountTotal = nights.reduce((a, n) => a + (n.discountKobo ?? 0), 0);
+    let corporate = null;
+    if (r.corporateAccount) {
+      const outstanding = await this.corporate.outstanding(tx, tenantId, r.corporateAccount.id);
+      const limit = k(r.corporateAccount.creditLimitKobo);
+      corporate = { id: r.corporateAccount.id, name: r.corporateAccount.name, creditLimitKobo: limit, outstandingKobo: outstanding, availableKobo: limit - outstanding };
+    }
+    const policy = r.cancelPolicy as { nonRefundable?: boolean } | null;
     return {
       ...this.listItem(r, balance),
       notes: r.notes,
-      estimatedTotalKobo: k(r.rateKobo) * units,
+      estimatedTotalKobo: r.stayType === 'NIGHTLY' && nights.length ? nights.reduce((a, n) => a + n.rateKobo, 0) - discountTotal : k(r.rateKobo) * units,
+      nightlyRates: r.stayType === 'NIGHTLY' ? nights : [],
+      discountTotalKobo: discountTotal,
+      promo: r.promoCode
+        ? { code: r.promoCode.code, description: r.promoCode.description, type: r.promoCode.type, discountKobo: discountTotal, status: r.promoRedemption?.status ?? null }
+        : null,
+      ratePlan: r.ratePlan
+        ? { id: r.ratePlan.id, code: r.ratePlan.code, name: r.ratePlan.name, kind: r.ratePlan.kind, includesBreakfast: r.ratePlan.includesBreakfast, nonRefundable: !!policy?.nonRefundable }
+        : null,
+      corporateAccount: corporate,
       registration: hasReg
         ? {
             arrivingFrom: r.regArrivingFrom ?? '',
@@ -287,7 +327,7 @@ export class ReservationsService {
   async create(user: AuthUser, dto: CreateReservationDto, ip?: string) {
     const stayType = dto.stayType ?? 'NIGHTLY';
     if (!dto.guestId && !dto.guest) throw Err.validation('guest', 'Give guestId or guest details');
-    if (dto.rateKobo !== undefined && !isManager(user.role)) throw AppException.forbidden('Only a manager can set a custom rate');
+    if (dto.rateKobo !== undefined || dto.nightlyRates !== undefined) assertCan(user, 'rates.manage', 'Only staff who manage rates can set a custom price');
     const clientCreatedAt = parseClientCreatedAt(dto.clientCreatedAt);
     return this.guarded(dto.roomTypeId, dto.roomId ?? null, () =>
       this.db.tenant(user.tenantId, async (tx) => {
@@ -295,7 +335,7 @@ export class ReservationsService {
         if (stayType === 'DAY_USE') await this.entitlements.assertFeature(ent, 'hourly_bookings');
         const roomType = await tx.roomType.findFirst({ where: { id: dto.roomTypeId, tenantId: user.tenantId } });
         if (!roomType) throw AppException.notFound('Room type');
-        const rate = this.rateFor(roomType, stayType, dto.rateKobo);
+        const account = dto.corporateAccountId ? await this.corporate.activeAccount(tx, user.tenantId, dto.corporateAccountId) : null;
         const w = await this.window(tx, user.tenantId, stayType, dto);
         let guest: Guest;
         if (dto.guestId) {
@@ -305,6 +345,29 @@ export class ReservationsService {
           guest = await this.guests.findOrCreateTx(tx, user.tenantId, dto.guest!);
         }
         await this.assertAvailable(tx, user.tenantId, { roomTypeId: roomType.id, roomId: dto.roomId, ...w });
+        const status = dto.status ?? 'CONFIRMED';
+        let rate: number;
+        let pricing: StayPricing | null = null;
+        if (stayType === 'NIGHTLY') {
+          await this.rates.ensureBar(tx, user.tenantId);
+          pricing = await this.pricing.price(tx, user.tenantId, {
+            roomType,
+            arrivalDate: lagosDate(w.arrivalAt),
+            departureDate: lagosDate(w.departureAt),
+            ratePlanId: dto.ratePlanId ?? account?.ratePlanId ?? null,
+            promoCode: dto.promoCode,
+            channel: 'FRONT_DESK',
+            guestPhone: guest.phone,
+            guestId: guest.id,
+            manual: dto.nightlyRates ? { nightly: dto.nightlyRates } : dto.rateKobo !== undefined ? { rateKobo: dto.rateKobo } : undefined,
+            enforceRestrictions: false,
+            promoStrict: true,
+            lockPromo: true,
+          });
+          rate = pricing.nights[0].rateKobo;
+        } else {
+          rate = this.rateFor(roomType, stayType, dto.rateKobo);
+        }
         const code = await this.newCode(tx, user.tenantId);
         const r = await tx.reservation.create({
           data: {
@@ -319,14 +382,30 @@ export class ReservationsService {
             departureAt: w.departureAt,
             adults: dto.adults ?? 1,
             children: dto.children ?? 0,
-            source: dto.source ?? 'WALK_IN',
-            status: dto.status ?? 'CONFIRMED',
+            source: dto.source ?? (account ? 'CORPORATE' : 'WALK_IN'),
+            status,
             rateKobo: rate,
             notes: dto.notes ?? '',
             createdById: user.userId,
             clientCreatedAt,
+            ratePlanId: pricing?.plan.id ?? null,
+            promoCodeId: pricing?.promo?.id ?? null,
+            corporateAccountId: account?.id ?? null,
+            nightlyRates: (pricing?.nights ?? []) as unknown as Prisma.InputJsonValue,
+            ...(pricing?.plan.cancelPolicy && { cancelPolicy: pricing.plan.cancelPolicy as unknown as Prisma.InputJsonValue }),
           },
         });
+        if (pricing?.promo) {
+          await this.promos.redeem(tx, user.tenantId, {
+            promoCodeId: pricing.promo.id,
+            reservationId: r.id,
+            guestPhone: guest.phone,
+            channel: 'FRONT_DESK',
+            discountKobo: pricing.breakdown.discountKobo,
+            nights: pricing.nights.length,
+            status: status === 'CONFIRMED' ? 'CONFIRMED' : 'HELD',
+          });
+        }
         await tx.folio.create({
           data: { tenantId: user.tenantId, propertyId: roomType.propertyId, kind: 'RESERVATION', reservationId: r.id, guestId: guest.id, name: guest.fullName, createdById: user.userId },
         });
@@ -343,11 +422,16 @@ export class ReservationsService {
             arrivalAt: w.arrivalAt.toISOString(),
             departureAt: w.departureAt.toISOString(),
             rateKobo: rate,
+            ...(pricing && { ratePlan: pricing.plan.code, roomTotalKobo: pricing.nights.reduce((a, n) => a + n.rateKobo, 0) }),
+            ...(pricing?.promo && { promoCode: pricing.promo.code, discountKobo: pricing.breakdown.discountKobo }),
+            ...(account && { corporateAccount: account.name }),
+            ...(pricing?.warnings.length && { restrictionWarnings: pricing.warnings.map((x) => x.reason) }),
+            ...(pricing?.nights.some((n) => n.source === 'MANUAL') && { manualRate: true }),
             ...(clientCreatedAt && { clientCreatedAt: clientCreatedAt.toISOString() }),
           },
           ip,
         });
-        return this.detail(tx, user.tenantId, r.id);
+        return { ...(await this.detail(tx, user.tenantId, r.id)), warnings: pricing?.warnings ?? [] };
       }),
     );
   }
@@ -375,7 +459,7 @@ export class ReservationsService {
   }
 
   async update(user: AuthUser, id: string, dto: UpdateReservationDto, ip?: string) {
-    if (dto.rateKobo !== undefined && !isManager(user.role)) throw AppException.forbidden('Only a manager can set a custom rate');
+    if (dto.rateKobo !== undefined || dto.nightlyRates !== undefined) assertCan(user, 'rates.manage', 'Only staff who manage rates can set a custom price');
     return this.db
       .tenant(user.tenantId, async (tx) => {
         const r = await this.load(tx, user.tenantId, id);
@@ -383,7 +467,9 @@ export class ReservationsService {
         if (!['PENDING', 'CONFIRMED', 'CHECKED_IN'].includes(r.status)) {
           throw Err.invalidState(r.status, ['PENDING', 'CONFIRMED', 'CHECKED_IN'], 'This reservation');
         }
-        if (inHouse && (dto.arrivalDate || dto.arrivalAt || dto.roomTypeId || dto.roomId !== undefined || dto.source || dto.rateKobo !== undefined)) {
+        const pricingChange =
+          dto.ratePlanId !== undefined || dto.promoCode !== undefined || dto.corporateAccountId !== undefined || dto.rateKobo !== undefined || dto.nightlyRates !== undefined;
+        if (inHouse && (dto.arrivalDate || dto.arrivalAt || dto.roomTypeId || dto.roomId !== undefined || dto.source || pricingChange)) {
           throw appError(HttpStatus.CONFLICT, 'INVALID_STATE', 'For a guest in house you can only change the departure, guests and notes (use move-room to change rooms)', {
             status: r.status,
             allowed: ['PENDING', 'CONFIRMED'],
@@ -409,12 +495,63 @@ export class ReservationsService {
         const roomTypeId = dto.roomTypeId ?? r.roomTypeId;
         const roomId = dto.roomId === undefined ? (dto.roomTypeId && dto.roomTypeId !== r.roomTypeId ? null : r.roomId) : dto.roomId;
         const needsCheck = dateChange || roomTypeId !== r.roomTypeId || roomId !== r.roomId;
-        if (roomTypeId !== r.roomTypeId) {
-          const rt = await tx.roomType.findFirst({ where: { id: roomTypeId, tenantId: user.tenantId } });
-          if (!rt) throw AppException.notFound('Room type');
-        }
+        const roomType = roomTypeId === r.roomTypeId ? r.roomType : await tx.roomType.findFirst({ where: { id: roomTypeId, tenantId: user.tenantId } });
+        if (!roomType) throw AppException.notFound('Room type');
         if (needsCheck) {
           await this.assertAvailable(tx, user.tenantId, { roomTypeId, roomId, arrivalAt, departureAt, excludeReservationId: r.id });
+        }
+        const newAccount = dto.corporateAccountId ? await this.corporate.activeAccount(tx, user.tenantId, dto.corporateAccountId) : null;
+
+        // Prices: a full re-price when the plan, promo, account, manual prices
+        // or room type change; otherwise the nights that remain keep their
+        // snapshot and new nights are priced with today's rules.
+        let nightly = nightlyOf(r);
+        let ratePlanId = r.ratePlanId;
+        let promoCodeId = r.promoCodeId;
+        let rate = k(r.rateKobo);
+        let cancelPolicy: unknown = r.cancelPolicy;
+        if (r.stayType === 'NIGHTLY' && (pricingChange || roomTypeId !== r.roomTypeId || dateChange)) {
+          const full = pricingChange || roomTypeId !== r.roomTypeId;
+          const promoCode = dto.promoCode === undefined ? (r.promoCode?.code ?? null) : dto.promoCode;
+          const priced = await this.pricing.price(tx, user.tenantId, {
+            roomType,
+            arrivalDate: lagosDate(arrivalAt),
+            departureDate: lagosDate(departureAt),
+            ratePlanId: dto.ratePlanId ?? newAccount?.ratePlanId ?? r.ratePlanId,
+            promoCode: full ? promoCode : null,
+            channel: 'FRONT_DESK',
+            guestPhone: r.guest.phone,
+            guestId: r.guestId,
+            excludeReservationId: r.id,
+            manual: dto.nightlyRates ? { nightly: dto.nightlyRates } : dto.rateKobo !== undefined ? { rateKobo: dto.rateKobo } : undefined,
+            enforceRestrictions: false,
+            promoStrict: true,
+            lockPromo: true,
+            skipPlanChecks: !full,
+          });
+          if (full) {
+            nightly = priced.nights;
+            ratePlanId = priced.plan.id;
+            promoCodeId = priced.promo?.id ?? null;
+            cancelPolicy = priced.plan.cancelPolicy;
+            if (priced.promo) {
+              await this.promos.redeem(tx, user.tenantId, {
+                promoCodeId: priced.promo.id,
+                reservationId: r.id,
+                guestPhone: r.guest.phone,
+                channel: 'FRONT_DESK',
+                discountKobo: priced.breakdown.discountKobo,
+                nights: priced.nights.length,
+                status: r.status === 'PENDING' ? 'HELD' : 'CONFIRMED',
+              });
+            } else if (r.promoCodeId) {
+              await this.promos.release(tx, user.tenantId, r.id);
+            }
+          } else {
+            const kept = new Map(nightly.map((n) => [n.date, n]));
+            nightly = priced.nights.map((n) => kept.get(n.date) ?? n);
+          }
+          rate = nightly[0]?.rateKobo ?? rate;
         }
         await tx.reservation.update({
           where: { id },
@@ -427,7 +564,12 @@ export class ReservationsService {
             ...(dto.children !== undefined && { children: dto.children }),
             ...(dto.source !== undefined && { source: dto.source }),
             ...(dto.notes !== undefined && { notes: dto.notes }),
-            ...(dto.rateKobo !== undefined && { rateKobo: dto.rateKobo }),
+            ...(dto.corporateAccountId !== undefined && { corporateAccountId: dto.corporateAccountId }),
+            rateKobo: rate,
+            ratePlanId,
+            promoCodeId,
+            nightlyRates: nightly as unknown as Prisma.InputJsonValue,
+            cancelPolicy: cancelPolicy ? (cancelPolicy as Prisma.InputJsonValue) : PrismaNS.JsonNull,
           },
         });
         await this.audit.record(tx, {
@@ -439,8 +581,8 @@ export class ReservationsService {
           metadata: {
             code: r.code,
             changes: Object.keys(dto),
-            before: { arrivalAt: r.arrivalAt.toISOString(), departureAt: r.departureAt.toISOString(), roomId: r.roomId },
-            after: { arrivalAt: arrivalAt.toISOString(), departureAt: departureAt.toISOString(), roomId },
+            before: { arrivalAt: r.arrivalAt.toISOString(), departureAt: r.departureAt.toISOString(), roomId: r.roomId, roomTotalKobo: nightlyOf(r).reduce((a, n) => a + n.rateKobo, 0) },
+            after: { arrivalAt: arrivalAt.toISOString(), departureAt: departureAt.toISOString(), roomId, roomTotalKobo: nightly.reduce((a, n) => a + n.rateKobo, 0) },
           },
           ip,
         });
@@ -457,6 +599,7 @@ export class ReservationsService {
       const r = await this.load(tx, user.tenantId, id);
       if (r.status !== 'PENDING') throw Err.invalidState(r.status, ['PENDING'], 'This reservation');
       await tx.reservation.update({ where: { id }, data: { status: 'CONFIRMED' } });
+      await this.promos.confirm(tx, user.tenantId, id);
       await this.audit.record(tx, { tenantId: user.tenantId, actor: userActor(user), action: 'reservation.confirmed', entityType: 'reservation', entityId: id, metadata: { code: r.code }, ip });
       return this.detail(tx, user.tenantId, id);
     });
@@ -482,6 +625,7 @@ export class ReservationsService {
         return null;
       }
       await tx.reservation.update({ where: { id }, data: { status: 'CANCELLED', cancelledAt: new Date(), cancelReason: dto.reason, cancelledBy: 'HOTEL' } });
+      await this.promos.release(tx, user.tenantId, id);
       if (dto.feeKobo && r.folio) {
         const folio = await this.docs.loadFolio(tx, user.tenantId, r.folio.id);
         await this.ledger.postCharge(tx, user.tenantId, folio, { type: 'EXTRA', description: `Cancellation fee (${r.code})`, amountKobo: dto.feeKobo }, actorOf(user));
@@ -508,6 +652,7 @@ export class ReservationsService {
       if (r.status !== 'PENDING' && r.status !== 'CONFIRMED') throw Err.invalidState(r.status, ['PENDING', 'CONFIRMED'], 'This reservation');
       if (lagosDate(r.arrivalAt) > lagosDate()) throw AppException.badRequest('A guest can only be marked no-show on or after the arrival date');
       await tx.reservation.update({ where: { id }, data: { status: 'NO_SHOW', noShowAt: new Date(), cancelReason: dto.reason ?? null } });
+      await this.promos.release(tx, user.tenantId, id);
       await this.commission.reverseAccrued(tx, user.tenantId, r.id, 'No-show');
       if (dto.feeKobo && r.folio) {
         const folio = await this.docs.loadFolio(tx, user.tenantId, r.folio.id);
@@ -531,7 +676,7 @@ export class ReservationsService {
   // ---------------------------------------------------------------------------
 
   async checkIn(user: AuthUser, id: string, dto: CheckInDto, ip?: string) {
-    if (dto.override && !isManager(user.role)) throw AppException.forbidden('Only a manager can override the clean-room rule');
+    if (dto.override) assertCan(user, 'frontdesk.override', 'Only a manager can override the clean-room rule');
     const clientCreatedAt = parseClientCreatedAt(dto.clientCreatedAt);
     let roomTypeForError = '';
     try {
@@ -616,11 +761,12 @@ export class ReservationsService {
         if (folio.name !== guest.fullName) await tx.folio.update({ where: { id: folio.id }, data: { name: guest.fullName, guestId: guest.id } });
         const rate = k(r.rateKobo);
         if (r.stayType === 'NIGHTLY') {
-          await this.ledger.postCharge(
+          const night = await this.nightFor(tx, user.tenantId, r, arrivalDate);
+          await this.ledger.postRoomNight(
             tx,
             user.tenantId,
             folio,
-            { type: 'ROOM', description: roomNightLabel(room.number, arrivalDate), amountKobo: rate, businessDate: arrivalDate, clientCreatedAt },
+            { date: arrivalDate, rateKobo: night.rateKobo, discountKobo: night.discountKobo, promoCode: r.promoCode?.code ?? null, description: roomNightLabel(room.number, arrivalDate), clientCreatedAt },
             actorOf(user),
           );
         } else {
@@ -634,9 +780,7 @@ export class ReservationsService {
           );
         }
         if (dto.deposit) {
-          if (!['CASH', 'TRANSFER', 'POS'].includes(dto.deposit.method) && !isManager(user.role)) {
-            throw AppException.forbidden('Only a manager can record that payment method');
-          }
+          if (!['CASH', 'TRANSFER', 'POS'].includes(dto.deposit.method)) assertCan(user, 'payments.special', 'Only a manager can record that payment method');
           const fresh = await this.docs.loadFolio(tx, user.tenantId, folio.id);
           await this.ledger.postPayment(
             tx,
@@ -719,7 +863,7 @@ export class ReservationsService {
   // ---------------------------------------------------------------------------
 
   checkOut(user: AuthUser, id: string, dto: CheckOutDto, ip?: string) {
-    if (dto.override && !isManager(user.role)) throw AppException.forbidden('Only a manager can check a guest out with a balance');
+    if (dto.override) assertCan(user, 'frontdesk.override', 'Only a manager can check a guest out with a balance');
     const clientCreatedAt = parseClientCreatedAt(dto.clientCreatedAt);
     return this.db.tenant(user.tenantId, async (tx) => {
       const r = await this.load(tx, user.tenantId, id);
@@ -727,15 +871,51 @@ export class ReservationsService {
       const folio = await this.docs.loadFolio(tx, user.tenantId, r.folio!.id);
       const balance = await this.ledger.balance(tx, folio.id);
       const features = await this.guard.features(tx, user.tenantId);
-      if (balance < 0 || (balance > 0 && !dto.override)) {
+      let cityLedger: Awaited<ReturnType<CorporateService['chargeCheckout']>> | null = null;
+      if (dto.cityLedger && balance > 0) {
+        // Corporate stay: the balance goes to the company's City Ledger; no
+        // override needed within the credit limit.
+        if (!r.corporateAccountId) throw AppException.badRequest('This booking is not linked to a corporate account');
+        const account = await this.corporate.activeAccount(tx, user.tenantId, r.corporateAccountId);
+        const credit = await this.corporate.assertCredit(tx, user.tenantId, account, balance, !!dto.override);
+        const { entry } = await this.ledger.postPayment(
+          tx,
+          user.tenantId,
+          folio,
+          { method: 'CITY_LEDGER', amountKobo: balance, note: `Charged to ${account.name}`, receipt: false, clientCreatedAt },
+          actorOf(user),
+        );
+        cityLedger = await this.corporate.chargeCheckout(tx, user.tenantId, {
+          account,
+          reservation: { id: r.id, code: r.code, guestName: r.guest.fullName },
+          folioId: folio.id,
+          folioEntryId: entry.id,
+          amountKobo: balance,
+          actor: { id: user.userId, fullName: user.fullName },
+          roomLabel: r.room ? `room ${r.room.number}, ${nightsBetween(r.arrivalAt, new Date() < r.departureAt ? new Date() : r.departureAt) || 1} night(s)` : r.roomType.name,
+        });
+        if (!credit.withinLimit) {
+          await this.guard.raise(tx, user.tenantId, features, {
+            rule: 'CHECKOUT_WITH_BALANCE',
+            title: `${r.code} charged to ${account.name} over its credit limit`,
+            detail: `${user.fullName} charged ${account.name} beyond its credit limit. Reason: ${dto.override!.reason}`,
+            dedupeKey: `CHECKOUT_WITH_BALANCE:${r.id}`,
+            amountKobo: balance,
+            reservationId: r.id,
+            roomId: r.roomId,
+            userId: user.userId,
+            userName: user.fullName,
+            evidence: { balanceKobo: balance, reason: dto.override!.reason, creditLimitKobo: k(account.creditLimitKobo), outstandingKobo: credit.outstandingKobo },
+          });
+        }
+      } else if (balance < 0 || (balance > 0 && !dto.override)) {
         throw appError(
           HttpStatus.CONFLICT,
           'BALANCE_OUTSTANDING',
           balance > 0 ? 'The guest still owes money on this folio' : 'The guest is in credit; record a refund first',
           { balanceKobo: balance },
         );
-      }
-      if (balance > 0) {
+      } else if (balance > 0) {
         await this.ledger.postPayment(
           tx,
           user.tenantId,
@@ -779,12 +959,13 @@ export class ReservationsService {
           room: r.room?.number ?? null,
           invoiceNumber: invoice.number,
           early: now < r.departureAt,
-          ...(balance > 0 && { cityLedgerKobo: balance, override: dto.override!.reason }),
+          ...(balance > 0 && { cityLedgerKobo: balance, override: dto.override?.reason ?? null }),
+          ...(cityLedger && { corporateAccountId: r.corporateAccountId, cityLedgerChargeId: cityLedger.charge.id }),
           ...(clientCreatedAt && { clientCreatedAt: clientCreatedAt.toISOString() }),
         },
         ip,
       });
-      return { reservation: await this.detail(tx, user.tenantId, id), invoice };
+      return { reservation: await this.detail(tx, user.tenantId, id), invoice, cityLedger };
     }).then(async (out) => {
       await runAfter(() => this.guestJobs.scheduleReviewRequest(user.tenantId, id, new Date(out.reservation.checkedOutAt ?? Date.now())), this.logger);
       return out;
@@ -860,8 +1041,13 @@ export class ReservationsService {
           departureAt,
           excludeReservationId: r.id,
         });
-        const rate = r.roomType.basePriceKobo;
-        await tx.reservation.update({ where: { id }, data: { stayType: 'NIGHTLY', departureAt, rateKobo: rate } });
+        await this.rates.ensureBar(tx, user.tenantId);
+        const priced = await this.rates.resolveNightlyRates(tx, user.tenantId, { roomType: r.roomType, arrivalDate: today, departureDate: dep });
+        const rate = priced.nights[0].rateKobo;
+        await tx.reservation.update({
+          where: { id },
+          data: { stayType: 'NIGHTLY', departureAt, rateKobo: rate, ratePlanId: priced.plan.id, nightlyRates: priced.nights as unknown as Prisma.InputJsonValue },
+        });
         const folio = await this.docs.loadFolio(tx, user.tenantId, r.folio!.id);
         await this.ledger.postCharge(
           tx,
@@ -885,6 +1071,20 @@ export class ReservationsService {
       if (isExclusionViolation(e)) throw this.overlapError('', null);
       throw e;
     }
+  }
+
+  /**
+   * The price of one night of a stay: its snapshot, or (for nights added
+   * without one) the current resolution for its plan, appended to the
+   * snapshot so the stay keeps it.
+   */
+  async nightFor(tx: Tx, tenantId: string, r: Pick<Reservation, 'id' | 'nightlyRates' | 'ratePlanId' | 'rateKobo'> & { roomType: RoomType }, date: string): Promise<NightlyRate> {
+    const snap = nightlyOf(r).find((n) => n.date === date);
+    if (snap) return snap;
+    const night = await this.rates.priceForNight(tx, tenantId, r.roomType, r.ratePlanId, date);
+    const merged = [...nightlyOf(r), night].sort((a, b) => a.date.localeCompare(b.date));
+    await tx.reservation.update({ where: { id: r.id }, data: { nightlyRates: merged as unknown as Prisma.InputJsonValue } });
+    return night;
   }
 
   /** Statuses that hold inventory (for other modules). */

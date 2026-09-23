@@ -65,7 +65,8 @@ describe('Public API', () => {
       slug: 'palmwine-house',
       name: 'The Palmwine House',
       area: 'Lekki Phase 1',
-      startingRateKobo: 5_500_000,
+      // M4: cheapest one-night plan over the next 60 days, the seeded Non-refundable rate (BAR 55,000 less 10%).
+      startingRateKobo: 4_950_000,
       branding: { accentColor: '#B4452A', logoUrl: null },
     });
     expect(res.body.roomTypes).toHaveLength(3);

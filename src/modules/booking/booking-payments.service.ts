@@ -1,4 +1,5 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { PromosService } from '../rates/promos.service.js';
 import { randomBytes } from 'node:crypto';
 import type { BookingPayment, OrphanReason } from '../../generated/prisma/client.js';
 import { AppException } from '../../common/errors/app-exception.js';
@@ -80,6 +81,7 @@ export class BookingPaymentsService {
     private readonly views: BookingViewService,
     private readonly refunds: RefundsService,
     private readonly jobs: GuestJobsService,
+    private readonly promos: PromosService,
   ) {}
 
   static newReference(): string {
@@ -202,6 +204,7 @@ export class BookingPaymentsService {
       where: { id: r.id },
       data: { status: 'CONFIRMED', guaranteeType: 'PREPAID', holdExpiresAt: null, cancelledAt: null, cancelReason: null, cancelledBy: null },
     });
+    await this.promos.confirm(tx, tenantId, r.id);
     const folio = await this.docs.loadFolio(tx, tenantId, r.folio!.id);
     const { entry, receipt } = await this.ledger.postPayment(
       tx,

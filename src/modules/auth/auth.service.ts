@@ -125,6 +125,19 @@ export class AuthService {
               email: dto.email,
             },
           });
+          // Every hotel sells at its Best Available Rate from day one (M4 rates).
+          await tx.ratePlan.create({
+            data: {
+              tenantId,
+              propertyId: property.id,
+              code: 'BAR',
+              name: 'Best Available Rate',
+              description: "Flexible rate at the day's best price.",
+              kind: 'BAR',
+              isBar: true,
+              pricing: 'DERIVED',
+            },
+          });
           const user = await tx.user.create({
             data: {
               tenantId,

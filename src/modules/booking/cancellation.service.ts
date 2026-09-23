@@ -10,7 +10,8 @@ import { appError, Err, k } from '../ops/ops.helpers.js';
 import { cancellationOutcome, displayStatus, type CancellationOutcome } from './booking.logic.js';
 import { BookingNotifier } from './booking-notifier.service.js';
 import type { After } from './booking-payments.service.js';
-import { paidOnline, refundedOnline, stayInclude, type StayRow } from './booking-view.service.js';
+import { paidOnline, refundedOnline, stayInclude, stayPolicy, type StayRow } from './booking-view.service.js';
+import { PromosService } from '../rates/promos.service.js';
 import { CommissionService } from './commission.service.js';
 import { RefundsService } from './refunds.service.js';
 
@@ -42,12 +43,13 @@ export class CancellationService {
     private readonly notifier: BookingNotifier,
     private readonly refunds: RefundsService,
     private readonly jobs: JobsBridge,
+    private readonly promos: PromosService,
   ) {}
 
   preview(r: StayRow, now = new Date()): CancellationOutcome & { canCancel: boolean; reason: string | null } {
     const paid = Math.max(0, paidOnline(r) - refundedOnline(r));
     const firstNight = r.quote && typeof r.quote === 'object' ? Number((r.quote as { firstNightTotalKobo?: number }).firstNightTotalKobo ?? 0) : k(r.rateKobo);
-    const outcome = cancellationOutcome({ now, arrivalAt: r.arrivalAt, policy: r.property, paidKobo: paid, firstNightTotalKobo: firstNight, paymentMode: r.paymentMode });
+    const outcome = cancellationOutcome({ now, arrivalAt: r.arrivalAt, policy: stayPolicy(r), paidKobo: paid, firstNightTotalKobo: firstNight, paymentMode: r.paymentMode });
     const status = displayStatus(r, now);
     let reason: string | null = null;
     if (r.status === 'CHECKED_IN') reason = 'You have already checked in. Please speak to the front desk.';
@@ -84,6 +86,7 @@ export class CancellationService {
         holdExpiresAt: null,
       },
     });
+    await this.promos.release(tx, tenantId, r.id);
     const refundIds: string[] = [];
     if (outcome.paidKobo > 0 && r.folio) {
       const folio = await this.docs.loadFolio(tx, tenantId, r.folio.id);

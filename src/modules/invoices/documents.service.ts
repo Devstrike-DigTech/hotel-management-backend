@@ -10,6 +10,7 @@ import { DbService, type Tx } from '../../prisma/db.service.js';
 import { AuditService, userActor } from '../audit/audit.service.js';
 import { buildInvoiceDocument, buildReceiptDocument, type Issuer } from './document.builder.js';
 import { appError, k, paginate, primaryProperty } from '../ops/ops.helpers.js';
+import { buildCityLedgerDocument } from '../corporate/city-ledger.document.js';
 
 export const folioDocInclude = {
   reservation: { include: { room: true, roomType: true } },
@@ -20,14 +21,14 @@ export const folioDocInclude = {
 export type FolioForDoc = Prisma.FolioGetPayload<{ include: typeof folioDocInclude }>;
 
 
-const PREFIX: Record<DocumentCounterKind, string> = { INVOICE: 'INV', PROFORMA: 'PRO', RECEIPT: 'RCT' };
+const PREFIX: Record<DocumentCounterKind, string> = { INVOICE: 'INV', PROFORMA: 'PRO', RECEIPT: 'RCT', MAINTENANCE_TICKET: 'MT', CITY_LEDGER: 'CL' };
 
 export function formatDocNumber(kind: DocumentCounterKind, year: number, seq: number): string {
   return `${PREFIX[kind]}-${year}-${String(seq).padStart(6, '0')}`;
 }
 
 interface SharePayload {
-  t: 'INVOICE' | 'RECEIPT';
+  t: 'INVOICE' | 'RECEIPT' | 'CITY_LEDGER_INVOICE';
   id: string;
   tid: string;
   exp: number;
@@ -343,6 +344,11 @@ export class DocumentsService {
     const { t, id, tid } = res.payload;
     // The tenant comes from a token signed by this API, never from user input.
     return this.db.tenant(tid, async (tx) => {
+      if (t === 'CITY_LEDGER_INVOICE') {
+        const doc = await buildCityLedgerDocument(tx, tid, id, this.config.get('APP_NAME'));
+        if (!doc) throw AppException.notFound('Document');
+        return { type: 'CITY_LEDGER_INVOICE' as const, document: doc };
+      }
       if (t === 'INVOICE') {
         const r = await tx.guestInvoice.findFirst({ where: { id, tenantId: tid } });
         if (!r) throw AppException.notFound('Document');

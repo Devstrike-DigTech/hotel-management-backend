@@ -14,6 +14,9 @@ import { PublicBookingService } from '../booking/public-booking.service.js';
 import { EntitlementsService } from '../entitlements/entitlements.service.js';
 import { componentsFrom } from '../folios/tax.logic.js';
 import { Err } from '../ops/ops.helpers.js';
+import { addDays, dateRange, lagosDate } from '../../common/time/lagos.js';
+import { resolveNights } from '../rates/rates.logic.js';
+import { RatesService } from '../rates/rates.service.js';
 import {
   reviewSummaryOf,
   toHotelCard,
@@ -47,6 +50,7 @@ const AVAILABLE_STATUSES = ['VACANT_CLEAN', 'VACANT_DIRTY'] as const;
 @Injectable()
 export class PublicService {
   constructor(
+    private readonly rates: RatesService,
     private readonly db: DbService,
     private readonly config: AppConfigService,
     private readonly booking: PublicBookingService,
@@ -218,10 +222,33 @@ export class PublicService {
     const ent = await this.entitlements.getEntitlements(p.tenantId).catch(() => null);
     const dayUse = !!ent?.features.includes('hourly_bookings') && p.roomTypes.some((r) => r.hourlyPriceKobo !== null);
 
+    // Rate plans per room type with the cheapest night over the next 60 days.
+    const today = lagosDate();
+    const dates = dateRange(today, addDays(today, 59));
+    const ctx = await this.db.public((tx) => this.rates.context(tx, p.tenantId, today, addDays(today, 59), ent?.features ?? []));
+    const plans = ctx.plans.filter((pl) => pl.active && (pl.channels.includes('BOOKING_SITE') || pl.channels.includes('MARKETPLACE')));
+    const planInfo = new Map(
+      p.roomTypes.map((rt) => {
+        const list = plans
+          .map((pl) => {
+            const n = resolveNights({ roomType: rt, plan: pl, dates, rules: ctx.rules, overrides: ctx.overrides });
+            if (!n) return null;
+            return { ...this.booking.planPublic(pl, p), fromRateKobo: Math.min(...n.map((x) => x.rateKobo)) };
+          })
+          .filter((x): x is NonNullable<typeof x> => x !== null);
+        return [rt.id, list];
+      }),
+    );
+    // "From" prices are bookable for a single night: long-stay plans show on their own card only.
+    const fromRate = (id: string, fallback: number) => {
+      const list = (planInfo.get(id) ?? []).filter((x) => !x.minNights || x.minNights <= 1);
+      return list.length ? Math.min(...list.map((x) => x.fromRateKobo)) : fallback;
+    };
+
     return {
       ...toHotelCard(
         p,
-        p.roomTypes.map((r) => r.basePriceKobo),
+        p.roomTypes.map((r) => fromRate(r.id, r.basePriceKobo)),
       ),
       description: p.description,
       address: p.address,
@@ -230,7 +257,7 @@ export class PublicService {
       checkInTime: p.checkInTime,
       checkOutTime: p.checkOutTime,
       images: toImages(p.images),
-      roomTypes: p.roomTypes.map((rt) => toRoomTypePublic(rt, rt._count.rooms)),
+      roomTypes: p.roomTypes.map((rt) => ({ ...toRoomTypePublic(rt, rt._count.rooms), ratePlans: planInfo.get(rt.id) ?? [], fromRateKobo: fromRate(rt.id, rt.basePriceKobo) })),
       policies: p.policies,
       branding: { accentColor: p.accentColor, logoUrl: p.logoUrl },
       mapUrl: mapUrl(p),

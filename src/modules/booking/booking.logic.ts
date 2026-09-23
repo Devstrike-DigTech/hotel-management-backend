@@ -31,22 +31,99 @@ export interface TaxLineView {
 export interface PriceBreakdown {
   currency: 'NGN';
   unit: 'NIGHT' | 'HOUR';
+  /** First night's price (per hour for day use). */
   rateKobo: number;
   units: number;
   lines: { date: string; description: string; amountKobo: number }[];
   roomSubtotalKobo: number;
+  /** Promo discount, net of tax (positive). */
   discountKobo: number;
   taxes: TaxLineView[];
   taxTotalKobo: number;
   totalKobo: number;
   firstNightTotalKobo: number;
+  /** M4: per-night prices (NIGHTLY). */
+  nightly: { date: string; rateKobo: number; discountKobo: number; ruleName: string | null }[];
+  averageNightlyKobo: number;
+  ratePlan: { id: string; code: string; name: string; kind: string; includesBreakfast: boolean; refundable: boolean } | null;
+  promo: { code: string; description: string; type: string; discountKobo: number } | null;
+  discountLines: { date: string; description: string; amountKobo: number }[];
+}
+
+export interface PricedNight {
+  date: string;
+  rateKobo: number;
+  discountKobo?: number;
+  ruleName?: string | null;
 }
 
 /**
  * Prices a stay exactly the way the folio will post it: one charge per night
- * (or one day-use block), each run through the M2 tax model, so the quote the
- * guest accepts equals what check-in and the night audit will post.
+ * (or one day-use block), each run through the M2 tax model, then the night's
+ * promo discount as a DISCOUNT line whose tax lines mirror the charge's (on
+ * the net), so the quote the guest accepts equals what check-in and the night
+ * audit will post.
  */
+export function priceNights(input: {
+  roomTypeName: string;
+  components: TaxComponent[];
+  nights: PricedNight[];
+  ratePlan?: PriceBreakdown['ratePlan'];
+  promo?: { code: string; description: string; type: string } | null;
+}): PriceBreakdown {
+  const taxes = new Map<string, TaxLineView>();
+  const lines: PriceBreakdown['lines'] = [];
+  const discountLines: PriceBreakdown['discountLines'] = [];
+  let net = 0;
+  let discount = 0;
+  let first = 0;
+  const addTax = (l: { code: TaxLineView['code']; label: string; rateBps: number; inclusive: boolean; amountKobo: number }) => {
+    const cur = taxes.get(l.code);
+    if (cur) cur.amountKobo += l.amountKobo;
+    else taxes.set(l.code, { code: l.code, label: l.label, rateBps: l.rateBps, inclusive: l.inclusive, amountKobo: l.amountKobo });
+  };
+  input.nights.forEach((n, i) => {
+    const b = computeCharge(n.rateKobo, input.components);
+    lines.push({ date: n.date, description: `${input.roomTypeName}, night of ${humanDate(n.date)}`, amountKobo: n.rateKobo });
+    net += b.netKobo;
+    b.lines.forEach(addTax);
+    let gross = b.grossKobo;
+    const d = n.discountKobo ?? 0;
+    if (d > 0) {
+      const mirror = b.lines.map((l) => ({ code: l.code, label: l.label, rateBps: l.rateBps, inclusive: false }));
+      const db = computeCharge(-d, mirror);
+      discount += d;
+      discountLines.push({ date: n.date, description: `Promo ${input.promo?.code ?? ''}`.trim(), amountKobo: db.netKobo });
+      db.lines.forEach(addTax);
+      gross += db.grossKobo;
+    }
+    if (i === 0) first = gross;
+  });
+  const taxList = input.components.map((c) => taxes.get(c.code)).filter((t): t is TaxLineView => !!t && t.amountKobo !== 0);
+  const taxTotal = taxList.reduce((a, t) => a + t.amountKobo, 0);
+  const count = input.nights.length;
+  const roomSum = input.nights.reduce((a, n) => a + n.rateKobo, 0);
+  return {
+    currency: 'NGN',
+    unit: 'NIGHT',
+    rateKobo: input.nights[0]?.rateKobo ?? 0,
+    units: count,
+    lines,
+    roomSubtotalKobo: net,
+    discountKobo: discount,
+    taxes: taxList,
+    taxTotalKobo: taxTotal,
+    totalKobo: net - discount + taxTotal,
+    firstNightTotalKobo: first,
+    nightly: input.nights.map((n) => ({ date: n.date, rateKobo: n.rateKobo, discountKobo: n.discountKobo ?? 0, ruleName: n.ruleName ?? null })),
+    averageNightlyKobo: count ? Math.round(roomSum / count) : 0,
+    ratePlan: input.ratePlan ?? null,
+    promo: input.promo && discount > 0 ? { ...input.promo, discountKobo: discount } : null,
+    discountLines,
+  };
+}
+
+/** Uniform-rate stay (M3 shape) or a day-use block. */
 export function priceStay(input: {
   stayType: 'NIGHTLY' | 'DAY_USE';
   rateKobo: number;
@@ -59,45 +136,39 @@ export function priceStay(input: {
   date?: string;
   hours?: number;
 }): PriceBreakdown {
-  const taxes = new Map<string, TaxLineView>();
-  const lines: PriceBreakdown['lines'] = [];
-  let net = 0;
-  let first = 0;
-  const add = (date: string, description: string, entered: number) => {
-    const b = computeCharge(entered, input.components);
-    lines.push({ date, description, amountKobo: entered });
-    net += b.netKobo;
-    if (lines.length === 1) first = b.grossKobo;
-    for (const l of b.lines) {
-      const cur = taxes.get(l.code);
-      if (cur) cur.amountKobo += l.amountKobo;
-      else taxes.set(l.code, { code: l.code, label: l.label, rateBps: l.rateBps, inclusive: l.inclusive, amountKobo: l.amountKobo });
-    }
-  };
   if (input.stayType === 'NIGHTLY') {
     const nights = input.nights ?? 1;
     const start = input.arrivalDate!;
-    for (const d of dateRange(start, addDays(start, nights - 1))) {
-      add(d, `${input.roomTypeName}, night of ${humanDate(d)}`, input.rateKobo);
-    }
-  } else {
-    const hours = input.hours ?? 2;
-    add(input.date!, `${input.roomTypeName}, day use ${hours} h`, input.rateKobo * hours);
+    return priceNights({
+      roomTypeName: input.roomTypeName,
+      components: input.components,
+      nights: dateRange(start, addDays(start, nights - 1)).map((d) => ({ date: d, rateKobo: input.rateKobo })),
+    });
   }
-  const taxList = input.components.map((c) => taxes.get(c.code)).filter((t): t is TaxLineView => !!t && t.amountKobo !== 0);
+  const hours = input.hours ?? 2;
+  const b = computeCharge(input.rateKobo * hours, input.components);
+  const taxList = input.components
+    .map((c) => b.lines.find((l) => l.code === c.code))
+    .filter((l): l is NonNullable<typeof l> => !!l && l.amountKobo !== 0)
+    .map((l) => ({ code: l.code, label: l.label, rateBps: l.rateBps, inclusive: l.inclusive, amountKobo: l.amountKobo }));
   const taxTotal = taxList.reduce((a, t) => a + t.amountKobo, 0);
   return {
     currency: 'NGN',
-    unit: input.stayType === 'NIGHTLY' ? 'NIGHT' : 'HOUR',
+    unit: 'HOUR',
     rateKobo: input.rateKobo,
-    units: input.stayType === 'NIGHTLY' ? (input.nights ?? 1) : (input.hours ?? 2),
-    lines,
-    roomSubtotalKobo: net,
+    units: hours,
+    lines: [{ date: input.date!, description: `${input.roomTypeName}, day use ${hours} h`, amountKobo: input.rateKobo * hours }],
+    roomSubtotalKobo: b.netKobo,
     discountKobo: 0,
     taxes: taxList,
     taxTotalKobo: taxTotal,
-    totalKobo: net + taxTotal,
-    firstNightTotalKobo: first,
+    totalKobo: b.netKobo + taxTotal,
+    firstNightTotalKobo: b.grossKobo,
+    nightly: [],
+    averageNightlyKobo: 0,
+    ratePlan: null,
+    promo: null,
+    discountLines: [],
   };
 }
 
@@ -140,9 +211,12 @@ export interface PolicyInput {
   freeCancellationHours: number;
   lateCancellationFeePct: number;
   noShowFeePct: number;
+  /** M4: non-refundable rate plan: the whole amount paid is kept on cancellation. */
+  nonRefundable?: boolean;
 }
 
 export function policySummary(p: PolicyInput): string {
+  if (p.nonRefundable) return 'Non-refundable: the full amount is charged if you cancel.';
   const first = p.lateCancellationFeePct >= 100 ? 'the first night is charged' : p.lateCancellationFeePct <= 0 ? 'there is no charge' : `${p.lateCancellationFeePct}% of the first night is charged`;
   const free = p.freeCancellationHours <= 0 ? 'Free cancellation until check-in time.' : `Free cancellation until ${p.freeCancellationHours} hours before check-in.`;
   if (p.lateCancellationFeePct <= 0) return 'Free cancellation until check-in time.';
@@ -150,10 +224,31 @@ export function policySummary(p: PolicyInput): string {
 }
 
 export function policyView(p: PolicyInput) {
-  return { freeCancellationHours: p.freeCancellationHours, lateCancellationFeePct: p.lateCancellationFeePct, noShowFeePct: p.noShowFeePct, summary: policySummary(p) };
+  return {
+    freeCancellationHours: p.nonRefundable ? 0 : p.freeCancellationHours,
+    lateCancellationFeePct: p.nonRefundable ? 100 : p.lateCancellationFeePct,
+    noShowFeePct: p.noShowFeePct,
+    nonRefundable: !!p.nonRefundable,
+    summary: policySummary(p),
+  };
+}
+
+/** Hotel policy with a rate plan's override applied (null = hotel policy). */
+export function effectivePolicy(
+  hotel: PolicyInput,
+  override: { nonRefundable: boolean; freeCancellationHours: number; lateCancellationFeePct: number } | null | undefined,
+): PolicyInput {
+  if (!override) return { ...hotel, nonRefundable: false };
+  return {
+    freeCancellationHours: override.nonRefundable ? 0 : override.freeCancellationHours,
+    lateCancellationFeePct: override.nonRefundable ? 100 : override.lateCancellationFeePct,
+    noShowFeePct: hotel.noShowFeePct,
+    nonRefundable: override.nonRefundable,
+  };
 }
 
 export function freeCancellationUntil(arrivalAt: Date, p: PolicyInput, now = new Date()): Date | null {
+  if (p.nonRefundable) return null;
   const until = new Date(arrivalAt.getTime() - p.freeCancellationHours * 3_600_000);
   return until > now ? until : null;
 }
@@ -185,7 +280,7 @@ export function cancellationOutcome(input: {
   const free = until !== null;
   let fee = 0;
   if (!free && input.paymentMode === 'ONLINE' && input.paidKobo > 0) {
-    fee = round((input.firstNightTotalKobo * input.policy.lateCancellationFeePct) / 100);
+    fee = input.policy.nonRefundable ? input.paidKobo : round((input.firstNightTotalKobo * input.policy.lateCancellationFeePct) / 100);
     fee = Math.min(fee, input.paidKobo);
   }
   return {

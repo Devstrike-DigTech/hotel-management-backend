@@ -4,6 +4,7 @@ import { AuditService } from '../audit/audit.service.js';
 import { PaystackClient } from '../billing/paystack.client.js';
 import { NotificationService } from '../notifications/notification.service.js';
 import { HOLD_EXPIRED_REASON } from './booking.logic.js';
+import { PromosService } from '../rates/promos.service.js';
 import { BookingNotifier } from './booking-notifier.service.js';
 import { BookingPaymentsService } from './booking-payments.service.js';
 import { stayInclude } from './booking-view.service.js';
@@ -24,6 +25,7 @@ export class HoldsService {
     private readonly notifications: NotificationService,
     private readonly notifier: BookingNotifier,
     private readonly audit: AuditService,
+    private readonly promos: PromosService,
   ) {}
 
   /** Returns true when the hold was released. */
@@ -48,6 +50,7 @@ export class HoldsService {
         where: { id: r.id },
         data: { status: 'CANCELLED', cancelledAt: now, cancelReason: HOLD_EXPIRED_REASON, cancelledBy: 'SYSTEM' },
       });
+      await this.promos.release(tx, tenantId, r.id);
       await this.audit.record(tx, {
         tenantId,
         actor: { kind: 'system', name: 'Online booking' },

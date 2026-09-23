@@ -29,6 +29,12 @@ export interface QuotePayload {
   tax: TaxComponent[];
   total: number;
   exp: number;
+  /** M4: rate plan id, per-night [date, rate, discount, base, source, ruleName], promo id + code, plan cancellation policy. */
+  rp?: string | null;
+  nr?: [string, number, number, number, string, string | null][];
+  pc?: string | null;
+  pk?: string | null;
+  cp?: { nonRefundable: boolean; freeCancellationHours: number; lateCancellationFeePct: number } | null;
 }
 
 interface TripPayload {

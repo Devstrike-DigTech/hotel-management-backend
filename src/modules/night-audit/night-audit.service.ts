@@ -9,8 +9,10 @@ import { AuditService, SYSTEM_ACTOR, userActor } from '../audit/audit.service.js
 import { LedgerService, SYSTEM } from '../folios/ledger.service.js';
 import { GuardService } from '../guard/guard.service.js';
 import { DocumentsService } from '../invoices/documents.service.js';
-import { advisoryLock, Err, k, paginate } from '../ops/ops.helpers.js';
+import { advisoryLock, Err, paginate } from '../ops/ops.helpers.js';
 import { computeDailyFlashes } from '../reports/stats.compute.js';
+import { ReservationsService } from '../reservations/reservations.service.js';
+import { PromosService } from '../rates/promos.service.js';
 
 export interface AuditSummary {
   roomChargesPosted: number;
@@ -51,6 +53,8 @@ export class NightAuditService {
     private readonly guard: GuardService,
     private readonly audit: AuditService,
     private readonly commission: CommissionService,
+    private readonly reservations: ReservationsService,
+    private readonly promos: PromosService,
   ) {}
 
   list(user: AuthUser, page?: number, pageSize?: number) {
@@ -106,7 +110,7 @@ export class NightAuditService {
         // 1. Room charges for every in-house nightly stay covering the night.
         const inHouse = await tx.reservation.findMany({
           where: { tenantId, status: 'CHECKED_IN', stayType: 'NIGHTLY', arrivalAt: { lt: dayEnd }, departureAt: { gt: dayEnd } },
-          include: { room: true, folio: { select: { id: true } } },
+          include: { room: true, roomType: true, promoCode: { select: { code: true } }, folio: { select: { id: true } } },
         });
         for (const r of inHouse) {
           if (!r.folio) continue;
@@ -120,15 +124,18 @@ export class NightAuditService {
           if (liveCount > 0) continue;
           const folio = await this.docs.loadFolio(tx, tenantId, r.folio.id);
           if (folio.status !== 'OPEN') continue;
-          await this.ledger.postCharge(
+          // Each night is charged at the price snapshotted for it at booking
+          // (resolveNightlyRates); a night added later without one is resolved now.
+          const night = await this.reservations.nightFor(tx, tenantId, r, businessDate);
+          await this.ledger.postRoomNight(
             tx,
             tenantId,
             folio,
-            { type: 'ROOM', description: roomNightLabel(r.room?.number, businessDate), amountKobo: k(r.rateKobo), businessDate },
+            { date: businessDate, rateKobo: night.rateKobo, discountKobo: night.discountKobo, promoCode: r.promoCode?.code ?? null, description: roomNightLabel(r.room?.number, businessDate) },
             SYSTEM,
           );
           summary.roomChargesPosted += 1;
-          summary.roomChargesKobo += k(r.rateKobo);
+          summary.roomChargesKobo += night.rateKobo;
         }
 
         // 2. No-shows: confirmed or pending stays that should have arrived by the business date.
@@ -143,6 +150,7 @@ export class NightAuditService {
           });
           summary.noShows = unarrived.length;
           await this.commission.reverseAccruedMany(tx, tenantId, unarrived.map((u) => u.id), 'No-show (night audit)');
+          for (const u of unarrived) await this.promos.release(tx, tenantId, u.id);
         }
 
         // 3. Revenue Guard sweep.

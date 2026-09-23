@@ -35,6 +35,19 @@ export class AvailabilityQueryDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(10) children?: number;
   /** Alias of adults. */
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(20) guests?: number;
+  /** M4 */
+  @IsOptional() @IsString() @MaxLength(30) promoCode?: string;
+  @IsOptional() @IsIn(CHANNELS) channel?: (typeof CHANNELS)[number];
+}
+
+export class PriceCalendarQueryDto {
+  @Matches(DATE_RE, { message: 'from must be YYYY-MM-DD' }) from!: string;
+  @Matches(DATE_RE, { message: 'to must be YYYY-MM-DD' }) to!: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(10) adults?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(10) children?: number;
+  @IsOptional() @IsString() @Length(36, 36) roomTypeId?: string;
+  @IsOptional() @IsString() @Length(36, 36) ratePlanId?: string;
+  @IsOptional() @IsIn(CHANNELS) channel?: (typeof CHANNELS)[number];
 }
 
 export class QuoteDto {
@@ -49,6 +62,9 @@ export class QuoteDto {
   @IsOptional() @IsInt() @Min(2) @Max(12) hours?: number;
   @IsOptional() @IsInt() @Min(1) @Max(10) adults?: number;
   @IsOptional() @IsInt() @Min(0) @Max(10) children?: number;
+  /** M4 */
+  @IsOptional() @IsString() @Length(36, 36) ratePlanId?: string;
+  @IsOptional() @IsString() @MaxLength(30) promoCode?: string;
 }
 
 export class BookingGuestDto {
