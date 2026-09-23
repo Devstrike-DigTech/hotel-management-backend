@@ -23,7 +23,7 @@ import { freeRoomsOverWindow, loadCapacity } from '../rates/capacity.js';
 import { PricingService, type StayPricing } from '../rates/pricing.service.js';
 import { PromosService } from '../rates/promos.service.js';
 import { planUnavailable, resolveNights, restrictionHits, restrictionOn, stayDates, type NightlyRate, type PlanLike } from '../rates/rates.logic.js';
-import { planLabel, RatesService, type RateContext } from '../rates/rates.service.js';
+import { planLabel, planTerms, RatesService, type RateContext } from '../rates/rates.service.js';
 import {
   checkStayDates,
   effectivePolicy,
@@ -176,11 +176,11 @@ export class PublicBookingService {
       name: pl.name,
       kind: pl.kind,
       description: pl.description ?? '',
-      includesBreakfast: pl.includesBreakfast,
+      ...planTerms(pl),
       refundable: !policy.nonRefundable,
+      nonRefundable: policy.nonRefundable,
       cancellationSummary: policyView(policy).summary,
       label: planLabel(pl),
-      minNights: pl.minNights,
     };
   }
 

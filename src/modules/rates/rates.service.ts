@@ -100,6 +100,28 @@ export function planLabel(p: PlanLike): string {
   return parts.join(', ') || 'Flexible';
 }
 
+/**
+ * Structured plan terms for clients (so nobody parses `label`):
+ * `discountPct` is the whole-percent saving on BAR for a negative PERCENT plan
+ * (10 for "-10%"), `surchargePct` the same for a positive one.
+ */
+export function planTerms(p: PlanLike) {
+  const derived = !p.isBar && p.pricing === 'DERIVED' && p.adjustmentType !== null && p.adjustmentValue !== null && p.adjustmentType !== 'FIXED';
+  const pct = derived && p.adjustmentType === 'PERCENT' ? p.adjustmentValue! / 100 : null;
+  return {
+    pricing: p.pricing,
+    adjustment: derived ? { type: p.adjustmentType as 'PERCENT' | 'AMOUNT', value: p.adjustmentValue! } : null,
+    discountPct: pct !== null && pct < 0 ? -pct : null,
+    surchargePct: pct !== null && pct > 0 ? pct : null,
+    negotiated: p.pricing === 'FIXED',
+    nonRefundable: !!p.cancelPolicy?.nonRefundable,
+    refundable: !p.cancelPolicy?.nonRefundable,
+    includesBreakfast: p.includesBreakfast,
+    minNights: p.minNights,
+    maxNights: p.maxNights,
+  };
+}
+
 export function ruleView(r: { id: string; name: string; roomTypeIds: string[]; dateFrom: Date; dateTo: Date; daysOfWeek: number[]; adjustmentType: string; adjustmentValue: number; priority: number; color: string; active: boolean; createdAt: Date; updatedAt: Date }) {
   return {
     id: r.id,
@@ -253,6 +275,11 @@ export class RatesService {
       active: p.active,
       sortOrder: p.sortOrder,
       label: planLabel(like),
+      discountPct: planTerms(like).discountPct,
+      surchargePct: planTerms(like).surchargePct,
+      negotiated: planTerms(like).negotiated,
+      nonRefundable: planTerms(like).nonRefundable,
+      refundable: planTerms(like).refundable,
       reservationsCount: count,
       createdAt: p.createdAt.toISOString(),
       updatedAt: p.updatedAt.toISOString(),
