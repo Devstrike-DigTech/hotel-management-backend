@@ -24,6 +24,12 @@ The product name is not final, so the code never hard-codes it. It comes from
   accounts with phone OTP, trips and manage-booking links, cancellations and
   refunds, email/SMS/WhatsApp notifications with a dev outbox, verified-stay
   reviews, hotel payout onboarding and a marketplace console
+- Growth tier (M4): permissions with custom roles, housekeeping (checklists,
+  inspection, assignment, lost and found), maintenance (tickets with SLA,
+  room blocks, preventive schedules, diesel log), rate plans, seasons,
+  restrictions and promo codes behind one pricing function, corporate
+  accounts with a city ledger, WhatsApp templates with real-time owner
+  alerts and inbound replies, and a trusted client-IP header for rate limits
 - Vitest (unit and e2e, with supertest), oxlint
 
 Base URL: `http://localhost:4000/api/v1`. Swagger UI: `http://localhost:4000/docs`
@@ -68,7 +74,7 @@ The migrations create missing roles `NOLOGIN`, so the grants still apply.
 |---|---|---|
 | Platform console (Devstrike) | `admin@devstrike.ng` | `Admin1234!` |
 | Demo hotel owner, The Palmwine House (Growth, ACTIVE, 24 rooms, Lekki Phase 1) | `demo@palmwine.ng` | `Demo1234!` |
-| Palmwine staff | `tunde@` (manager), `ngozi@` (front desk, morning), `chidinma@` (front desk, evening), `musa@` (housekeeping), `funmi@palmwine.ng` (accountant) | `Demo1234!` |
+| Palmwine staff | `tunde@` (manager), `ngozi@` (front desk, morning), `chidinma@` (front desk, evening), `musa@` and `blessing@` (housekeeping), `grace@` (housekeeping supervisor), `emeka@` (maintenance), `seun@` (custom role "Night Auditor"), `funmi@palmwine.ng` (accountant) | `Demo1234!` |
 | Starter hotel on trial (housekeeping is locked) | `owner@wusegarden.ng` | `Demo1234!` |
 | Starter hotel, PAST_DUE | `owner@marinacreek.ng` | `Demo1234!` |
 | Demo guest account (platform level) | phone `+2348030000001` (Adaeze Okafor) | sign in with an OTP; read the code from `GET /api/v1/public/dev/outbox` |
@@ -111,6 +117,28 @@ console) and one live hold with about 15 minutes left. The demo guest has
 upcoming trips at The Palmwine House and Eko Tides, a completed stay last
 week that can still be reviewed, and an older reviewed stay at The Ikoyi
 Lantern.
+
+**Growth-tier demo data (M4).** Inspection is on at The Palmwine House.
+Today's housekeeping board has tasks in every state (an URGENT checkout clean
+for room 208, which has an arrival, a deep clean in progress, a room done and
+waiting for Grace's inspection, a rejected deep clean, stayovers including a
+Do Not Disturb skip, a suite turndown) and two weeks of inspected cleans for
+the reports; checklists per room type and six lost-and-found items. Nine
+maintenance tickets (MT-000001...), including the AC in room 106, which is
+blocked for two days, and an URGENT generator fault past its SLA; three
+preventive schedules and 30 days of diesel logs. Rate plans BAR,
+Non-refundable (-10%), Corporate (fixed prices, front desk only) and Long
+stay (7+ nights, -15%); seasons Weekend +10% (Friday, Saturday), Detty
+December +35% (15 Dec - 5 Jan) and Easter +20%; New Year's Eve overrides, a
+three-night minimum over New Year and no arrivals on Christmas Eve. Promo
+codes WELCOME10 (active), LAGOSLONG (cheapest night free on 4+), NAIJA20
+(used up) and EASTER15 (expired). Corporate accounts Deltaline Oilfield
+Services Ltd (close to its credit limit, with a 90+ day invoice), Crestmark
+Bank Plc and Hope Bridge Foundation (per-stay invoicing), with city-ledger
+invoices in every aging bucket and part payments; two guests in house are
+billed to company accounts. Owner WhatsApp alerts are configured (quiet hours
+23:30-06:00) with a sent, a deferred, an acknowledged and a test alert. The
+owner's phone is `+2348031234567`. Every other hotel gets its BAR plan.
 
 The seed is idempotent. It upserts everything by natural key (codes, slugs,
 emails, room numbers) and writes a hotel's audit history only once, because
@@ -158,6 +186,10 @@ process refuses to start and lists every missing or invalid value.
 | `STORAGE_LOCAL_DIR` | no (`./storage`) | directory for `local` |
 | `S3_BUCKET`, `S3_REGION`, `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_FORCE_PATH_STYLE` | for `s3` | any S3-compatible service |
 | `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`, `WHATSAPP_API_BASE_URL` | no | owner digest, guest messages for hotels with `whatsapp_messaging`, WhatsApp OTP; empty = log / dev outbox |
+| `WHATSAPP_APP_SECRET` | no | verifies `X-Hub-Signature-256` on `POST /webhooks/whatsapp`; empty = every delivery rejected |
+| `WHATSAPP_VERIFY_TOKEN` | no | answers Meta's webhook subscription check (`GET /webhooks/whatsapp`) |
+| `WHATSAPP_APPROVED_TEMPLATES` | no | comma-separated template names Meta approved (shown as APPROVED in the admin) |
+| `TRUSTED_PROXY_SECRET` | no, min 16 chars when set | shared with the web server: `X-Client-IP` is used for rate limits only with `X-Proxy-Auth` equal to it; empty = off |
 | `GUEST_JWT_SECRET` | yes, min 32 chars | guest access tokens (audience `guest`) |
 | `GUEST_TOKEN_SECRET` | yes, min 32 chars | quote tokens, manage-booking and review links, magic links, OTP hashes |
 | `GUEST_ACCESS_TTL_SECONDS` | no (3600) | guest access token lifetime (refresh tokens: 30 days) |
@@ -179,7 +211,7 @@ process refuses to start and lists every missing or invalid value.
 | `ADMIN_URL`, `WEB_URL` | yes | frontend origins, used for payment callbacks |
 | `CORS_ORIGINS` | no | comma-separated; defaults to both local frontends |
 | `AUTH_RATE_LIMIT` | no (20) | requests per minute per IP on auth endpoints |
-| `JOBS_ENABLED` | no (true) | `false` starts no BullMQ workers or schedules (dunning, night audit, digest, guard sweep) |
+| `JOBS_ENABLED` | no (true) | `false` starts no BullMQ workers or schedules (dunning, night audit, digest, guard sweep, M4 jobs) |
 | `SWAGGER_ENABLED` | no (true) | serve `/docs` |
 
 ---
@@ -569,6 +601,9 @@ sweeps never duplicate. Locked rules are skipped (and shown as locked by
 
 ### Roles
 
+M4 replaced these role checks with permissions (see "Permissions and custom
+roles" below); the built-in roles keep the M2 boundaries:
+
 | area | OWNER / MANAGER | FRONT_DESK | ACCOUNTANT | HOUSEKEEPING |
 |---|---|---|---|---|
 | reservations, availability, tape chart | all | all (no custom rate) | read | - |
@@ -713,6 +748,122 @@ Redis fixed windows per IP on search, availability, quotes, bookings,
 payment verification, trip cancellation and reviews, plus per phone / email
 on bookings, OTP and magic links. Over the limit: `429 RATE_LIMITED` with
 `details.retryAfterSec` and a `Retry-After` header.
+
+---
+
+## Growth tier (M4)
+
+### Permissions and custom roles
+
+Every staff route checks a permission (`@RequirePermission('folio.void')`),
+not a role. The catalogue (`GET /permissions`, `src/common/permissions/catalogue.ts`)
+groups about fifty codes; the built-in roles are OWNER (everything), MANAGER
+(everything except `payouts.manage`), FRONT_DESK, ACCOUNTANT, HOUSEKEEPING,
+SUPERVISOR (assigns and inspects) and MAINTENANCE. Hotels with `custom_roles`
+create their own (`/roles`, cloned from any role). The `PermissionGuard`
+reloads the user's role and active flag on every request, so a changed role
+applies at once and a deactivated user gets 401. Nobody can grant a
+permission they do not hold, edit a role or a person who holds more than
+they do, or make an owner unless they are one (`PERMISSION_ESCALATION`,
+`403`). `GET /me` returns `permissions[]`; denials are `403 FORBIDDEN` with
+`details.permission`. Audit export (`GET /audit-logs/export`) needs
+`audit_export`.
+
+### Housekeeping
+
+Check-out (and room moves) open a CHECKOUT_CLEAN task, URGENT while an
+arrival waits for the room; every N check-outs (per room type) it is a
+DEEP_CLEAN. A 07:00 job opens one STAYOVER per occupied room per day. Tasks
+carry a checklist snapshot (templates per room type and task type), photos
+and the assignee; `GET /housekeeping/assignments/suggest` balances minutes
+across housekeepers keeping floors together. With `requireInspection` on, a
+finished turn keeps the room VACANT_DIRTY until a supervisor passes it
+(`INSPECTION_REQUIRED` for anyone who only cleans); a failed inspection
+sends the task back at HIGH priority. Task creation on check-out runs under a
+savepoint, so a housekeeping problem never fails the check-out. Every write
+accepts `Idempotency-Key` and `clientCreatedAt` for the offline phone view.
+Lost and found lives at `/lost-found`. Revenue Guard room flags carry the
+room's housekeeping timeline as evidence.
+
+### Maintenance and room blocks
+
+Tickets (`MT-000123`) have an SLA by priority (URGENT 4 h, HIGH 24 h, NORMAL
+72 h, LOW 7 days), an event log, photos, costs and vendors. A `RoomBlock`
+takes a room out of order for a window; availability, desk bookings, public
+quotes, marketplace search (through the `app_public_unsellable_rooms`
+function) and the tape chart exclude every night the block overlaps.
+Blocking over an assigned stay is `409 BLOCK_CONFLICT` unless forced (future
+stays are unassigned). An hourly job moves rooms in and out of OUT_OF_ORDER as
+blocks start and end; resolving the ticket releases its block and opens a
+cleaning task. Preventive schedules raise tickets when due (06:00 job), and
+the diesel log feeds consumption and cost reports.
+
+### Rates, restrictions and promo codes
+
+`RatesService.resolveNightlyRates` is the one pricing function, used by desk
+reservations, `POST /rates/quote`, public availability, quotes, search and
+the price calendar, and the night audit. Per night: a date override, else the
+highest-priority season rule matching the date and weekday, else the base
+price, then the plan (BAR, a derived percent or amount, or fixed prices per
+room type), rounded to whole naira. Reservations snapshot their per-night
+prices at booking (`nightlyRates`), and the night audit posts each night at
+its own price. Restrictions (stop-sell, closed to arrival or departure,
+minimum stay) are enforced online (`STAY_RESTRICTED`) and returned as
+warnings at the desk. Promo codes (percent, amount, free night) are checked
+at quote time and again at booking, held while an online booking waits for
+payment, confirmed on payment and released on expiry, cancellation or
+no-show; each promo night posts a `DISCOUNT` line "Promo CODE" with mirrored
+tax lines. Without `promotions` every stay is priced at BAR.
+
+### Corporate accounts and the city ledger
+
+Accounts have a credit limit, payment terms, a negotiated plan and a billing
+cycle. `POST /reservations/:id/check-out` with `cityLedger: true` posts the
+balance to the account within the credit limit (`409 CREDIT_LIMIT_EXCEEDED`
+otherwise, unless `frontdesk.override`). Per-stay accounts get an invoice at
+once; monthly accounts get statements (`CL-2026-000012`, gapless per year) on
+the 1st at 06:00. Payments are allocated oldest invoice first; aging buckets
+are 0-30, 31-60, 61-90 and 90+ days from issue. A daily 09:00 job reminds at
+1, 15 and 30 days overdue.
+
+### WhatsApp: templates, owner alerts, replies
+
+Every business-initiated WhatsApp message uses a template from
+`src/modules/whatsapp/templates.registry.ts`; `docs/whatsapp-templates.md`
+is the exact text to submit to Meta (a unit test keeps the two in step).
+Free-form text is used only inside the 24-hour window after the recipient
+wrote to us. A HIGH Revenue Guard flag queues an owner alert: flags within
+the debounce window (3 minutes) go out together, alerts during quiet hours
+(23:30-06:00 Lagos) wait until they end unless the rule or amount is urgent.
+Owners and managers reply `1` to acknowledge the latest alert's flags or
+`DIGEST` for today's figures through `POST /webhooks/whatsapp` (signature
+checked with `WHATSAPP_APP_SECRET`, duplicates ignored by message id).
+Settings: `GET|PUT /notification-settings`; log: `GET /guard/alerts`.
+
+### Trusted client IP
+
+The web server calls the API from one socket IP for many visitors, so it
+sends the visitor's IP in `X-Client-IP` with `X-Proxy-Auth` =
+`TRUSTED_PROXY_SECRET`. Rate limits (public Redis limits and the auth
+throttler) use `X-Client-IP` only when the secret matches (constant-time
+compare) and the value is a valid IP; otherwise the socket IP. A spoofed
+header from a browser changes nothing. Audit `ip` fields are unchanged.
+
+### Scheduled jobs (Africa/Lagos)
+
+| job | when |
+|---|---|
+| dunning | 02:00 |
+| night audit | 02:00 |
+| owner digest | 23:00 |
+| Revenue Guard sweep | hourly at :05 |
+| idempotency key purge | hourly at :35 |
+| stayover cleaning tasks | 07:00 |
+| preventive maintenance tickets | 06:00 |
+| room blocks start / end | hourly at :01 |
+| owner alerts due | every minute |
+| city ledger statements | 1st of the month, 06:00 |
+| city ledger overdue reminders | 09:00 |
 
 ---
 
@@ -862,6 +1013,21 @@ The full contract is in Swagger at `/docs`. Summary:
     `GET /platform/payments/orphaned`, `POST /platform/payments/:id/retry-refund`,
     `GET|PATCH /platform/reviews`, `GET /platform/notifications`,
     `POST /platform/jobs/holds/sweep`, `POST /platform/jobs/guest-notifications/run`
+- **Growth tier** (M4, hotel): `/permissions`, `/roles` (CRUD);
+  `/housekeeping` (`tasks` + `start`, `checklist`, `finish`, `skip`,
+  `inspect`, `photos`, `issue`; `my-tasks`, `board`, `inspections`, `assign`,
+  `assignments/suggest|apply`, `settings`, `checklists`,
+  `jobs/stayover/run`), `/lost-found`; `/maintenance/tickets` (+ `status`,
+  `comments`, `photos`), `/room-blocks`, `/maintenance/schedules` (+
+  `calendar`, `run`), `/maintenance/fuel-logs` (+ `summary`),
+  `/maintenance/reports`; `/rate-plans`, `/rate-rules`, `/rate-overrides`,
+  `/rate-restrictions`, `/rates/calendar`, `/rates/quote`, `/promo-codes` (+
+  `check`); `/corporate-accounts`, `/city-ledger` (`summary`, `charges`,
+  `invoices` + `payments`, `remind`, `void`, `share`; `payments`);
+  `/whatsapp/templates`, `/notification-settings`, `/guard/alerts` (+ `test`),
+  `/audit-logs/export`
+- **Growth tier** (M4, public): `GET /public/hotels/:slug/price-calendar`,
+  `GET|POST /webhooks/whatsapp`
 
 Conventions:
 
@@ -877,7 +1043,9 @@ Conventions:
 ```bash
 pnpm test        # unit (Vitest): tax maths, availability, guard rules, shift variance,
                  # folio totals, encryption, tokens, phone numbers, codes, reports,
-                 # quotes, commission, cancellation fees, OTP, reviews, .ics, templates
+                 # quotes, commission, cancellation fees, OTP, reviews, .ics, templates,
+                 # rate resolution, restrictions, promo discounts, permissions,
+                 # trusted IP, auto-balance, SLA, aging, quiet hours, webhook signatures
 pnpm test:e2e    # needs local Postgres (roles hotel, hotel_app, hotel_platform) and Redis
 ```
 
@@ -924,6 +1092,31 @@ banks, account resolution and subaccounts):
   text, seeded aggregates matching review rows, and RLS on the M3 tables
   (no `hotel_app` access to guest identity, tenant isolation, the public
   availability function answering only in the public context).
+
+M4 suite (`m4-growth`):
+
+- rate resolution: override over rule, higher priority wins, days of the
+  week; per-night snapshots that later rule changes do not touch; the night
+  audit posting each night at its own price; structured plan terms;
+  `rates.manage` for custom prices.
+- promo codes: percent discount with tax on the net, minimum nights, expiry,
+  channel, unknown codes, uses counted on booking and given back on
+  cancellation.
+- room blocks: blocked nights in availability, a booking into a blocked room
+  refused, sold out when the rest is taken, `BLOCK_CONFLICT` and forced
+  blocks, front desk cannot block.
+- permissions: `/me` permissions, a custom role granting exactly its codes and
+  edits applying on the next request, no privilege escalation (roles, staff,
+  owners), system roles read-only, audit export locked below Pro.
+- housekeeping: check-out creating the cleaning task (with the room type
+  checklist, deep clean every N stays, a damaged template), inspection
+  pass / fail with the room staying dirty, stayover generation and DND skip.
+- city ledger: credit limit on check-out, statement numbering, aging, part
+  payments.
+- WhatsApp webhook: verify token, signatures (missing, wrong secret, tampered
+  body), duplicates.
+- trusted client IP: a spoofed `X-Client-IP` without the secret is ignored;
+  with it, visitors behind one web server are limited separately.
 
 ## Docker
 
