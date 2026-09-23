@@ -1,7 +1,7 @@
 import type { GuardRule, GuardSeverity } from '../../generated/prisma/enums.js';
 import { VARIANCE_HIGH_KOBO, VARIANCE_THRESHOLD_KOBO, type ShiftVariance } from '../shifts/shift.logic.js';
 
-export type GuardTier = 'basic' | 'full';
+export type GuardTier = 'basic' | 'full' | 'pro';
 
 export interface RuleInfo {
   rule: GuardRule;
@@ -9,6 +9,8 @@ export interface RuleInfo {
   title: string;
   description: string;
   defaultSeverity: GuardSeverity;
+  /** M5: the feature that enables the rule (revenue guard tier for M2-M4 rules). */
+  feature?: string;
 }
 
 export const RULES: RuleInfo[] = [
@@ -23,6 +25,13 @@ export const RULES: RuleInfo[] = [
   { rule: 'REPEATED_VOIDS_BY_USER', tier: 'full', defaultSeverity: 'HIGH', title: 'Repeated voids', description: 'One staff member posted three or more voids within 24 hours.' },
   { rule: 'PAYMENT_ORPHANED', tier: 'basic', defaultSeverity: 'HIGH', title: 'Orphaned online payment', description: 'A guest paid online but the payment could not be applied to a booking (late after the hold, amount mismatch or duplicate); it is refunded automatically.' },
   { rule: 'ROOM_STATUS_FLIP', tier: 'full', defaultSeverity: 'HIGH', title: 'Occupied room flipped to dirty', description: 'An occupied room was set to dirty by hand, without a check-out.' },
+  // M5 (Pro): each needs its own feature and any Revenue Guard tier.
+  { rule: 'POS_VOID_AFTER_SEND', tier: 'pro', feature: 'pos', defaultSeverity: 'MEDIUM', title: 'Item voided after it was sent', description: 'A POS item was voided after the kitchen or bar had the ticket.' },
+  { rule: 'ROOM_CHARGE_NO_GUEST', tier: 'pro', feature: 'pos', defaultSeverity: 'HIGH', title: 'Room charge without a matching guest', description: 'A POS bill was charged to a room by manager override although the guest name did not match the stay.' },
+  { rule: 'STOCK_VARIANCE', tier: 'pro', feature: 'pos', defaultSeverity: 'MEDIUM', title: 'Stock count shortage', description: 'A stock count found less than the records say (value or share of the expected quantity above the limit).' },
+  { rule: 'POS_OPEN_TABS_AT_SHIFT_CLOSE', tier: 'pro', feature: 'pos', defaultSeverity: 'MEDIUM', title: 'Open tabs at shift close', description: 'A cashier closed their shift with POS orders still open.' },
+  { rule: 'OVERBOOKED', tier: 'pro', feature: 'channel_manager', defaultSeverity: 'HIGH', title: 'Overbooked by an OTA', description: 'An OTA booking arrived for nights with no free room of its type; a guest needs relocating.' },
+  { rule: 'LOYALTY_ADJUSTMENT', tier: 'pro', feature: 'loyalty', defaultSeverity: 'MEDIUM', title: 'Large loyalty adjustment', description: 'Loyalty points were added or removed by hand above the programme limit.' },
 ];
 
 export const RULE_INFO = new Map(RULES.map((r) => [r.rule, r]));
@@ -42,6 +51,7 @@ export function ruleEnabled(rule: GuardRule, features: readonly string[]): boole
   if (!features.includes('revenue_guard_basic') && !features.includes('revenue_guard_full')) return false;
   const info = RULE_INFO.get(rule);
   if (!info) return false;
+  if (info.tier === 'pro') return !!info.feature && features.includes(info.feature);
   if (info.tier === 'basic' || rule === 'DISCOUNT_OVER_THRESHOLD') return true;
   return features.includes('revenue_guard_full');
 }

@@ -228,6 +228,24 @@ export class ShiftsService {
           evidence: { ...expected, ...counted, ...v, openingFloatKobo: k(s.openingFloatKobo) },
         });
       }
+      // M5: POS tabs the cashier left open (items on them, not settled).
+      const open = await tx.posOrder.findMany({
+        where: { tenantId: user.tenantId, propertyId: s.propertyId, openedById: s.userId, status: 'OPEN', lines: { some: { status: { not: 'VOIDED' } } } },
+        select: { id: true, number: true, tableLabel: true, openedAt: true },
+      });
+      if (open.length) {
+        const features = await this.guard.features(tx, user.tenantId);
+        await this.guard.raise(tx, user.tenantId, features, {
+          rule: 'POS_OPEN_TABS_AT_SHIFT_CLOSE',
+          title: `${s.userName} closed their shift with ${open.length} open POS tab${open.length === 1 ? '' : 's'}`,
+          detail: `Open: ${open.slice(0, 5).map((o) => `${o.number}${o.tableLabel ? ` (${o.tableLabel})` : ''}`).join(', ')}. Settle or hand them over.`,
+          dedupeKey: `POS_OPEN_TABS_AT_SHIFT_CLOSE:${id}`,
+          shiftId: id,
+          userId: s.userId,
+          userName: s.userName,
+          evidence: { orders: open.map((o) => ({ id: o.id, number: o.number, tableLabel: o.tableLabel, openedAt: o.openedAt.toISOString() })) },
+        });
+      }
       await this.audit.record(tx, {
         tenantId: user.tenantId,
         actor: userActor(user),

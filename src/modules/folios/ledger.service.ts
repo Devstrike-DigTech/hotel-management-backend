@@ -229,12 +229,51 @@ export class LedgerService {
     return charge;
   }
 
+  /** M5 (POS): posts an EXTRA charge with explicit tax components. */
+  async postExtra(
+    tx: Tx,
+    tenantId: string,
+    folio: { id: string; status: string },
+    input: { description: string; enteredKobo: number; comps: TaxComponent[]; businessDate?: string; clientCreatedAt?: Date | null },
+    actor: Actor,
+  ): Promise<FolioEntry> {
+    this.assertOpen(folio);
+    return this.postWithTaxes(tx, tenantId, folio.id, 'EXTRA', input.description, input.enteredKobo, input.comps, {
+      businessDate: input.businessDate ?? lagosDate(),
+      actor,
+      clientCreatedAt: input.clientCreatedAt ?? null,
+    });
+  }
+
+  /**
+   * M5: a DISCOUNT on one charge with mirrored tax lines computed on the net
+   * (exclusive), like promo and loyalty discounts.
+   */
+  async postDiscountOn(
+    tx: Tx,
+    tenantId: string,
+    folio: { id: string; status: string },
+    parentEntryId: string | null,
+    input: { description: string; discountKobo: number; comps: TaxComponent[]; reason: string; approvedById?: string | null; businessDate?: string; clientCreatedAt?: Date | null },
+    actor: Actor,
+  ): Promise<FolioEntry> {
+    this.assertOpen(folio);
+    return this.postWithTaxes(tx, tenantId, folio.id, 'DISCOUNT', input.description, -input.discountKobo, input.comps.map((c) => ({ ...c, inclusive: false })), {
+      businessDate: input.businessDate ?? lagosDate(),
+      actor,
+      clientCreatedAt: input.clientCreatedAt ?? null,
+      parentEntryId,
+      reason: input.reason,
+      approvedById: input.approvedById ?? null,
+    });
+  }
+
   /** Records a payment (and its receipt). Enforces the open-shift rule. */
   async postPayment(
     tx: Tx,
     tenantId: string,
     folio: FolioForDoc,
-    input: { method: PaymentMethod; amountKobo: number; reference?: string | null; note?: string | null; clientCreatedAt?: Date | null; receipt?: boolean },
+    input: { method: PaymentMethod; amountKobo: number; reference?: string | null; note?: string | null; clientCreatedAt?: Date | null; receipt?: boolean; receiptExtra?: Record<string, unknown> },
     actor: Actor,
   ) {
     this.assertOpen(folio);
@@ -267,7 +306,7 @@ export class LedgerService {
     let receipt = null;
     if (input.receipt !== false) {
       const balance = await this.balance(tx, folio.id);
-      receipt = await this.docs.issueReceipt(tx, tenantId, folio, entry, balance, actor.userId ? { id: actor.userId, fullName: actor.fullName } : null);
+      receipt = await this.docs.issueReceipt(tx, tenantId, folio, entry, balance, actor.userId ? { id: actor.userId, fullName: actor.fullName } : null, input.receiptExtra);
     }
     return { entry, receipt };
   }
@@ -433,7 +472,7 @@ export class LedgerService {
    * Second-key check for a discount, in its own committed transaction so
    * failed PIN attempts count even though the discount itself is refused.
    */
-  private async verifyApproval(user: AuthUser, approval: { approverId: string; pin: string }) {
+  async verifyApproval(user: AuthUser, approval: { approverId: string; pin: string }) {
     const result = await this.db.tenant(user.tenantId, async (tx) => {
       const approver = await tx.user.findFirst({ where: { id: approval.approverId, tenantId: user.tenantId }, include: { customRole: { select: { permissions: true } } } });
       if (!approver || !approver.isActive || !permissionsFor(approver.role, approver.customRole?.permissions).has('folio.approve') || !approver.approvalPinHash) {

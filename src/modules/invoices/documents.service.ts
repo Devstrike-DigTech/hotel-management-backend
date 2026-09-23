@@ -117,7 +117,7 @@ export class DocumentsService {
   // Receipts
   // ---------------------------------------------------------------------------
 
-  async issueReceipt(tx: Tx, tenantId: string, folio: FolioForDoc, entry: FolioEntry, balanceAfterKobo: number, issuer: Issuer) {
+  async issueReceipt(tx: Tx, tenantId: string, folio: FolioForDoc, entry: FolioEntry, balanceAfterKobo: number, issuer: Issuer, extra?: Record<string, unknown>) {
     const now = new Date();
     const year = lagosYear(now);
     const { seq, number } = await this.nextNumber(tx, tenantId, 'RECEIPT', year, await this.propertyScope(tx, tenantId, folio.propertyId));
@@ -131,6 +131,8 @@ export class DocumentsService {
       issuer,
     });
     const amount = document.amountKobo;
+    // M5: POS receipts carry the order (lines, table, tip); null elsewhere.
+    Object.assign(document, { pos: null, ...(extra ?? {}) });
     const receipt = await tx.receipt.create({
       data: {
         tenantId,

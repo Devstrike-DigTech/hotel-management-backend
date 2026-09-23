@@ -120,3 +120,11 @@ export function humanDateTime(at: Date): string {
 export function roomNightLabel(roomNumber: string | undefined | null, night: string): string {
   return `Room ${roomNumber ?? ''}, night of ${humanDate(night)}`.replace('Room , ', 'Room, ');
 }
+
+/** Lagos weekday (0 = Sunday) and wall-clock time "HH:MM" of an instant (M5 happy hours, KDS). */
+export function lagosClock(at: Date = new Date()): { dow: number; hhmm: string } {
+  const shifted = new Date(at.getTime() + 60 * 60 * 1000); // Africa/Lagos is UTC+1 all year
+  const hh = String(shifted.getUTCHours()).padStart(2, '0');
+  const mm = String(shifted.getUTCMinutes()).padStart(2, '0');
+  return { dow: shifted.getUTCDay(), hhmm: `${hh}:${mm}` };
+}

@@ -32,6 +32,7 @@ import { CorporateModule } from './modules/corporate/corporate.module.js';
 import { MaintenanceModule } from './modules/maintenance/maintenance.module.js';
 import { WhatsAppModule } from './modules/whatsapp/whatsapp.module.js';
 import { StaffModule } from './modules/staff/staff.module.js';
+import { PosModule } from './modules/pos/pos.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 
 function jobsEnabled(): boolean {
@@ -66,6 +67,7 @@ function jobsEnabled(): boolean {
     CorporateModule,
     MaintenanceModule,
     WhatsAppModule,
+    PosModule,
     OperationsModule,
     GuestSideModule,
     BillingModule,

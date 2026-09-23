@@ -138,7 +138,7 @@ export class GuardController {
   rules(@CurrentUser() user: AuthUser) {
     return this.db.tenant(user.tenantId, async (tx) => {
       const features = await this.guard.features(tx, user.tenantId);
-      return RULES.map((r) => ({ ...r, enabled: ruleEnabled(r.rule, features) }));
+      return RULES.map((r) => ({ ...r, feature: r.feature ?? (r.tier === 'basic' ? 'revenue_guard_basic' : 'revenue_guard_full'), enabled: ruleEnabled(r.rule, features) }));
     });
   }
 
