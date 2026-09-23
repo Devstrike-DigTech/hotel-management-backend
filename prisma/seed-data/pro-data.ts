@@ -135,6 +135,16 @@ export async function seedPro(prisma: PrismaClient, tenantSlug: string): Promise
   for (const [g, type, room, a, d] of past) {
     ikoyiPast.push(await ikoyiStay(g, type, room, addDays(T, a), addDays(T, d), 'CHECKED_OUT', 6, { payMethod: d % 2 ? 'TRANSFER' : 'POS' }));
   }
+  // The demo guest is a Silver member (10+ nights in 12 months): top up with an earlier Ikoyi stay.
+  const demoNights = Number(
+    (
+      await prisma.$queryRaw<{ n: number }[]>`
+        SELECT COALESCE(SUM((departure_at AT TIME ZONE 'Africa/Lagos')::date - (arrival_at AT TIME ZONE 'Africa/Lagos')::date), 0)::int AS n
+          FROM reservations WHERE guest_id = ${demoGuest.id}::uuid AND status = 'CHECKED_OUT' AND stay_type = 'NIGHTLY' AND departure_at >= now() - interval '365 days'`
+    )[0]?.n ?? 0,
+  );
+  if (demoNights < 11) ikoyiPast.push(await ikoyiStay(demoGuest, 'Classic Queen', '105', addDays(T, -75), addDays(T, -75 + (11 - demoNights)), 'CHECKED_OUT', 10, { payMethod: 'POS' }));
+
   // In house now.
   const inHouseIkoyi = [
     await ikoyiStay(ikoyiGuests[4], 'Executive King', '201', addDays(T, -2), addDays(T, 2), 'CHECKED_IN'),
