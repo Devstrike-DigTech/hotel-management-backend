@@ -23,5 +23,5 @@ coverage/
 .idea/
 .vscode/*
 !.vscode/extensions.json
-storage/
-storage-e2e/
+/storage/
+/storage-e2e/
