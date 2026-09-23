@@ -1,6 +1,7 @@
-import { Module } from '@nestjs/common';
-import { PropertyController } from './property.controller.js';
+import { Global, Module } from '@nestjs/common';
+import { PropertiesController, PropertyController } from './property.controller.js';
 import { PropertyService } from './property.service.js';
 
-@Module({ controllers: [PropertyController], providers: [PropertyService] })
+@Global()
+@Module({ controllers: [PropertyController, PropertiesController], providers: [PropertyService], exports: [PropertyService] })
 export class PropertyModule {}

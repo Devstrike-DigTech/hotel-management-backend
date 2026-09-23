@@ -155,6 +155,70 @@ export const PERMISSION_GROUPS: PermissionGroupDef[] = [
     ],
   },
   {
+    group: 'properties',
+    label: 'Properties',
+    permissions: [
+      p('properties.manage', 'Add properties', 'Add hotels to the group (Pro).', true),
+    ],
+  },
+  {
+    group: 'pos',
+    label: 'Point of sale',
+    permissions: [
+      p('pos.view', 'View POS', 'Open the POS terminal and see orders and POS reports.'),
+      p('pos.order', 'Take orders', 'Open orders, add items, send them to the kitchen or bar, mark items unavailable.'),
+      p('pos.settle', 'Settle bills', 'Take payment for orders or charge them to a room or company account.'),
+      p('pos.discount', 'Discount bills', 'Discount orders (above the threshold a second key is needed).'),
+      p('pos.void', 'Void sent items', 'Void items already sent to the kitchen or bar.', true),
+      p('pos.manage', 'Manage menus and outlets', 'Outlets, menus, prices, modifiers and happy hours.', true),
+      p('kds.view', 'Kitchen display', 'See kitchen and bar tickets and bump them.'),
+    ],
+  },
+  {
+    group: 'stock',
+    label: 'Stock and minibar',
+    permissions: [
+      p('stock.view', 'View stock', 'See stock levels, movements and variance.'),
+      p('stock.manage', 'Manage stock', 'Record purchases, counts and adjustments; set minibar par levels.', true),
+      p('minibar.record', 'Record minibar use', 'Record what a guest took from the minibar (charged to the room).'),
+    ],
+  },
+  {
+    group: 'channels',
+    label: 'Channel manager',
+    permissions: [
+      p('channels.view', 'View channels', 'See OTA connections, bookings, sync logs and OTA costs.'),
+      p('channels.manage', 'Manage channels', 'Connect OTAs, map room types and push availability and rates.', true),
+    ],
+  },
+  {
+    group: 'pricing',
+    label: 'Dynamic pricing',
+    permissions: [
+      p('pricing.view', 'View pricing', 'See price suggestions, events, competitor prices and the autopilot report.'),
+      p('pricing.manage', 'Manage pricing', 'Accept or reject suggestions, set guardrails and autopilot.', true),
+    ],
+  },
+  {
+    group: 'inbox',
+    label: 'Guest inbox',
+    permissions: [
+      p('inbox.view', 'Read guest messages', 'See WhatsApp conversations with guests.'),
+      p('inbox.reply', 'Reply to guests', 'Reply to guests, add notes and turn requests into tasks.'),
+      p('inbox.manage', 'Manage the inbox', 'Assign conversations to others, edit quick replies and inbox settings.'),
+    ],
+  },
+  {
+    group: 'loyalty',
+    label: 'Loyalty',
+    permissions: [
+      p('loyalty.view', 'View loyalty', 'See members, points and statements.'),
+      p('loyalty.redeem', 'Redeem points', 'Redeem a member\'s points on a folio (with their code or a manager PIN).'),
+      p('loyalty.adjust', 'Adjust points', 'Add or remove points by hand (audited).', true),
+      p('loyalty.manage', 'Manage the programme', 'Programme name, earn rate, tiers and expiry.', true),
+    ],
+  },
+  {
     group: 'reviews',
     label: 'Reviews',
     permissions: [
@@ -190,12 +254,17 @@ const FRONT_DESK = [
   'rooms.status', 'housekeeping.view', 'housekeeping.work',
   'maintenance.view', 'maintenance.report',
   'rates.view', 'corporate.view', 'reviews.view',
+  // M5
+  'pos.view', 'pos.order', 'pos.settle', 'pos.discount', 'minibar.record',
+  'inbox.view', 'inbox.reply', 'loyalty.view', 'loyalty.redeem',
 ];
 
 const ACCOUNTANT = [
   'reservations.view', 'folio.view', 'shifts.view_all', 'guests.view',
   'reports.view', 'reports.financial', 'guard.view', 'audit.view', 'billing.manage',
   'rates.view', 'corporate.view', 'maintenance.view', 'reviews.view',
+  // M5
+  'pos.view', 'stock.view', 'channels.view', 'pricing.view', 'loyalty.view',
 ];
 
 export interface SystemRoleDef {
@@ -220,7 +289,7 @@ export const SYSTEM_ROLES: SystemRoleDef[] = [
     key: 'HOUSEKEEPING',
     name: 'Housekeeper',
     description: 'Cleans the rooms assigned to them and reports issues.',
-    permissions: ['housekeeping.view', 'housekeeping.work', 'maintenance.report'],
+    permissions: ['housekeeping.view', 'housekeeping.work', 'maintenance.report', 'minibar.record'],
   },
   {
     key: 'SUPERVISOR',
@@ -228,7 +297,7 @@ export const SYSTEM_ROLES: SystemRoleDef[] = [
     description: 'Assigns rooms, balances workloads and inspects cleaned rooms.',
     permissions: [
       'housekeeping.view', 'housekeeping.work', 'housekeeping.assign', 'housekeeping.inspect',
-      'rooms.status', 'maintenance.view', 'maintenance.report', 'reservations.view',
+      'rooms.status', 'maintenance.view', 'maintenance.report', 'reservations.view', 'minibar.record',
     ],
   },
   {
@@ -236,6 +305,18 @@ export const SYSTEM_ROLES: SystemRoleDef[] = [
     name: 'Maintenance technician',
     description: 'Works maintenance tickets and logs generator diesel.',
     permissions: ['maintenance.view', 'maintenance.report', 'maintenance.work', 'housekeeping.view'],
+  },
+  {
+    key: 'WAITER',
+    name: 'Waiter / cashier',
+    description: 'Takes orders at the POS, sends them to the kitchen or bar and settles bills in their own shift.',
+    permissions: ['pos.view', 'pos.order', 'pos.settle', 'kds.view', 'shifts.own', 'payments.take', 'loyalty.view'],
+  },
+  {
+    key: 'KITCHEN',
+    name: 'Kitchen / bar',
+    description: 'Works the kitchen display: prepares and bumps tickets.',
+    permissions: ['kds.view', 'pos.view', 'stock.view'],
   },
 ];
 

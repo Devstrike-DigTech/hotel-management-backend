@@ -28,6 +28,7 @@ type RoomRow = Prisma.RoomGetPayload<{ include: typeof roomInclude }>;
 export function toRoomView(r: RoomRow) {
   return {
     id: r.id,
+    propertyId: r.propertyId,
     number: r.number,
     floor: r.floor,
     status: r.status,

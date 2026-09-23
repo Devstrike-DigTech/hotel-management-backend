@@ -105,6 +105,7 @@ export class HousekeepingService {
     const open = OPEN_STATUSES.includes(t.status);
     return {
       id: t.id,
+      propertyId: t.propertyId,
       room: { id: t.room.id, number: t.room.number, floor: t.room.floor, status: t.room.status, roomType: { id: t.room.roomType.id, name: t.room.roomType.name } },
       type: t.type,
       priority: open ? effectivePriority(t.priority as Priority, t.type as TaskType, !!arrival, clean) : t.priority,

@@ -12,6 +12,7 @@ import type { CreateRoomTypeDto, UpdateRoomTypeDto } from './room-types.dto.js';
 export function toRoomTypeView(rt: RoomType, roomCount: number) {
   return {
     id: rt.id,
+    propertyId: rt.propertyId,
     name: rt.name,
     description: rt.description,
     basePriceKobo: rt.basePriceKobo,

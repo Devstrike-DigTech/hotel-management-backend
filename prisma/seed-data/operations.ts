@@ -80,6 +80,13 @@ type SeedReservation = Omit<
   | 'corporateAccountId'
   | 'nightlyRates'
   | 'cancelPolicy'
+  // M5 columns: the Pro seed sets OTA bookings, arrival times and points.
+  | 'otaChannel'
+  | 'otaRef'
+  | 'otaCommissionKobo'
+  | 'overbooked'
+  | 'expectedArrivalTime'
+  | 'loyaltyPoints'
 >;
 const MIN = 60_000;
 const HOUR = 60 * MIN;

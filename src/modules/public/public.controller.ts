@@ -48,6 +48,12 @@ export class PublicController {
     return this.svc.hotel(slug);
   }
 
+  @Get('groups/:slug')
+  @ApiOperation({ summary: 'A hotel group and its properties (group microsite root, M5)' })
+  group(@Param('slug') slug: string) {
+    return this.svc.groupPage(slug);
+  }
+
   @Get('resolve-host')
   @ApiOperation({
     summary: 'Resolve a microsite host (subdomain or custom domain) to a slug',

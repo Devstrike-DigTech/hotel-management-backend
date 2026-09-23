@@ -30,6 +30,8 @@ export interface HotelCard {
     cheapestRateKobo: number;
     cheapestTotalKobo: number;
   } | null;
+  /** M5: the hotel group when it has 2+ properties ("Part of ... group"). */
+  group?: { slug: string; name: string; propertyCount: number } | null;
 }
 
 export interface ReviewSummary {
@@ -102,6 +104,9 @@ export interface HotelDetail extends HotelCard {
     taxes: { code: 'VAT' | 'CONSUMPTION' | 'SERVICE_CHARGE'; label: string; rateBps: number; inclusive: boolean }[];
   };
   reviewSummary: ReviewSummary;
+  /** M5 */
+  canonicalUrl: string;
+  whatsapp: { available: boolean; phone: string | null; waUrl: string | null };
 }
 
 /** Coerces the JSON `images` column into `{ url, alt }[]`. */

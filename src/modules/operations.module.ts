@@ -24,6 +24,7 @@ import { ApprovalPinController } from './ops/approval-pin.controller.js';
 import { OpsJobsService } from './ops/ops-jobs.service.js';
 import { ReportsController } from './reports/reports.controller.js';
 import { ReportsService } from './reports/reports.service.js';
+import { GroupReportsService } from './reports/group-reports.service.js';
 import { AvailabilityController, ReservationsController } from './reservations/reservations.controller.js';
 import { AvailabilityService } from './reservations/availability.service.js';
 import { ReservationsService } from './reservations/reservations.service.js';
@@ -82,6 +83,7 @@ import { objectStorageProvider } from './storage/storage.provider.js';
     AvailabilityService,
     ReservationsService,
     ReportsService,
+    GroupReportsService,
     NightAuditService,
     DigestService,
     FrontDeskService,
@@ -89,6 +91,8 @@ import { objectStorageProvider } from './storage/storage.provider.js';
   ],
   exports: [
     GuardService,
+    GroupReportsService,
+    ShiftsService,
     FrontDeskService,
     NightAuditService,
     DigestService,

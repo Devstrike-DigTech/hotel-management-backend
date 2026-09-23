@@ -262,6 +262,7 @@ export class RatesService {
     const like = toPlanLike(p);
     return {
       id: p.id,
+      propertyId: p.propertyId,
       code: p.code,
       name: p.name,
       description: p.description,

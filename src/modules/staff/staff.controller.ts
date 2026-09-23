@@ -7,8 +7,10 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { PropertyAccessDto } from '../property/property.dto.js';
 import type { AuthUser } from '../../common/auth-types.js';
 import { ClientIp, CurrentUser, RequirePermission } from '../../common/decorators/index.js';
 import { CheckLimit } from '../entitlements/entitlements.decorators.js';
@@ -51,6 +53,17 @@ export class StaffController {
     @ClientIp() ip?: string,
   ) {
     return this.svc.update(user, id, dto, ip);
+  }
+
+  @Put(':id/property-access')
+  @ApiOperation({ summary: 'Which properties of the group the staff member can access (M5)' })
+  setAccess(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: PropertyAccessDto,
+    @ClientIp() ip?: string,
+  ) {
+    return this.svc.setAccess(user, id, dto, ip);
   }
 
   @Delete(':id')

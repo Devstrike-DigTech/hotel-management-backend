@@ -1,3 +1,5 @@
+import { runInProperty } from '../../common/property-scope.js';
+import { normalisePhone } from '../../common/utils/phone.js';
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '../../generated/prisma/client.js';
 import { AppException } from '../../common/errors/app-exception.js';
@@ -184,8 +186,10 @@ export class PublicService {
       rating: (a, b) => (b.rating ?? -1) - (a.rating ?? -1) || b.reviewCount - a.reviewCount || byName(a, b),
     };
     cards.sort(sorters[q.sort ?? 'recommended']);
+    const pageItems = cards.slice((page - 1) * pageSize, page * pageSize);
+    await this.attachGroups(pageItems, new Map(rows.map((r) => [r.slug, r.tenantId])));
     return {
-      items: cards.slice((page - 1) * pageSize, page * pageSize),
+      items: pageItems,
       total: cards.length,
       page,
       pageSize,
@@ -274,6 +278,85 @@ export class PublicService {
           : [{ code: 'VAT' as const, label: 'VAT', rateBps: 750, inclusive: false }],
       },
       reviewSummary: reviewSummaryOf(p),
+      // M5
+      group: (await this.groupsFor([p.tenantId])).get(p.tenantId) ?? null,
+      canonicalUrl: `https://${this.canonicalHost(p)}`,
+      whatsapp: await this.whatsappFor(p, ent?.features ?? []),
+    };
+  }
+
+  /** `https://` host for a property: its verified custom domain, else its subdomain. */
+  canonicalHost(p: { slug: string; customDomain: string | null; customDomainVerifiedAt: Date | null }): string {
+    return p.customDomain && p.customDomainVerifiedAt ? p.customDomain : `${p.slug}.${this.config.get('APP_DOMAIN').toLowerCase()}`;
+  }
+
+  /**
+   * Group info per tenant (only groups with 2+ non-suspended properties;
+   * single-property hotels get null). Public context: tenants and
+   * properties only.
+   */
+  async groupsFor(tenantIds: string[]): Promise<Map<string, { slug: string; name: string; propertyCount: number }>> {
+    const ids = [...new Set(tenantIds)];
+    if (!ids.length) return new Map();
+    const rows = await this.db.public(async (tx) => {
+      const counts = await tx.property.groupBy({ by: ['tenantId'], where: { tenantId: { in: ids } }, _count: { _all: true } });
+      const tenants = await tx.tenant.findMany({ where: { id: { in: ids } }, select: { id: true, slug: true, name: true } });
+      return { counts, tenants };
+    });
+    const n = new Map(rows.counts.map((c) => [c.tenantId, c._count._all]));
+    const out = new Map<string, { slug: string; name: string; propertyCount: number }>();
+    for (const t of rows.tenants) {
+      const count = n.get(t.id) ?? 0;
+      if (count >= 2) out.set(t.id, { slug: t.slug, name: t.name, propertyCount: count });
+    }
+    return out;
+  }
+
+  private async attachGroups(cards: HotelCard[], tenantBySlug: Map<string, string>) {
+    const groups = await this.groupsFor([...tenantBySlug.values()]);
+    for (const c of cards) c.group = groups.get(tenantBySlug.get(c.slug) ?? '') ?? null;
+  }
+
+  /** "Chat on WhatsApp" for hotels with whatsapp_messaging. */
+  private async whatsappFor(p: { id: string; tenantId: string; phone: string }, features: readonly string[]) {
+    if (!features.includes('whatsapp_messaging')) return { available: false, phone: null, waUrl: null };
+    const setting = await runInProperty(p.tenantId, p.id, () =>
+      this.db.tenant(p.tenantId, (tx) => tx.inboxSetting.findUnique({ where: { propertyId: p.id }, select: { enabled: true, whatsappPhone: true } })),
+    ).catch(() => null);
+    if (setting && !setting.enabled) return { available: false, phone: null, waUrl: null };
+    const phone = normalisePhone(setting?.whatsappPhone || p.phone);
+    if (!phone) return { available: false, phone: null, waUrl: null };
+    return { available: true, phone, waUrl: `https://wa.me/${phone.replace(/\D/g, '')}` };
+  }
+
+  /** GET /public/groups/:slug: the group's properties (microsite root). */
+  async groupPage(slug: string) {
+    const data = await this.db.public(async (tx) => {
+      const tenant = await tx.tenant.findFirst({
+        where: { slug: slug.toLowerCase(), subscription: { is: { status: { not: 'SUSPENDED' } } } },
+        select: { id: true, slug: true, name: true },
+      });
+      if (!tenant) return null;
+      const rows = await tx.property.findMany({
+        where: { tenantId: tenant.id },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        include: { roomTypes: { include: { rooms: { select: { status: true } } } }, taxSetting: true },
+      });
+      return { tenant, rows };
+    });
+    if (!data) throw AppException.notFound('Hotel group');
+    const first = data.rows[0];
+    const count = data.rows.length;
+    return {
+      slug: data.tenant.slug,
+      name: data.tenant.name,
+      branding: { accentColor: first?.accentColor ?? null, logoUrl: first?.logoUrl ?? null },
+      propertyCount: count,
+      properties: data.rows.map((p) => ({
+        ...toHotelCard(p, p.roomTypes.map((r) => r.basePriceKobo)),
+        group: count >= 2 ? { slug: data.tenant.slug, name: data.tenant.name, propertyCount: count } : null,
+        canonicalUrl: `https://${this.canonicalHost(p)}`,
+      })),
     };
   }
 
@@ -282,9 +365,10 @@ export class PublicService {
    *   grandview.<APP_DOMAIN>  -> "grandview"
    *   book.grandview.com      -> slug of the property with that verified domain
    */
-  async resolveHost(rawHost: string): Promise<{ slug: string }> {
+  async resolveHost(rawHost: string): Promise<{ slug: string; kind: 'PROPERTY' | 'GROUP'; groupSlug: string; canonicalHost: string }> {
     const host = rawHost.trim().toLowerCase().replace(/:\d+$/, '').replace(/\.$/, '');
     const appDomain = this.config.get('APP_DOMAIN').toLowerCase();
+    const select = { slug: true, customDomain: true, customDomainVerifiedAt: true, tenant: { select: { slug: true } } } as const;
 
     const found = await this.db.public(async (tx) => {
       const active = {
@@ -295,22 +379,32 @@ export class PublicService {
         if (!sub || sub.includes('.') || RESERVED_SUBDOMAINS.has(sub)) {
           return null;
         }
-        return tx.property.findFirst({
-          where: { slug: sub, ...active },
-          select: { slug: true },
-        });
+        // M5: the group's own subdomain (tenant slug) with 2+ properties is the group root.
+        const tenant = await tx.tenant.findFirst({ where: { slug: sub, subscription: { is: { status: { not: 'SUSPENDED' } } } }, select: { id: true, slug: true } });
+        if (tenant) {
+          const props = await tx.property.findMany({ where: { tenantId: tenant.id }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], select });
+          if (props.length >= 2) return { kind: 'GROUP' as const, p: props[0], groupSlug: tenant.slug };
+        }
+        const p = await tx.property.findFirst({ where: { slug: sub, ...active }, select });
+        return p ? { kind: 'PROPERTY' as const, p, groupSlug: p.tenant.slug } : null;
       }
-      return tx.property.findFirst({
+      const p = await tx.property.findFirst({
         where: {
           customDomain: host,
           customDomainVerifiedAt: { not: null },
           ...active,
         },
-        select: { slug: true },
+        select,
       });
+      return p ? { kind: 'PROPERTY' as const, p, groupSlug: p.tenant.slug } : null;
     });
 
     if (!found) throw AppException.notFound('Hotel for this host');
-    return { slug: found.slug };
+    return {
+      slug: found.p.slug,
+      kind: found.kind,
+      groupSlug: found.groupSlug,
+      canonicalHost: found.kind === 'GROUP' ? `${found.groupSlug}.${appDomain}` : this.canonicalHost(found.p),
+    };
   }
 }

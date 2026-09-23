@@ -7,6 +7,8 @@ export const PAYMENT_METHODS: PaymentMethod[] = ['CASH', 'TRANSFER', 'POS', 'CAR
 
 export interface DailyFlash {
   date: string;
+  /** M5: the property (null for group totals). */
+  propertyId?: string | null;
   live: boolean;
   roomsTotal: number;
   roomsOutOfOrder: number;
@@ -104,6 +106,7 @@ export async function computeDailyFlashes(tx: Tx, tenantId: string, from: string
   for (const d of dates) {
     byDate.set(d, {
       date: d,
+      propertyId: ids && ids.length === 1 ? ids[0] : null,
       live: true,
       roomsTotal,
       roomsOutOfOrder,

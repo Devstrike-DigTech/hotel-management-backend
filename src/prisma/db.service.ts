@@ -5,7 +5,7 @@ import { AppConfigService } from '../config/app-config.service.js';
 import { PlatformPrismaService } from './platform-prisma.service.js';
 import { PrismaService } from './prisma.service.js';
 import { idempotencyContext } from '../modules/idempotency/idempotency.context.js';
-import { activePropertyFilter, currentScope, propertyScopeExtension } from '../common/property-scope.js';
+import { activePropertyFilter, currentScope, propertyScopeExtension, propertyScopeStore } from '../common/property-scope.js';
 
 /** The client handed to callbacks: a Prisma interactive transaction. */
 export type Tx = Prisma.TransactionClient;
@@ -75,6 +75,16 @@ export class DbService {
       }
       return result;
     }, TX_OPTIONS));
+  }
+
+  /**
+   * Runs `fn` (queries on an open tenant transaction, or new ones) without
+   * the property filter: group-wide reads and writes that span the group's
+   * properties on purpose (group reports, creating a property, relocation
+   * suggestions). RLS still limits it to the tenant.
+   */
+  withAllProperties<T>(_tenantId: string, fn: () => Promise<T>): Promise<T> {
+    return propertyScopeStore.exit(() => activePropertyFilter.run(null, fn));
   }
 
   public<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {

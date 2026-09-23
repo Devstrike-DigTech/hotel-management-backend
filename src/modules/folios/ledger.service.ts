@@ -82,6 +82,7 @@ export class LedgerService {
     const r = f.reservation;
     return {
       id: f.id,
+      propertyId: f.propertyId,
       kind: f.kind,
       status: f.status,
       name: f.name,
@@ -332,6 +333,7 @@ export class LedgerService {
           const t = folioTotals(byFolio.get(f.id) ?? []);
           return {
             id: f.id,
+            propertyId: f.propertyId,
             kind: f.kind,
             status: f.status,
             name: f.name,

@@ -134,6 +134,40 @@ model Tenant {
   notificationSettings   NotificationSetting[]
   guardAlerts            GuardAlert[]
   userPropertyAccess     UserPropertyAccess[]
+  posOutlets             PosOutlet[]
+  posCategories          PosCategory[]
+  posItems               PosItem[]
+  posPriceRules          PosPriceRule[]
+  posOrders              PosOrder[]
+  posOrderLines          PosOrderLine[]
+  posTickets             PosTicket[]
+  stockItems             StockItem[]
+  stockMovements         StockMovement[]
+  stockCounts            StockCount[]
+  minibarPars            MinibarPar[]
+  channelConnections     ChannelConnection[]
+  icalFeeds              IcalFeed[]
+  channelMappings        ChannelMapping[]
+  channelSyncLogs        ChannelSyncLog[]
+  channelBookings        ChannelBooking[]
+  pricingSettings        PricingSetting[]
+  pricingGuardrails      PricingGuardrail[]
+  pricingFrozenDates     PricingFrozenDate[]
+  pricingEvents          PricingEvent[]
+  competitorRates        CompetitorRate[]
+  priceSuggestions       PriceSuggestion[]
+  priceChanges           PriceChange[]
+  conversations          Conversation[]
+  conversationMessages   ConversationMessage[]
+  quickReplies           QuickReply[]
+  taskSuggestions        TaskSuggestion[]
+  inboxSettings          InboxSetting[]
+  loyaltyProgramme       LoyaltyProgramme?
+  loyaltyTiers           LoyaltyTier[]
+  loyaltyMembers         LoyaltyMember[]
+  loyaltyTransactions    LoyaltyTransaction[]
+  loyaltyChallenges      LoyaltyChallenge[]
+  customDomains          CustomDomain[]
 
   @@map("tenants")
 }
@@ -227,7 +261,14 @@ model Property {
   rateRules              RateRule[]
   notificationSettings   NotificationSetting[]
 
-  userAccess UserPropertyAccess[]
+  userAccess         UserPropertyAccess[]
+  posOutlets         PosOutlet[]
+  posCategories      PosCategory[]
+  posItems           PosItem[]
+  posPriceRules      PosPriceRule[]
+  posOrders          PosOrder[]
+  stockItems         StockItem[]
+  channelConnections ChannelConnection[]
 
   @@unique([tenantId, invoicePrefix])
   @@index([tenantId])
@@ -780,10 +821,11 @@ model Guest {
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant       Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   reservations Reservation[]
   folios       Folio[]
   reviews      Review[]
+  loyalty      LoyaltyMember?
 
   @@unique([tenantId, phone])
   @@index([guestAccountId])
@@ -853,6 +895,15 @@ model Reservation {
   nightlyRates       Json    @default("[]") @map("nightly_rates")
   /// Cancellation policy of the rate plan at booking (null = hotel policy).
   cancelPolicy       Json?   @map("cancel_policy")
+
+  // M5: channel manager, guest inbox, loyalty.
+  otaChannel          OtaChannel? @map("ota_channel")
+  otaRef              String?     @map("ota_ref")
+  otaCommissionKobo   BigInt?     @map("ota_commission_kobo")
+  overbooked          Boolean     @default(false)
+  expectedArrivalTime String?     @map("expected_arrival_time")
+  /// Points redeemed on this stay (online redemption held at booking).
+  loyaltyPoints       Int         @default(0) @map("loyalty_points")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -2324,4 +2375,1058 @@ model UserPropertyAccess {
   @@index([tenantId])
   @@index([propertyId])
   @@map("user_property_access")
+}
+
+// ===========================================================================
+// M5: point of sale, kitchen display, stock, minibar
+// ===========================================================================
+
+enum OutletType {
+  RESTAURANT
+  BAR
+  POOL_BAR
+  ROOM_SERVICE
+  MINIBAR
+  LAUNDRY
+  SPA
+  OTHER
+}
+
+enum KdsStation {
+  KITCHEN
+  BAR
+  NONE
+}
+
+enum PosOrderStatus {
+  OPEN
+  SETTLED
+  CANCELLED
+}
+
+enum PosLineStatus {
+  PENDING
+  SENT
+  VOIDED
+}
+
+enum KdsTicketStatus {
+  NEW
+  PREPARING
+  READY
+  SERVED
+  CANCELLED
+}
+
+enum PosSettlement {
+  PAYMENT
+  ROOM_CHARGE
+  CITY_LEDGER
+  COMPLIMENTARY
+}
+
+enum StockMovementType {
+  PURCHASE
+  SALE
+  VOID_RETURN
+  WASTE
+  ADJUSTMENT
+  COUNT
+  MINIBAR
+}
+
+model PosOutlet {
+  id                   String     @id @default(uuid()) @db.Uuid
+  tenantId             String     @map("tenant_id") @db.Uuid
+  propertyId           String     @map("property_id") @db.Uuid
+  name                 String
+  code                 String
+  type                 OutletType
+  active               Boolean    @default(true)
+  defaultStation       KdsStation @default(KITCHEN) @map("default_station")
+  serviceChargeApplies Boolean    @default(false) @map("service_charge_applies")
+  allowRoomCharge      Boolean    @default(true) @map("allow_room_charge")
+  allowCityLedger      Boolean    @default(true) @map("allow_city_ledger")
+  sortOrder            Int        @default(0) @map("sort_order")
+  createdAt            DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property Property    @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  orders   PosOrder[]
+  tickets  PosTicket[]
+
+  @@unique([propertyId, code])
+  @@index([tenantId])
+  @@map("pos_outlets")
+}
+
+model PosCategory {
+  id         String      @id @default(uuid()) @db.Uuid
+  tenantId   String      @map("tenant_id") @db.Uuid
+  propertyId String      @map("property_id") @db.Uuid
+  name       String
+  station    KdsStation?
+  sortOrder  Int         @default(0) @map("sort_order")
+  createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  items    PosItem[]
+
+  @@unique([propertyId, name])
+  @@index([tenantId])
+  @@map("pos_categories")
+}
+
+model PosItem {
+  id             String      @id @default(uuid()) @db.Uuid
+  tenantId       String      @map("tenant_id") @db.Uuid
+  propertyId     String      @map("property_id") @db.Uuid
+  categoryId     String      @map("category_id") @db.Uuid
+  name           String
+  description    String      @default("")
+  priceKobo      Int         @map("price_kobo")
+  /// Empty = sold in every outlet of the property.
+  outletIds      String[]    @default([]) @map("outlet_ids") @db.Uuid
+  available      Boolean     @default(true)
+  active         Boolean     @default(true)
+  vat            Boolean     @default(true)
+  consumptionTax Boolean     @default(true) @map("consumption_tax")
+  /// ModifierGroup[]: { id, name, required, multiple, options: { id, name, priceKobo }[] }
+  modifiers      Json        @default("[]")
+  station        KdsStation?
+  /// { stockItemId, quantity }[] deducted per unit sold.
+  stockLinks     Json        @default("[]") @map("stock_links")
+  imageUrl       String?     @map("image_url")
+  sortOrder      Int         @default(0) @map("sort_order")
+  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property Property       @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  category PosCategory    @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  lines    PosOrderLine[]
+  minibar  MinibarPar[]
+
+  @@index([tenantId])
+  @@index([propertyId, categoryId])
+  @@map("pos_items")
+}
+
+/// Happy hour: a time window with a price adjustment.
+model PosPriceRule {
+  id             String         @id @default(uuid()) @db.Uuid
+  tenantId       String         @map("tenant_id") @db.Uuid
+  propertyId     String         @map("property_id") @db.Uuid
+  name           String
+  active         Boolean        @default(true)
+  outletIds      String[]       @default([]) @map("outlet_ids") @db.Uuid
+  categoryIds    String[]       @default([]) @map("category_ids") @db.Uuid
+  itemIds        String[]       @default([]) @map("item_ids") @db.Uuid
+  daysOfWeek     Int[]          @default([]) @map("days_of_week")
+  startTime      String         @map("start_time")
+  endTime        String         @map("end_time")
+  adjustmentType AdjustmentType @map("adjustment_type")
+  value          Int
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([propertyId])
+  @@map("pos_price_rules")
+}
+
+model PosOrder {
+  id                 String         @id @default(uuid()) @db.Uuid
+  tenantId           String         @map("tenant_id") @db.Uuid
+  propertyId         String         @map("property_id") @db.Uuid
+  outletId           String         @map("outlet_id") @db.Uuid
+  number             String
+  year               Int
+  seq                Int
+  status             PosOrderStatus @default(OPEN)
+  tableLabel         String?        @map("table_label")
+  roomId             String?        @map("room_id") @db.Uuid
+  reservationId      String?        @map("reservation_id") @db.Uuid
+  guestName          String?        @map("guest_name")
+  covers             Int            @default(1)
+  notes              String         @default("")
+  discountMode       String?        @map("discount_mode")
+  discountValue      Int?           @map("discount_value")
+  discountKobo       BigInt         @default(0) @map("discount_kobo")
+  discountReason     String?        @map("discount_reason")
+  discountApprovedBy String?        @map("discount_approved_by") @db.Uuid
+  settlement         PosSettlement?
+  /// { method, amountKobo, reference, receiptId, receiptNumber }[]
+  payments           Json           @default("[]")
+  tipKobo            BigInt         @default(0) @map("tip_kobo")
+  folioId            String?        @map("folio_id") @db.Uuid
+  corporateAccountId String?        @map("corporate_account_id") @db.Uuid
+  signature          String?
+  /// Settled totals snapshot (PosTotals).
+  totals             Json?
+  netKobo            BigInt         @default(0) @map("net_kobo")
+  totalKobo          BigInt         @default(0) @map("total_kobo")
+  taxKobo            BigInt         @default(0) @map("tax_kobo")
+  openedById         String?        @map("opened_by_id") @db.Uuid
+  openedByName       String?        @map("opened_by_name")
+  openedAt           DateTime       @default(now()) @map("opened_at") @db.Timestamptz(3)
+  settledAt          DateTime?      @map("settled_at") @db.Timestamptz(3)
+  settledById        String?        @map("settled_by_id") @db.Uuid
+  settledByName      String?        @map("settled_by_name")
+  shiftId            String?        @map("shift_id") @db.Uuid
+  cancelledAt        DateTime?      @map("cancelled_at") @db.Timestamptz(3)
+  cancelReason       String?        @map("cancel_reason")
+  splitFromOrderId   String?        @map("split_from_order_id") @db.Uuid
+  clientCreatedAt    DateTime?      @map("client_created_at") @db.Timestamptz(3)
+  createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property Property       @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  outlet   PosOutlet      @relation(fields: [outletId], references: [id], onDelete: Restrict)
+  lines    PosOrderLine[]
+  tickets  PosTicket[]
+
+  @@unique([propertyId, number])
+  @@index([tenantId])
+  @@index([propertyId, status])
+  @@index([propertyId, settledAt])
+  @@map("pos_orders")
+}
+
+model PosOrderLine {
+  id            String        @id @default(uuid()) @db.Uuid
+  tenantId      String        @map("tenant_id") @db.Uuid
+  propertyId    String        @map("property_id") @db.Uuid
+  orderId       String        @map("order_id") @db.Uuid
+  itemId        String        @map("item_id") @db.Uuid
+  name          String
+  categoryName  String        @map("category_name")
+  quantity      Int
+  unitPriceKobo Int           @map("unit_price_kobo")
+  basePriceKobo Int           @map("base_price_kobo")
+  /// { groupId, group, optionId, option, priceKobo }[]
+  modifiers     Json          @default("[]")
+  note          String        @default("")
+  station       KdsStation
+  vat           Boolean       @default(true)
+  consumption   Boolean       @default(true)
+  status        PosLineStatus @default(PENDING)
+  sentAt        DateTime?     @map("sent_at") @db.Timestamptz(3)
+  ticketId      String?       @map("ticket_id") @db.Uuid
+  voidedAt      DateTime?     @map("voided_at") @db.Timestamptz(3)
+  voidReason    String?       @map("void_reason")
+  voidedById    String?       @map("voided_by_id") @db.Uuid
+  voidedByName  String?       @map("voided_by_name")
+  approvedById  String?       @map("approved_by_id") @db.Uuid
+  addedById     String?       @map("added_by_id") @db.Uuid
+  addedByName   String?       @map("added_by_name")
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order  PosOrder   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  item   PosItem    @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  ticket PosTicket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([orderId])
+  @@index([propertyId, createdAt])
+  @@map("pos_order_lines")
+}
+
+model PosTicket {
+  id         String          @id @default(uuid()) @db.Uuid
+  tenantId   String          @map("tenant_id") @db.Uuid
+  propertyId String          @map("property_id") @db.Uuid
+  orderId    String          @map("order_id") @db.Uuid
+  outletId   String          @map("outlet_id") @db.Uuid
+  number     String
+  station    KdsStation
+  status     KdsTicketStatus @default(NEW)
+  serverId   String?         @map("server_id") @db.Uuid
+  serverName String?         @map("server_name")
+  startedAt  DateTime?       @map("started_at") @db.Timestamptz(3)
+  readyAt    DateTime?       @map("ready_at") @db.Timestamptz(3)
+  servedAt   DateTime?       @map("served_at") @db.Timestamptz(3)
+  createdAt  DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order  PosOrder       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  outlet PosOutlet      @relation(fields: [outletId], references: [id], onDelete: Restrict)
+  lines  PosOrderLine[]
+
+  @@index([tenantId])
+  @@index([propertyId, status])
+  @@index([propertyId, updatedAt])
+  @@map("pos_tickets")
+}
+
+model StockItem {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  propertyId   String   @map("property_id") @db.Uuid
+  name         String
+  unit         String
+  category     String   @default("General")
+  sku          String?
+  onHand       Decimal  @default(0) @map("on_hand") @db.Decimal(12, 3)
+  reorderLevel Decimal  @default(0) @map("reorder_level") @db.Decimal(12, 3)
+  parLevel     Decimal? @map("par_level") @db.Decimal(12, 3)
+  unitCostKobo Int      @default(0) @map("unit_cost_kobo")
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant    Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property  Property        @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  movements StockMovement[]
+
+  @@unique([propertyId, name])
+  @@index([tenantId])
+  @@map("stock_items")
+}
+
+model StockMovement {
+  id            String            @id @default(uuid()) @db.Uuid
+  tenantId      String            @map("tenant_id") @db.Uuid
+  propertyId    String            @map("property_id") @db.Uuid
+  stockItemId   String            @map("stock_item_id") @db.Uuid
+  type          StockMovementType
+  quantity      Decimal           @db.Decimal(12, 3)
+  unitCostKobo  Int?              @map("unit_cost_kobo")
+  reference     String?
+  note          String            @default("")
+  orderId       String?           @map("order_id") @db.Uuid
+  countId       String?           @map("count_id") @db.Uuid
+  createdById   String?           @map("created_by_id") @db.Uuid
+  createdByName String?           @map("created_by_name")
+  createdAt     DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stockItem StockItem @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([propertyId, createdAt])
+  @@index([stockItemId, createdAt])
+  @@map("stock_movements")
+}
+
+model StockCount {
+  id                String   @id @default(uuid()) @db.Uuid
+  tenantId          String   @map("tenant_id") @db.Uuid
+  propertyId        String   @map("property_id") @db.Uuid
+  note              String   @default("")
+  /// { stockItemId, name, unit, expected, counted, variance, varianceValueKobo }[]
+  lines             Json     @default("[]")
+  varianceValueKobo BigInt   @default(0) @map("variance_value_kobo")
+  flagged           Boolean  @default(false)
+  countedById       String?  @map("counted_by_id") @db.Uuid
+  countedByName     String?  @map("counted_by_name")
+  countedAt         DateTime @default(now()) @map("counted_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([propertyId, countedAt])
+  @@map("stock_counts")
+}
+
+/// Minibar par level per room type for a MINIBAR outlet item.
+model MinibarPar {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  propertyId String   @map("property_id") @db.Uuid
+  roomTypeId String   @map("room_type_id") @db.Uuid
+  itemId     String   @map("item_id") @db.Uuid
+  parQty     Int      @map("par_qty")
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  item   PosItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([roomTypeId, itemId])
+  @@index([tenantId])
+  @@index([propertyId])
+  @@map("minibar_pars")
+}
+
+// ===========================================================================
+// M5: channel manager
+// ===========================================================================
+
+enum ChannelProviderKind {
+  ICAL
+  CHANNEX
+}
+
+enum OtaChannel {
+  AIRBNB
+  BOOKING_COM
+  EXPEDIA
+  AGODA
+  VRBO
+  HOTELS_NG
+  OTHER
+}
+
+enum ChannelConnectionStatus {
+  ACTIVE
+  PAUSED
+  ERROR
+}
+
+enum SyncDirection {
+  PUSH
+  PULL
+  WEBHOOK
+}
+
+enum SyncKind {
+  ARI
+  BOOKING
+  ICAL_IMPORT
+  CONNECT
+  MAPPING
+}
+
+enum SyncStatus {
+  OK
+  ERROR
+  SKIPPED
+}
+
+enum ChannelBookingStatus {
+  NEW
+  MODIFIED
+  CANCELLED
+}
+
+model ChannelConnection {
+  id                 String                  @id @default(uuid()) @db.Uuid
+  tenantId           String                  @map("tenant_id") @db.Uuid
+  propertyId         String                  @map("property_id") @db.Uuid
+  provider           ChannelProviderKind
+  name               String
+  channel            OtaChannel?
+  status             ChannelConnectionStatus @default(ACTIVE)
+  mock               Boolean                 @default(false)
+  externalPropertyId String?                 @map("external_property_id")
+  /// AES-256-GCM (GUEST_DATA_KEY), tenant id as associated data.
+  apiKeyEnc          String?                 @map("api_key_enc")
+  /// { stopSellBuffer, commissionBps, pushRates, pushRestrictions, horizonDays }
+  settings           Json                    @default("{}")
+  /// Bumped to invalidate every iCal export URL of the connection.
+  icalVersion        Int                     @default(1) @map("ical_version")
+  /// Last pushed ARI values: { "<roomTypeId>|<date>": "<hash>" }.
+  ariState           Json                    @default("{}") @map("ari_state")
+  ariDirtySince      DateTime?               @map("ari_dirty_since") @db.Timestamptz(3)
+  ariDirtyFrom       DateTime?               @map("ari_dirty_from") @db.Date
+  ariDirtyTo         DateTime?               @map("ari_dirty_to") @db.Date
+  lastSyncAt         DateTime?               @map("last_sync_at") @db.Timestamptz(3)
+  lastError          String?                 @map("last_error")
+  lastErrorAt        DateTime?               @map("last_error_at") @db.Timestamptz(3)
+  createdAt          DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property Property         @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  feeds    IcalFeed[]
+  mappings ChannelMapping[]
+  logs     ChannelSyncLog[]
+  bookings ChannelBooking[]
+
+  @@index([tenantId])
+  @@index([propertyId])
+  @@map("channel_connections")
+}
+
+model IcalFeed {
+  id            String    @id @default(uuid()) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  propertyId    String    @map("property_id") @db.Uuid
+  connectionId  String    @map("connection_id") @db.Uuid
+  roomId        String?   @map("room_id") @db.Uuid
+  roomTypeId    String    @map("room_type_id") @db.Uuid
+  url           String
+  lastFetchedAt DateTime? @map("last_fetched_at") @db.Timestamptz(3)
+  lastStatus    String?   @map("last_status")
+  lastError     String?   @map("last_error")
+  eventsCount   Int       @default(0) @map("events_count")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  connection ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([connectionId])
+  @@map("ical_feeds")
+}
+
+model ChannelMapping {
+  id                   String   @id @default(uuid()) @db.Uuid
+  tenantId             String   @map("tenant_id") @db.Uuid
+  propertyId           String   @map("property_id") @db.Uuid
+  connectionId         String   @map("connection_id") @db.Uuid
+  roomTypeId           String   @map("room_type_id") @db.Uuid
+  ratePlanId           String?  @map("rate_plan_id") @db.Uuid
+  externalRoomTypeId   String   @map("external_room_type_id")
+  externalRoomTypeName String?  @map("external_room_type_name")
+  externalRatePlanId   String?  @map("external_rate_plan_id")
+  externalRatePlanName String?  @map("external_rate_plan_name")
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  connection ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([connectionId])
+  @@map("channel_mappings")
+}
+
+model ChannelSyncLog {
+  id           String        @id @default(uuid()) @db.Uuid
+  tenantId     String        @map("tenant_id") @db.Uuid
+  propertyId   String        @map("property_id") @db.Uuid
+  connectionId String        @map("connection_id") @db.Uuid
+  direction    SyncDirection
+  kind         SyncKind
+  status       SyncStatus
+  summary      String
+  items        Int           @default(0)
+  error        String?
+  payload      Json?
+  startedAt    DateTime      @default(now()) @map("started_at") @db.Timestamptz(3)
+  finishedAt   DateTime?     @map("finished_at") @db.Timestamptz(3)
+
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  connection ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([connectionId, startedAt(sort: Desc)])
+  @@index([propertyId, startedAt(sort: Desc)])
+  @@map("channel_sync_logs")
+}
+
+model ChannelBooking {
+  id             String               @id @default(uuid()) @db.Uuid
+  tenantId       String               @map("tenant_id") @db.Uuid
+  propertyId     String               @map("property_id") @db.Uuid
+  connectionId   String               @map("connection_id") @db.Uuid
+  provider       ChannelProviderKind
+  channel        OtaChannel
+  externalId     String               @map("external_id")
+  revisionId     String?              @map("revision_id")
+  status         ChannelBookingStatus @default(NEW)
+  reservationId  String?              @map("reservation_id") @db.Uuid
+  grossKobo      BigInt?              @map("gross_kobo")
+  commissionKobo BigInt?              @map("commission_kobo")
+  commissionBps  Int?                 @map("commission_bps")
+  overbooked     Boolean              @default(false)
+  raw            Json                 @default("{}")
+  receivedAt     DateTime             @default(now()) @map("received_at") @db.Timestamptz(3)
+  updatedAt      DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  connection ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([connectionId, externalId])
+  @@index([tenantId])
+  @@index([propertyId, receivedAt])
+  @@index([reservationId])
+  @@map("channel_bookings")
+}
+
+// ===========================================================================
+// M5: dynamic pricing
+// ===========================================================================
+
+enum PricingMode {
+  OFF
+  SUGGEST
+  AUTOPILOT
+}
+
+enum SuggestionStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  APPLIED
+  SUPERSEDED
+  EXPIRED
+}
+
+enum PriceChangeSource {
+  ACCEPTED
+  AUTOPILOT
+  REVERT
+}
+
+model PricingSetting {
+  id               String      @id @default(uuid()) @db.Uuid
+  tenantId         String      @map("tenant_id") @db.Uuid
+  propertyId       String      @unique @map("property_id") @db.Uuid
+  mode             PricingMode @default(OFF)
+  horizonDays      Int         @default(90) @map("horizon_days")
+  minChangeBps     Int         @default(300) @map("min_change_bps")
+  paceSpikeEnabled Boolean     @default(true) @map("pace_spike_enabled")
+  paceSpikeRooms   Int         @default(3) @map("pace_spike_rooms")
+  lastRunAt        DateTime?   @map("last_run_at") @db.Timestamptz(3)
+  lastSpikeRunAt   DateTime?   @map("last_spike_run_at") @db.Timestamptz(3)
+  updatedAt        DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("pricing_settings")
+}
+
+model PricingGuardrail {
+  id                String   @id @default(uuid()) @db.Uuid
+  tenantId          String   @map("tenant_id") @db.Uuid
+  propertyId        String   @map("property_id") @db.Uuid
+  roomTypeId        String   @unique @map("room_type_id") @db.Uuid
+  enabled           Boolean  @default(true)
+  floorKobo         Int      @map("floor_kobo")
+  ceilingKobo       Int      @map("ceiling_kobo")
+  maxDailyChangeBps Int      @default(1500) @map("max_daily_change_bps")
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([propertyId])
+  @@map("pricing_guardrails")
+}
+
+model PricingFrozenDate {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  propertyId    String   @map("property_id") @db.Uuid
+  date          DateTime @db.Date
+  roomTypeId    String?  @map("room_type_id") @db.Uuid
+  note          String   @default("")
+  createdById   String?  @map("created_by_id") @db.Uuid
+  createdByName String?  @map("created_by_name")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([propertyId, date])
+  @@map("pricing_frozen_dates")
+}
+
+/// Custom events (kind CUSTOM) and per-property overrides of national events (kind NATIONAL, nationalKey set).
+model PricingEvent {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  propertyId  String   @map("property_id") @db.Uuid
+  kind        String   @default("CUSTOM")
+  nationalKey String?  @map("national_key")
+  name        String
+  dateFrom    DateTime @map("date_from") @db.Date
+  dateTo      DateTime @map("date_to") @db.Date
+  impact      String   @default("MEDIUM")
+  upliftBps   Int      @map("uplift_bps")
+  city        String?
+  note        String   @default("")
+  disabled    Boolean  @default(false)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([propertyId, nationalKey])
+  @@index([tenantId])
+  @@index([propertyId, dateFrom])
+  @@map("pricing_events")
+}
+
+model CompetitorRate {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @map("tenant_id") @db.Uuid
+  propertyId     String   @map("property_id") @db.Uuid
+  competitorName String   @map("competitor_name")
+  date           DateTime @db.Date
+  rateKobo       Int      @map("rate_kobo")
+  roomTypeId     String?  @map("room_type_id") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([propertyId, date])
+  @@map("competitor_rates")
+}
+
+model PriceSuggestion {
+  id            String           @id @default(uuid()) @db.Uuid
+  tenantId      String           @map("tenant_id") @db.Uuid
+  propertyId    String           @map("property_id") @db.Uuid
+  roomTypeId    String           @map("room_type_id") @db.Uuid
+  date          DateTime         @db.Date
+  currentKobo   Int              @map("current_kobo")
+  suggestedKobo Int              @map("suggested_kobo")
+  changeBps     Int              @map("change_bps")
+  factors       Json             @default("[]")
+  reason        String
+  occupancy     Json             @default("{}")
+  confidence    String           @default("MEDIUM")
+  status        SuggestionStatus @default(PENDING)
+  generatedAt   DateTime         @default(now()) @map("generated_at") @db.Timestamptz(3)
+  decidedAt     DateTime?        @map("decided_at") @db.Timestamptz(3)
+  decidedById   String?          @map("decided_by_id") @db.Uuid
+  decidedByName String?          @map("decided_by_name")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([propertyId, date])
+  @@index([roomTypeId, date, status])
+  @@map("price_suggestions")
+}
+
+model PriceChange {
+  id           String            @id @default(uuid()) @db.Uuid
+  tenantId     String            @map("tenant_id") @db.Uuid
+  propertyId   String            @map("property_id") @db.Uuid
+  roomTypeId   String            @map("room_type_id") @db.Uuid
+  date         DateTime          @db.Date
+  fromKobo     Int               @map("from_kobo")
+  toKobo       Int               @map("to_kobo")
+  /// The override row before this change (null = none), restored by a revert.
+  previousKobo Int?              @map("previous_kobo")
+  source       PriceChangeSource
+  reason       String
+  suggestionId String?           @map("suggestion_id") @db.Uuid
+  byId         String?           @map("by_id") @db.Uuid
+  byName       String?           @map("by_name")
+  reverted     Boolean           @default(false)
+  createdAt    DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([propertyId, date])
+  @@index([roomTypeId, date])
+  @@map("price_changes")
+}
+
+// ===========================================================================
+// M5: guest WhatsApp inbox
+// ===========================================================================
+
+enum ConversationStatus {
+  OPEN
+  PENDING
+  CLOSED
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+  NOTE
+  SYSTEM
+}
+
+enum TaskSuggestionStatus {
+  PENDING
+  CREATED
+  DISMISSED
+}
+
+model Conversation {
+  id             String             @id @default(uuid()) @db.Uuid
+  tenantId       String             @map("tenant_id") @db.Uuid
+  propertyId     String             @map("property_id") @db.Uuid
+  guestId        String?            @map("guest_id") @db.Uuid
+  guestPhone     String             @map("guest_phone")
+  guestName      String             @map("guest_name")
+  reservationId  String?            @map("reservation_id") @db.Uuid
+  status         ConversationStatus @default(OPEN)
+  assigneeId     String?            @map("assignee_id") @db.Uuid
+  assigneeName   String?            @map("assignee_name")
+  lastMessageAt  DateTime           @default(now()) @map("last_message_at") @db.Timestamptz(3)
+  lastInboundAt  DateTime?          @map("last_inbound_at") @db.Timestamptz(3)
+  lastOutboundAt DateTime?          @map("last_outbound_at") @db.Timestamptz(3)
+  lastPreview    String             @default("") @map("last_preview")
+  lastDirection  MessageDirection?  @map("last_direction")
+  unreadCount    Int                @default(0) @map("unread_count")
+  slaDueAt       DateTime?          @map("sla_due_at") @db.Timestamptz(3)
+  /// Automated flow waiting for a reply, e.g. "ARRIVAL_TIME".
+  flowState      String?            @map("flow_state")
+  notes          String             @default("")
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant      Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  messages    ConversationMessage[]
+  suggestions TaskSuggestion[]
+
+  @@index([tenantId])
+  @@index([propertyId, lastMessageAt(sort: Desc)])
+  @@index([propertyId, guestPhone])
+  @@map("conversations")
+}
+
+model ConversationMessage {
+  id                String           @id @default(uuid()) @db.Uuid
+  tenantId          String           @map("tenant_id") @db.Uuid
+  propertyId        String           @map("property_id") @db.Uuid
+  conversationId    String           @map("conversation_id") @db.Uuid
+  direction         MessageDirection
+  body              String
+  templateName      String?          @map("template_name")
+  templateParams    String[]         @default([]) @map("template_params")
+  status            String           @default("RECEIVED")
+  error             String?
+  providerMessageId String?          @unique @map("provider_message_id")
+  sentById          String?          @map("sent_by_id") @db.Uuid
+  sentByName        String?          @map("sent_by_name")
+  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([conversationId, createdAt])
+  @@map("conversation_messages")
+}
+
+model QuickReply {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  propertyId String   @map("property_id") @db.Uuid
+  title      String
+  shortcut   String   @default("")
+  body       String
+  sortOrder  Int      @default(0) @map("sort_order")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([propertyId])
+  @@map("quick_replies")
+}
+
+model TaskSuggestion {
+  id                 String               @id @default(uuid()) @db.Uuid
+  tenantId           String               @map("tenant_id") @db.Uuid
+  propertyId         String               @map("property_id") @db.Uuid
+  conversationId     String               @map("conversation_id") @db.Uuid
+  messageId          String               @map("message_id") @db.Uuid
+  kind               String
+  keyword            String
+  summary            String
+  category           MaintenanceCategory?
+  roomId             String?              @map("room_id") @db.Uuid
+  status             TaskSuggestionStatus @default(PENDING)
+  housekeepingTaskId String?              @map("housekeeping_task_id") @db.Uuid
+  ticketId           String?              @map("ticket_id") @db.Uuid
+  decidedById        String?              @map("decided_by_id") @db.Uuid
+  createdAt          DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([propertyId, status])
+  @@map("task_suggestions")
+}
+
+model InboxSetting {
+  id                 String   @id @default(uuid()) @db.Uuid
+  tenantId           String   @map("tenant_id") @db.Uuid
+  propertyId         String   @unique @map("property_id") @db.Uuid
+  enabled            Boolean  @default(true)
+  wifiName           String   @default("") @map("wifi_name")
+  wifiPassword       String   @default("") @map("wifi_password")
+  directions         String   @default("")
+  preArrivalConfirm  Boolean  @default(true) @map("pre_arrival_confirm")
+  inStayPrompt       Boolean  @default(true) @map("in_stay_prompt")
+  keywordSuggestions Boolean  @default(true) @map("keyword_suggestions")
+  slaMinutes         Int      @default(15) @map("sla_minutes")
+  phoneNumberId      String?  @unique @map("phone_number_id")
+  whatsappPhone      String?  @map("whatsapp_phone")
+  updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("inbox_settings")
+}
+
+// ===========================================================================
+// M5: loyalty (tenant-wide: the hotel group)
+// ===========================================================================
+
+enum LoyaltyTxnType {
+  EARN
+  REDEEM
+  EXPIRE
+  ADJUST
+  REVERSAL
+}
+
+model LoyaltyProgramme {
+  id                   String   @id @default(uuid()) @db.Uuid
+  tenantId             String   @unique @map("tenant_id") @db.Uuid
+  enabled              Boolean  @default(true)
+  name                 String
+  earnPointsPer1000    Int      @default(10) @map("earn_points_per_1000")
+  pointValueKobo       Int      @default(100) @map("point_value_kobo")
+  minRedeemPoints      Int      @default(1000) @map("min_redeem_points")
+  maxRedeemBps         Int      @default(5000) @map("max_redeem_bps")
+  expiryMonths         Int      @default(24) @map("expiry_months")
+  adjustmentFlagPoints Int      @default(5000) @map("adjustment_flag_points")
+  enrolOnline          Boolean  @default(true) @map("enrol_online")
+  memberNoPrefix       String   @default("MBR") @map("member_no_prefix")
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("loyalty_programmes")
+}
+
+model LoyaltyTier {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  name      String
+  minNights Int      @default(0) @map("min_nights")
+  bonusBps  Int      @default(0) @map("bonus_bps")
+  perks     String[] @default([])
+  color     String   @default("palm")
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant  Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  members LoyaltyMember[]
+
+  @@unique([tenantId, name])
+  @@map("loyalty_tiers")
+}
+
+model LoyaltyMember {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @map("tenant_id") @db.Uuid
+  guestId        String   @unique @map("guest_id") @db.Uuid
+  memberNo       String   @map("member_no")
+  tierId         String?  @map("tier_id") @db.Uuid
+  points         Int      @default(0)
+  lifetimePoints Int      @default(0) @map("lifetime_points")
+  nights12m      Int      @default(0) @map("nights_12m")
+  status         String   @default("ACTIVE")
+  enrolledVia    String   @default("DESK") @map("enrolled_via")
+  enrolledAt     DateTime @default(now()) @map("enrolled_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  guest        Guest                @relation(fields: [guestId], references: [id], onDelete: Cascade)
+  tier         LoyaltyTier?         @relation(fields: [tierId], references: [id], onDelete: SetNull)
+  transactions LoyaltyTransaction[]
+
+  @@unique([tenantId, memberNo])
+  @@index([tenantId, tierId])
+  @@map("loyalty_members")
+}
+
+model LoyaltyTransaction {
+  id             String         @id @default(uuid()) @db.Uuid
+  tenantId       String         @map("tenant_id") @db.Uuid
+  memberId       String         @map("member_id") @db.Uuid
+  type           LoyaltyTxnType
+  points         Int
+  balanceAfter   Int            @map("balance_after")
+  description    String
+  reason         String?
+  propertyId     String?        @map("property_id") @db.Uuid
+  reservationId  String?        @map("reservation_id") @db.Uuid
+  folioId        String?        @map("folio_id") @db.Uuid
+  folioEntryId   String?        @map("folio_entry_id") @db.Uuid
+  /// EARN lots: when they expire and how much is left (FIFO).
+  expiresAt      DateTime?      @map("expires_at") @db.Timestamptz(3)
+  remaining      Int            @default(0)
+  /// Idempotency of automatic postings, e.g. "EARN:<reservationId>".
+  dedupeKey      String?        @unique @map("dedupe_key")
+  createdById    String?        @map("created_by_id") @db.Uuid
+  createdByName  String?        @map("created_by_name")
+  approvedById   String?        @map("approved_by_id") @db.Uuid
+  approvedByName String?        @map("approved_by_name")
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  member LoyaltyMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([memberId, createdAt])
+  @@index([type, expiresAt])
+  @@map("loyalty_transactions")
+}
+
+model LoyaltyChallenge {
+  id         String    @id @default(uuid()) @db.Uuid
+  tenantId   String    @map("tenant_id") @db.Uuid
+  memberId   String    @map("member_id") @db.Uuid
+  folioId    String    @map("folio_id") @db.Uuid
+  points     Int
+  codeHash   String    @map("code_hash")
+  attempts   Int       @default(0)
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(3)
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([memberId])
+  @@map("loyalty_challenges")
+}
+
+// ===========================================================================
+// M5: custom domains
+// ===========================================================================
+
+enum DomainStatus {
+  PENDING
+  VERIFIED
+  FAILED
+}
+
+model CustomDomain {
+  id            String       @id @default(uuid()) @db.Uuid
+  tenantId      String       @map("tenant_id") @db.Uuid
+  propertyId    String       @map("property_id") @db.Uuid
+  domain        String       @unique
+  status        DomainStatus @default(PENDING)
+  token         String
+  failures      String[]     @default([])
+  txtOk         Boolean?     @map("txt_ok")
+  cnameOk       Boolean?     @map("cname_ok")
+  checkCount    Int          @default(0) @map("check_count")
+  lastCheckedAt DateTime?    @map("last_checked_at") @db.Timestamptz(3)
+  verifiedAt    DateTime?    @map("verified_at") @db.Timestamptz(3)
+  failingSince  DateTime?    @map("failing_since") @db.Timestamptz(3)
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([propertyId])
+  @@index([status])
+  @@map("custom_domains")
 }

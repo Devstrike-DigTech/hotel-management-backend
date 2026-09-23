@@ -16,6 +16,8 @@ export class AuditQueryDto extends PaginationQueryDto {
   @IsOptional() @IsString() @MaxLength(80) action?: string;
   @IsOptional() @IsUUID() actorId?: string;
   @IsOptional() @IsString() @MaxLength(60) entityType?: string;
+  /** M5 */
+  @IsOptional() @IsUUID() propertyId?: string;
 }
 
 export class AuditExportDto {

@@ -250,20 +250,34 @@ export class CorporateService {
   async chargeCheckout(
     tx: Tx,
     tenantId: string,
-    input: { account: CorporateAccount; reservation: { id: string; code: string; guestName: string }; folioId: string; folioEntryId: string; amountKobo: number; actor: { id: string; fullName: string } | null; roomLabel: string },
+    input: {
+      account: CorporateAccount;
+      reservation: { id: string; code: string; guestName: string } | null;
+      folioId: string;
+      folioEntryId: string;
+      amountKobo: number;
+      actor: { id: string; fullName: string } | null;
+      roomLabel: string;
+      /** M5: POS charges describe themselves; stays default to "Accommodation, ...". */
+      description?: string;
+      guestName?: string | null;
+      propertyId?: string | null;
+    },
   ) {
+    const folio = await tx.folio.findFirst({ where: { id: input.folioId }, select: { propertyId: true } });
     const charge = await tx.cityLedgerCharge.create({
       data: {
         tenantId,
+        propertyId: input.propertyId ?? folio?.propertyId ?? null,
         accountId: input.account.id,
-        reservationId: input.reservation.id,
+        reservationId: input.reservation?.id ?? null,
         folioId: input.folioId,
         folioEntryId: input.folioEntryId,
         date: dbDate(lagosDate()),
-        description: `Accommodation, ${input.roomLabel} (${input.reservation.code})`,
+        description: input.description ?? `Accommodation, ${input.roomLabel} (${input.reservation?.code ?? ''})`,
         amountKobo: BigInt(input.amountKobo),
-        guestName: input.reservation.guestName,
-        reservationCode: input.reservation.code,
+        guestName: input.guestName ?? input.reservation?.guestName ?? null,
+        reservationCode: input.reservation?.code ?? null,
         createdById: input.actor?.id ?? null,
       },
     });
@@ -274,9 +288,10 @@ export class CorporateService {
     return { charge: this.chargeView(charge, invoice?.number ?? null), invoice: invoice ? invoiceListView({ ...invoice, account: { id: input.account.id, name: input.account.name } }) : null };
   }
 
-  private chargeView(c: { id: string; accountId: string; reservationId: string | null; reservationCode: string | null; guestName: string | null; folioId: string | null; date: Date; description: string; amountKobo: bigint; invoiceId: string | null; createdAt: Date }, invoiceNumber: string | null) {
+  private chargeView(c: { id: string; propertyId?: string | null; accountId: string; reservationId: string | null; reservationCode: string | null; guestName: string | null; folioId: string | null; date: Date; description: string; amountKobo: bigint; invoiceId: string | null; createdAt: Date }, invoiceNumber: string | null) {
     return {
       id: c.id,
+      propertyId: c.propertyId ?? null,
       accountId: c.accountId,
       reservationId: c.reservationId,
       reservationCode: c.reservationCode,

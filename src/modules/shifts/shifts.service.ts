@@ -69,6 +69,7 @@ export class ShiftsService {
     const voided = new Set(rows?.filter((r) => r.type === 'VOID').map((r) => r.refEntryId) ?? []);
     const base = {
       id: s.id,
+      propertyId: s.propertyId,
       status: s.status,
       user: { id: s.userId, fullName: s.userName },
       openedAt: s.openedAt.toISOString(),

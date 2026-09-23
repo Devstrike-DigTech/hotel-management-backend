@@ -4,6 +4,7 @@ import type { AuthUser, PlatformPrincipal } from '../../common/auth-types.js';
 import { DbService, type Tx } from '../../prisma/db.service.js';
 import { addDays, diffDays, isIsoDate, lagosStartOfDay } from '../../common/time/lagos.js';
 import { Err } from '../ops/ops.helpers.js';
+import { currentPropertyId } from '../../common/property-scope.js';
 
 export type AuditActor =
   | { kind: 'user'; id: string; name: string }
@@ -19,6 +20,8 @@ export interface AuditEntry {
   entityId?: string | null;
   metadata?: Record<string, unknown>;
   ip?: string | null;
+  /** M5: defaults to the current property scope of this tenant. */
+  propertyId?: string | null;
 }
 
 export interface AuditItem {
@@ -29,6 +32,8 @@ export interface AuditItem {
   actor: { id: string; fullName: string } | null;
   metadata: unknown;
   createdAt: string;
+  /** M5 */
+  property: { id: string; name: string; slug: string } | null;
 }
 
 export const userActor = (u: AuthUser): AuditActor => ({
@@ -51,6 +56,8 @@ export interface AuditFilter {
   action?: string;
   actorId?: string;
   entityType?: string;
+  /** M5 */
+  propertyId?: string;
 }
 
 /** CSV cell, quoted when needed and protected against spreadsheet formula injection. */
@@ -59,9 +66,10 @@ export function csvCell(v: string): string {
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-export function toAuditItem(log: AuditLog): AuditItem {
+export function toAuditItem(log: AuditLog, properties?: Map<string, { id: string; name: string; slug: string }>): AuditItem {
   const actorId = log.actorUserId ?? log.actorPlatformUserId;
   return {
+    property: log.propertyId ? (properties?.get(log.propertyId) ?? { id: log.propertyId, name: '', slug: '' }) : null,
     id: log.id,
     action: log.action,
     entityType: log.entityType,
@@ -81,11 +89,17 @@ export function toAuditItem(log: AuditLog): AuditItem {
 export class AuditService {
   constructor(private readonly db: DbService) {}
 
+  private async propertyNames(tx: Tx, tenantId: string) {
+    const rows = await tx.property.findMany({ where: { tenantId }, select: { id: true, name: true, slug: true } });
+    return new Map(rows.map((r) => [r.id, r]));
+  }
+
   async record(tx: Tx, entry: AuditEntry): Promise<void> {
     const a = entry.actor;
     await tx.auditLog.create({
       data: {
         tenantId: entry.tenantId,
+        propertyId: entry.propertyId !== undefined ? entry.propertyId : entry.tenantId ? currentPropertyId(entry.tenantId) : null,
         actorUserId: a?.kind === 'user' ? a.id : null,
         actorPlatformUserId: a?.kind === 'platform' ? a.id : null,
         actorName: a?.name ?? null,
@@ -107,6 +121,7 @@ export class AuditService {
       ...(f.action && { action: { startsWith: f.action } }),
       ...(f.actorId && { actorUserId: f.actorId }),
       ...(f.entityType && { entityType: f.entityType }),
+      ...(f.propertyId && { propertyId: f.propertyId }),
     };
   }
 
@@ -120,7 +135,8 @@ export class AuditService {
         take: pageSize,
       });
       const total = await tx.auditLog.count({ where });
-      return { items: rows.map(toAuditItem), total };
+      const props = await this.propertyNames(tx, tenantId);
+      return { items: rows.map((r) => toAuditItem(r, props)), total };
     });
   }
 
@@ -166,6 +182,6 @@ export class AuditService {
       orderBy: { createdAt: 'desc' },
       take,
     });
-    return rows.map(toAuditItem);
+    return rows.map((r) => toAuditItem(r));
   }
 }

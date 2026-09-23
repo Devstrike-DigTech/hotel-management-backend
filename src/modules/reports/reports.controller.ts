@@ -1,6 +1,8 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { IsOptional, Matches } from 'class-validator';
+import { IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import { RequireFeature } from '../entitlements/entitlements.decorators.js';
+import { GroupReportsService } from './group-reports.service.js';
 import type { AuthUser } from '../../common/auth-types.js';
 import { CurrentUser, RequirePermission } from '../../common/decorators/index.js';
 import { ReportsService } from './reports.service.js';
@@ -16,12 +18,27 @@ export class RangeQueryDto {
   @Matches(DATE_RE) to!: string;
 }
 
+export class GroupQueryDto extends RangeQueryDto {
+  /** Comma-separated property ids (default: every property the user can access). */
+  @IsOptional() @IsString() @MaxLength(4000) propertyIds?: string;
+}
+
 @ApiTags('Reports')
 @ApiBearerAuth()
 @RequirePermission('reports.view')
 @Controller('reports')
 export class ReportsController {
-  constructor(private readonly reports: ReportsService) {}
+  constructor(
+    private readonly reports: ReportsService,
+    private readonly group: GroupReportsService,
+  ) {}
+
+  @Get('group')
+  @RequireFeature('multi_property')
+  @ApiOperation({ summary: 'Group report: every accessible property, consolidated and compared (M5)' })
+  groupReport(@CurrentUser() user: AuthUser, @Query() q: GroupQueryDto) {
+    return this.group.report(user, q.from, q.to, q.propertyIds);
+  }
 
   @Get('daily')
   @ApiOperation({ summary: 'Daily flash (night-audit snapshot when available, else live)' })

@@ -274,7 +274,7 @@ export class PlatformService {
         updatedAt: o.updatedAt.toISOString(),
       })),
       invoices: invoices.map(toInvoiceView),
-      recentActivity: activity.map(toAuditItem),
+      recentActivity: activity.map((r) => toAuditItem(r)),
     };
   }
 

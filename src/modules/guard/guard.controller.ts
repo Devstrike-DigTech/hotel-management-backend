@@ -35,6 +35,7 @@ type FlagRow = GuardFlag & { room: Room | null; reservation: Reservation | null 
 function toView(f: FlagRow) {
   return {
     id: f.id,
+    propertyId: f.propertyId,
     rule: f.rule,
     severity: f.severity,
     status: f.status,

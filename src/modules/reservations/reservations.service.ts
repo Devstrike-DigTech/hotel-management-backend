@@ -132,6 +132,7 @@ export class ReservationsService {
   listItem(r: ResRow, balance: number) {
     return {
       id: r.id,
+      propertyId: r.propertyId,
       code: r.code,
       status: r.status,
       stayType: r.stayType,

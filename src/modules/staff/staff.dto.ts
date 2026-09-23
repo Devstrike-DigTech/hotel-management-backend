@@ -1,5 +1,7 @@
 import { Transform } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsEmail,
   IsEnum,
@@ -41,6 +43,13 @@ export class CreateStaffDto {
 
   @IsString() @Matches(PASSWORD_RULE, { message: PASSWORD_MESSAGE })
   password!: string;
+
+  /** M5: access to every property (default) or only `propertyIds`. */
+  @IsOptional() @IsBoolean()
+  allProperties?: boolean;
+
+  @IsOptional() @IsArray() @ArrayMaxSize(200) @IsString({ each: true })
+  propertyIds?: string[];
 }
 
 export class UpdateStaffDto {
@@ -62,4 +71,10 @@ export class UpdateStaffDto {
   /** Resets the password and signs the user out everywhere. */
   @IsOptional() @IsString() @Matches(PASSWORD_RULE, { message: PASSWORD_MESSAGE })
   password?: string;
+
+  @IsOptional() @IsBoolean()
+  allProperties?: boolean;
+
+  @IsOptional() @IsArray() @ArrayMaxSize(200) @IsString({ each: true })
+  propertyIds?: string[];
 }

@@ -88,6 +88,7 @@ export class MaintenanceService {
     return {
       id: t.id,
       number: t.number,
+      propertyId: t.propertyId,
       room: t.room ? { id: t.room.id, number: t.room.number, floor: t.room.floor, status: t.room.status, roomType: { id: t.room.roomType.id, name: t.room.roomType.name } } : null,
       area: t.area,
       category: t.category,

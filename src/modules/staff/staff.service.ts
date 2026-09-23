@@ -10,10 +10,11 @@ import { permissionsFor } from '../../common/permissions/catalogue.js';
 import { RolesService, roleLabel, type ResolvedRole } from './roles.service.js';
 import type { CreateStaffDto, UpdateStaffDto } from './staff.dto.js';
 
-type StaffRow = User & { customRole?: { name: string; permissions: string[] } | null };
-const withRole = { customRole: { select: { name: true, permissions: true } } } as const;
+type StaffRow = User & { customRole?: { name: string; permissions: string[] } | null; propertyAccess?: { propertyId: string }[] };
+const withRole = { customRole: { select: { name: true, permissions: true } }, propertyAccess: { select: { propertyId: true } } } as const;
 
 export function toStaffView(u: StaffRow) {
+  const all = u.role === 'OWNER' || u.allProperties;
   return {
     id: u.id,
     fullName: u.fullName,
@@ -25,7 +26,13 @@ export function toStaffView(u: StaffRow) {
     lastLoginAt: u.lastLoginAt?.toISOString() ?? null,
     hasApprovalPin: !!u.approvalPinHash,
     createdAt: u.createdAt.toISOString(),
+    // M5
+    propertyAccess: { allProperties: all, propertyIds: all ? [] : (u.propertyAccess ?? []).map((a) => a.propertyId) },
   };
+}
+
+function escalation(missing: string[]) {
+  return new AppException(HttpStatus.FORBIDDEN, 'PERMISSION_ESCALATION', 'You cannot grant access to properties you cannot access yourself', { missing });
 }
 
 const emailTaken = () =>
@@ -61,6 +68,59 @@ export class StaffService {
       await this.entitlements.assertFeature(await this.entitlements.getEntitlements(user.tenantId, tx), 'custom_roles');
     }
     return resolved;
+  }
+
+  /**
+   * M5: validates and writes a staff member's property access. Owners
+   * always have every property. You can only grant properties you can
+   * access, and "all properties" only if you have it.
+   */
+  private async applyAccess(tx: Tx, user: AuthUser, targetId: string, targetRole: string, input: { allProperties?: boolean; propertyIds?: string[] }) {
+    if (input.allProperties === undefined && input.propertyIds === undefined) return false;
+    const all = input.allProperties ?? false;
+    if (targetRole === 'OWNER') {
+      if (!all) throw AppException.badRequest('Owners always have access to every property');
+      return false;
+    }
+    const tenantProps = (await tx.property.findMany({ where: { tenantId: user.tenantId }, select: { id: true } })).map((p) => p.id);
+    const ids = [...new Set((input.propertyIds ?? []).map((x) => x.toLowerCase()))];
+    if (!all) {
+      if (!ids.length) {
+        throw new AppException(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR, 'Choose at least one property', { fields: { propertyIds: ['Choose at least one property'] } });
+      }
+      const unknown = ids.filter((id) => !tenantProps.includes(id));
+      if (unknown.length) {
+        throw new AppException(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR, 'Unknown property', { fields: { propertyIds: ['Unknown property'] } });
+      }
+    }
+    const mine = user.propertyIds ?? tenantProps;
+    const callerAll = user.role === 'OWNER' || user.allProperties !== false;
+    if (all && !callerAll) throw escalation(['property:all']);
+    const missing = ids.filter((id) => !mine.includes(id)).map((id) => `property:${id}`);
+    if (missing.length) throw escalation(missing);
+    await tx.userPropertyAccess.deleteMany({ where: { userId: targetId } });
+    if (!all) await tx.userPropertyAccess.createMany({ data: ids.map((propertyId) => ({ tenantId: user.tenantId, userId: targetId, propertyId })) });
+    await tx.user.update({ where: { id: targetId }, data: { allProperties: all } });
+    return true;
+  }
+
+  /** PUT /staff/:id/property-access */
+  setAccess(user: AuthUser, id: string, dto: { allProperties: boolean; propertyIds?: string[] }, ip?: string) {
+    return this.db.tenant(user.tenantId, async (tx) => {
+      const target = await this.load(tx, user.tenantId, id);
+      this.roles.assertNoEscalation(user, permissionsFor(target.role, target.customRole?.permissions));
+      await this.applyAccess(tx, user, id, target.role, dto);
+      await this.audit.record(tx, {
+        tenantId: user.tenantId,
+        actor: userActor(user),
+        action: 'staff.property_access',
+        entityType: 'user',
+        entityId: id,
+        metadata: { fullName: target.fullName, allProperties: dto.allProperties, propertyIds: dto.propertyIds ?? [] },
+        ip,
+      });
+      return toStaffView(await this.load(tx, user.tenantId, id));
+    });
   }
 
   list(user: AuthUser) {
@@ -114,6 +174,9 @@ export class StaffService {
           },
           include: withRole,
         });
+        if (await this.applyAccess(tx, user, created.id, role.role, dto)) {
+          Object.assign(created, await this.load(tx, user.tenantId, created.id));
+        }
         await this.audit.record(tx, {
           tenantId: user.tenantId,
           actor: userActor(user),
@@ -184,7 +247,9 @@ export class StaffService {
         ...(dto.isActive !== undefined && { isActive: dto.isActive }),
         ...(passwordHash && { passwordHash }),
       };
-      const updated = await tx.user.update({ where: { id }, data, include: withRole });
+      await tx.user.update({ where: { id }, data });
+      await this.applyAccess(tx, user, id, next?.role ?? target.role, dto);
+      const updated = await this.load(tx, user.tenantId, id);
 
       // Sign the user out everywhere when access is reduced or reset.
       if (passwordHash || dto.isActive === false || roleChanges) {

@@ -20,7 +20,8 @@ describe('permission catalogue', () => {
     expect(desk.has('folio.void')).toBe(false);
     expect(desk.has('staff.manage')).toBe(false);
     const hk = permissionsFor('HOUSEKEEPING');
-    expect([...hk].sort()).toEqual(['housekeeping.view', 'housekeeping.work', 'maintenance.report']);
+    // M5 adds minibar consumption (charged to the room) to housekeepers.
+    expect([...hk].sort()).toEqual(['housekeeping.view', 'housekeeping.work', 'maintenance.report', 'minibar.record']);
     expect(permissionsFor('SUPERVISOR').has('housekeeping.inspect')).toBe(true);
     expect(permissionsFor('MAINTENANCE').has('maintenance.work')).toBe(true);
     expect(permissionsFor('ACCOUNTANT').has('payments.take')).toBe(false);
