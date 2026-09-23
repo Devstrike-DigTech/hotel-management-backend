@@ -9,7 +9,8 @@ export type AuditActor =
   | { kind: 'system'; name: string };
 
 export interface AuditEntry {
-  tenantId: string;
+  /** Null for platform-level events (only readable in the system context). */
+  tenantId: string | null;
   actor: AuditActor | null;
   action: string;
   entityType: string;
@@ -100,9 +101,10 @@ export class AuditService {
     });
   }
 
+  /** Latest business activity (sign-in/sign-out events are left out). */
   async recent(tx: Tx, tenantId: string, take = 5): Promise<AuditItem[]> {
     const rows = await tx.auditLog.findMany({
-      where: { tenantId },
+      where: { tenantId, NOT: { action: { startsWith: 'auth.' } } },
       orderBy: { createdAt: 'desc' },
       take,
     });
