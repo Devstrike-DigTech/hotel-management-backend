@@ -5,6 +5,8 @@ import { DbService, type Tx } from '../../prisma/db.service.js';
 import { humanDateTime, lagosDate } from '../../common/time/lagos.js';
 import { EntitlementsService } from '../entitlements/entitlements.service.js';
 import { k } from '../ops/ops.helpers.js';
+import { HousekeepingService } from '../housekeeping/housekeeping.service.js';
+import { AlertsService } from '../whatsapp/alerts.service.js';
 import {
   isDayUseOverstay,
   isLateRegistration,
@@ -43,6 +45,7 @@ export class GuardService {
   constructor(
     private readonly db: DbService,
     private readonly entitlements: EntitlementsService,
+    private readonly alerts: AlertsService,
   ) {}
 
   async features(tx: Tx, tenantId: string): Promise<string[]> {
@@ -52,12 +55,14 @@ export class GuardService {
   /** Inserts the flag unless the rule is locked or a live flag with the same key exists. Returns 1 if created. */
   async raise(tx: Tx, tenantId: string, features: readonly string[], f: RaiseFlag): Promise<number> {
     if (!ruleEnabled(f.rule, features)) return 0;
+    if (f.roomId && (f.rule === 'ROOM_STATUS_FLIP' || f.rule === 'OCCUPIED_WITHOUT_STAY')) f = await this.withHousekeeping(tx, tenantId, f);
+    const severity = f.severity ?? RULE_INFO.get(f.rule)!.defaultSeverity;
     const res = await tx.guardFlag.createMany({
       data: [
         {
           tenantId,
           rule: f.rule,
-          severity: f.severity ?? RULE_INFO.get(f.rule)!.defaultSeverity,
+          severity,
           title: f.title,
           detail: f.detail,
           dedupeKey: f.dedupeKey,
@@ -73,7 +78,31 @@ export class GuardService {
       ],
       skipDuplicates: true,
     });
+    if (res.count && severity === 'HIGH') {
+      const flag = await tx.guardFlag.findFirst({ where: { tenantId, dedupeKey: f.dedupeKey }, orderBy: { createdAt: 'desc' } });
+      if (flag) {
+        await this.alerts.queueTx(tx, tenantId, features, {
+          id: flag.id,
+          rule: flag.rule,
+          severity: flag.severity,
+          title: flag.title,
+          amountKobo: flag.amountKobo === null ? null : Number(flag.amountKobo),
+        });
+      }
+    }
     return res.count;
+  }
+
+  /** Adds the room's housekeeping timeline (last 24 hours) to the evidence and one sentence to the detail. */
+  private async withHousekeeping(tx: Tx, tenantId: string, f: RaiseFlag): Promise<RaiseFlag> {
+    const timeline = await HousekeepingService.timeline(tx, tenantId, f.roomId!);
+    const done = [...timeline].reverse().find((t) => t.doneAt);
+    const sentence = done
+      ? `Cleaned at ${humanDateTime(new Date(done.doneAt!)).split(', ').pop()}${done.by ? ` by ${done.by}` : ''}; no check-out recorded.`
+      : timeline.length
+        ? 'A housekeeping task was opened for the room in the last 24 hours, but no check-out was recorded.'
+        : 'No housekeeping activity for the room in the last 24 hours.';
+    return { ...f, detail: `${f.detail} ${sentence}`, evidence: { ...f.evidence, housekeeping: timeline } };
   }
 
   /** REPEATED_VOIDS_BY_USER check after a void by `userId`. */

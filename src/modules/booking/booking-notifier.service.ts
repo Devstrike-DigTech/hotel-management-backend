@@ -7,6 +7,7 @@ import { EntitlementsService } from '../entitlements/entitlements.service.js';
 import type { OutgoingMessage } from '../notifications/notification.service.js';
 import { renderTemplate, type BrandContext, type StayContext, type TemplateData, type TemplateName } from '../notifications/templates/templates.js';
 import { BookingViewService, type StayRow } from './booking-view.service.js';
+import { waTemplateFor } from '../whatsapp/templates.registry.js';
 
 type GuestTemplate = Extract<TemplateData, { stay: StayContext }>['template'];
 type Extra<T extends GuestTemplate> = Omit<Extract<TemplateData, { template: T }>, 'template' | 'stay'>;
@@ -95,7 +96,8 @@ export class BookingNotifier {
     }
     if (phone && !EMAIL_ONLY.includes(template)) {
       const channel = await this.phoneChannel(tx, r.tenantId);
-      out.push({ ...base, channel, to: phone, subject: null, text: rendered.sms, html: null, ...(opts.dedupe && { dedupeKey: `${template}:${r.id}:PHONE` }) });
+      const waTemplate = channel === 'WHATSAPP' ? waTemplateFor({ template, stay, ...extra } as TemplateData) : null;
+      out.push({ ...base, channel, to: phone, subject: null, text: rendered.sms, html: null, waTemplate, ...(opts.dedupe && { dedupeKey: `${template}:${r.id}:PHONE` }) });
     }
     return out;
   }
@@ -114,7 +116,14 @@ export class BookingNotifier {
     const phone = r.contactPhone ?? r.guest.phone;
     const base = { tenantId: r.tenantId, reservationId: r.id, guestAccountId: r.guestAccountId, template: 'REVIEW_REQUEST' as const, audience: 'GUEST' as const, fromName: r.source === 'BOOKING_SITE' ? r.property.name : null, meta: { reservationCode: r.code, hotelName: r.property.name } };
     if (email) return [{ ...base, channel: 'EMAIL', to: email, subject: rendered.subject, text: rendered.text, html: rendered.html, dedupeKey: `REVIEW_REQUEST:${r.id}` }];
-    if (phone) return [{ ...base, channel: await this.phoneChannel(tx, r.tenantId), to: phone, subject: null, text: rendered.sms, html: null, dedupeKey: `REVIEW_REQUEST:${r.id}` }];
+    if (phone) {
+      const channel = await this.phoneChannel(tx, r.tenantId);
+      const waTemplate =
+        channel === 'WHATSAPP'
+          ? waTemplateFor({ template: 'REVIEW_REQUEST', guestName: r.guest.fullName, hotelName: r.property.name, stayHuman: '', reviewUrl, deadlineHuman: humanDate(lagosDate(deadline)) })
+          : null;
+      return [{ ...base, channel, to: phone, subject: null, text: rendered.sms, html: null, waTemplate, dedupeKey: `REVIEW_REQUEST:${r.id}` }];
+    }
     return [];
   }
 

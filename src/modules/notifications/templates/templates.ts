@@ -14,6 +14,9 @@ export const TEMPLATES = [
   'HOTEL_NEW_BOOKING',
   'HOTEL_BOOKING_CANCELLED',
   'ORPHANED_PAYMENT_ALERT',
+  'CITY_LEDGER_REMINDER',
+  'GUARD_ALERT',
+  'WHATSAPP_REPLY',
 ] as const;
 export type TemplateName = (typeof TEMPLATES)[number];
 
@@ -65,7 +68,25 @@ export type TemplateData =
   | { template: 'PAYMENT_ORPHANED_REFUND'; stay: StayContext; amountKobo: number; reason: string }
   | { template: 'HOTEL_NEW_BOOKING'; stay: StayContext; channelLabel: string; adminUrl: string; commissionKobo: number; guestPhone: string; guestEmail: string | null }
   | { template: 'HOTEL_BOOKING_CANCELLED'; stay: StayContext; adminUrl: string; feeKobo: number; refundKobo: number; reason: string | null }
-  | { template: 'ORPHANED_PAYMENT_ALERT'; hotelName: string; code: string; reference: string; amountKobo: number; reason: string; guestName: string; guestPhone: string; refundStatus: string };
+  | { template: 'ORPHANED_PAYMENT_ALERT'; hotelName: string; code: string; reference: string; amountKobo: number; reason: string; guestName: string; guestPhone: string; refundStatus: string }
+  | {
+      template: 'CITY_LEDGER_REMINDER';
+      hotelName: string;
+      accountName: string;
+      contactName: string;
+      invoiceNumber: string;
+      issueHuman: string;
+      dueHuman: string;
+      totalKobo: number;
+      balanceKobo: number;
+      daysOverdue: number;
+      message: string | null;
+      statementUrl: string | null;
+      hotelPhone: string;
+      hotelEmail: string;
+    }
+  | { template: 'GUARD_ALERT'; hotelName: string; flags: { title: string; amountKobo: number | null }[]; adminUrl: string; urgent: boolean }
+  | { template: 'WHATSAPP_REPLY'; text: string };
 
 export interface Rendered {
   subject: string;
@@ -375,6 +396,58 @@ function build(ctx: BrandContext, d: TemplateData): { subject: string; spec: Ema
         sms: `${s.code} cancelled by ${s.guestName}. Room back on sale.`,
       };
     }
+    case 'CITY_LEDGER_REMINDER': {
+      const overdue = d.daysOverdue > 0;
+      return {
+        subject: `${overdue ? 'Overdue' : 'Statement'}: ${d.invoiceNumber} from ${d.hotelName} (${naira(d.balanceKobo)} outstanding)`,
+        spec: spec(
+          { ...ctx, hotelBranded: true },
+          `${naira(d.balanceKobo)} is outstanding on ${d.invoiceNumber}${overdue ? `, ${d.daysOverdue} days past due` : ''}.`,
+          'City ledger',
+          `Statement ${d.invoiceNumber}`,
+          [
+            { kind: 'paragraph', text: `Dear ${d.contactName || d.accountName}, this is a reminder about the account of ${d.accountName} with ${d.hotelName}.` },
+            ...(d.message ? [{ kind: 'quote' as const, text: d.message }] : []),
+            {
+              kind: 'rows',
+              rows: [
+                { label: 'Statement', value: d.invoiceNumber, mono: true },
+                { label: 'Issued', value: d.issueHuman },
+                { label: 'Due', value: d.dueHuman },
+                ...(overdue ? [{ label: 'Days overdue', value: String(d.daysOverdue), mono: true }] : []),
+              ],
+            },
+            {
+              kind: 'money',
+              rows: [
+                { label: 'Statement total', value: naira(d.totalKobo) },
+                { label: 'Outstanding', value: naira(d.balanceKobo), strong: true },
+              ],
+            },
+            ...(d.statementUrl ? [{ kind: 'button' as const, label: 'View the statement', url: d.statementUrl }] : []),
+            { kind: 'paragraph', text: `Please pay by bank transfer quoting ${d.invoiceNumber}. Questions: ${[d.hotelPhone, d.hotelEmail].filter(Boolean).join(' or ')}.`, muted: true },
+          ],
+        ),
+        sms: `${d.hotelName}: ${d.invoiceNumber} has ${nairaSms(d.balanceKobo)} outstanding${overdue ? `, ${d.daysOverdue} days overdue` : ''}. Please pay quoting ${d.invoiceNumber}.`,
+      };
+    }
+    case 'GUARD_ALERT': {
+      const top = d.flags[0];
+      const more = d.flags.length > 1 ? ` and ${d.flags.length - 1} more` : '';
+      return {
+        subject: `${d.urgent ? 'Urgent: ' : ''}Revenue Guard alert at ${d.hotelName}`,
+        spec: spec({ ...ctx, hotelBranded: false }, `${top?.title ?? 'A high-risk flag'}${more}.`, 'Revenue Guard', `${d.flags.length} high-risk flag${d.flags.length === 1 ? '' : 's'}`, [
+          {
+            kind: 'rows',
+            rows: d.flags.slice(0, 5).map((f) => ({ label: f.title, value: f.amountKobo ? naira(f.amountKobo) : '', mono: true })),
+          },
+          { kind: 'button', label: 'Open Revenue Guard', url: d.adminUrl },
+        ]),
+        sms: `${d.hotelName}: ${d.flags.length} high-risk flag${d.flags.length === 1 ? '' : 's'}. ${top?.title ?? ''}${more}. Reply 1 to acknowledge.`,
+      };
+    }
+    case 'WHATSAPP_REPLY':
+      return { subject: 'WhatsApp reply', spec: spec(ctx, d.text, 'Reply', 'Reply', [{ kind: 'paragraph', text: d.text }]), sms: d.text };
     case 'ORPHANED_PAYMENT_ALERT':
       return {
         subject: `Orphaned payment ${d.reference} (${d.hotelName}): refund ${d.refundStatus.toLowerCase()}`,

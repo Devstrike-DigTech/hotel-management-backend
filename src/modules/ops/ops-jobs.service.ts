@@ -2,6 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { DbService } from '../../prisma/db.service.js';
 import { EntitlementsService } from '../entitlements/entitlements.service.js';
 import { GuardService } from '../guard/guard.service.js';
+import { CorporateService } from '../corporate/corporate.service.js';
+import { HousekeepingService } from '../housekeeping/housekeeping.service.js';
+import { MaintenanceService } from '../maintenance/maintenance.service.js';
+import { AlertsService } from '../whatsapp/alerts.service.js';
 
 /** Cross-tenant housekeeping for the scheduler: guard sweep and key expiry. */
 @Injectable()
@@ -12,7 +16,64 @@ export class OpsJobsService {
     private readonly db: DbService,
     private readonly guard: GuardService,
     private readonly entitlements: EntitlementsService,
+    private readonly housekeeping: HousekeepingService,
+    private readonly maintenance: MaintenanceService,
+    private readonly corporate: CorporateService,
+    private readonly alerts: AlertsService,
   ) {}
+
+  /** Runs `fn` for every active tenant entitled to `feature`, isolating failures. */
+  private async eachTenant(job: string, feature: string | null, fn: (tenantId: string) => Promise<number>) {
+    const tenants = await this.db.system((tx) =>
+      tx.tenant.findMany({ where: { subscription: { status: { not: 'SUSPENDED' } } }, select: { id: true } }),
+    );
+    let total = 0;
+    for (const t of tenants) {
+      try {
+        if (feature) {
+          const ent = await this.entitlements.getEntitlements(t.id);
+          if (!ent.features.includes(feature)) continue;
+        }
+        total += await fn(t.id);
+      } catch (e) {
+        this.logger.error(`${job} failed for ${t.id}: ${(e as Error).message}`);
+      }
+    }
+    return { tenants: tenants.length, total };
+  }
+
+  /** 07:00 Lagos: stayover cleaning tasks for occupied rooms. */
+  stayoverAll() {
+    return this.eachTenant('Stayover tasks', 'housekeeping', (id) => this.housekeeping.runStayover(id));
+  }
+
+  /** 06:00 Lagos: tickets from preventive maintenance schedules that are due. */
+  maintenanceSchedulesAll(now = new Date()) {
+    return this.eachTenant('Maintenance schedules', 'maintenance', (id) => this.maintenance.runSchedules(id, now));
+  }
+
+  /** Hourly: room blocks that start or end move rooms in and out of OUT_OF_ORDER. */
+  roomBlocksAll() {
+    return this.eachTenant('Room blocks', null, async (id) => {
+      const r = await this.maintenance.applyBlocks(id);
+      return r.started + r.ended;
+    });
+  }
+
+  /** 1st of the month 06:00 Lagos: statements for monthly-billed corporate accounts. */
+  cityLedgerStatementsAll() {
+    return this.eachTenant('City ledger statements', 'promotions', (id) => this.corporate.monthlyStatements(id));
+  }
+
+  /** 09:00 Lagos: overdue city ledger reminders (1, 15 and 30 days past due). */
+  cityLedgerRemindersAll() {
+    return this.eachTenant('City ledger reminders', 'promotions', (id) => this.corporate.overdueReminders(id));
+  }
+
+  /** Every minute: owner alerts whose debounce or quiet hours have passed. */
+  guardAlertsDue(now = new Date()) {
+    return this.alerts.processDue(now);
+  }
 
   async guardSweepAll(now = new Date()) {
     const tenants = await this.db.system((tx) =>

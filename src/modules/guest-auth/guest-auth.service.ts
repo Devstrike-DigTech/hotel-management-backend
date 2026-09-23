@@ -1,4 +1,5 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { waTemplateFor } from '../whatsapp/templates.registry.js';
 import { JwtService } from '@nestjs/jwt';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import type { GuestAccount } from '../../generated/prisma/client.js';
@@ -115,6 +116,7 @@ export class GuestAuthService {
       html: null,
       redactedText: rendered.sms.replace(code, '••••••'),
       meta: { otpCode: code },
+      waTemplate: channel === 'WHATSAPP' ? waTemplateFor({ template: 'OTP', code, minutes: OTP_TTL_MS / 60_000 }) : null,
     });
     return { challengeId: id, channel, maskedPhone: maskedPhone(phone), expiresAt: expiresAt.toISOString(), resendAfterSec: OTP_RESEND_MS / 1000, codeLength: OTP_LENGTH };
   }

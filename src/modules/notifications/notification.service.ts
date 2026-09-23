@@ -8,6 +8,7 @@ import { JobsBridge } from '../infra/jobs-bridge.js';
 import { DevOutboxService } from './dev-outbox.service.js';
 import { pickProviders, type ChannelProvider } from './providers.js';
 import type { TemplateName } from './templates/templates.js';
+import type { WaTemplateRef } from '../whatsapp/templates.registry.js';
 
 export interface OutgoingMessage {
   tenantId: string | null;
@@ -24,6 +25,8 @@ export interface OutgoingMessage {
   /** Unique per logical message (e.g. PRE_ARRIVAL:<reservation>:EMAIL): a second one is skipped. */
   dedupeKey?: string;
   meta?: Record<string, unknown>;
+  /** WhatsApp: the approved template to use when the recipient has not written in the last 24 hours. */
+  waTemplate?: WaTemplateRef | null;
 }
 
 export const NOTIFY_JOB = 'notify';
@@ -75,6 +78,7 @@ export class NotificationService {
       status: 'QUEUED' as const,
       provider: this.providers[m.channel].name,
       dedupeKey: m.dedupeKey ?? null,
+      waTemplate: m.channel === 'WHATSAPP' && m.waTemplate ? (m.waTemplate as unknown as Prisma.InputJsonValue) : undefined,
     }));
     await tx.notificationLog.createMany({ data: rows, skipDuplicates: true });
     const inserted = await tx.notificationLog.findMany({ where: { id: { in: rows.map((r) => r.id) } }, select: { id: true } });
@@ -123,6 +127,7 @@ export class NotificationService {
     if (!log || log.status === 'SENT' || log.status === 'OUTBOX') return;
     const provider = this.providers[log.channel];
     try {
+      const wa = log.channel === 'WHATSAPP' && log.waTemplate && !(await this.inServiceWindow(log.recipient)) ? (log.waTemplate as unknown as WaTemplateRef) : null;
       const res = await provider.send({
         to: log.recipient,
         subject: log.subject,
@@ -131,6 +136,7 @@ export class NotificationService {
         fromName: opts.fromName,
         template: log.template,
         meta: { ...opts.meta, notificationId: id },
+        waTemplate: wa,
       });
       await this.db.system((tx) =>
         tx.notificationLog.update({
@@ -176,7 +182,8 @@ export class NotificationService {
       }),
     );
     try {
-      const res = await provider.send({ to: m.to, subject: m.subject, text: m.text, html: m.html, template: m.template, meta: { ...m.meta, notificationId: logId } });
+      const wa = m.channel === 'WHATSAPP' && m.waTemplate && !(await this.inServiceWindow(m.to)) ? m.waTemplate : null;
+      const res = await provider.send({ to: m.to, subject: m.subject, text: m.text, html: m.html, template: m.template, meta: { ...m.meta, notificationId: logId }, waTemplate: wa });
       await this.db.system((tx) =>
         tx.notificationLog.update({
           where: { id: logId },
@@ -191,6 +198,17 @@ export class NotificationService {
       );
       return { ok: false, logId };
     }
+  }
+
+  /**
+   * True when the recipient wrote to our WhatsApp number in the last 24 hours
+   * (free-form text is allowed); otherwise only approved templates deliver.
+   */
+  async inServiceWindow(phone: string, now = new Date()): Promise<boolean> {
+    const since = new Date(now.getTime() - 24 * 3_600_000);
+    const digits = phone.replace(/\D/g, '');
+    const n = await this.db.system((tx) => tx.whatsAppInbound.count({ where: { fromPhone: { in: [phone, `+${digits}`, digits] }, createdAt: { gte: since } } }));
+    return n > 0;
   }
 
   get appName(): string {

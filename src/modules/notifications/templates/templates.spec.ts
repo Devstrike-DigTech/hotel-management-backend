@@ -50,6 +50,24 @@ const samples: TemplateData[] = [
   { template: 'HOTEL_NEW_BOOKING', stay, channelLabel: 'Marketplace', adminUrl: 'https://admin/reservations/1', commissionKobo: 1_462_000, guestPhone: '+2348030000001', guestEmail: 'ada@example.ng' },
   { template: 'HOTEL_BOOKING_CANCELLED', stay, adminUrl: 'https://admin/reservations/1', feeKobo: 0, refundKobo: 18_275_000, reason: 'Plans changed' },
   { template: 'ORPHANED_PAYMENT_ALERT', hotelName: 'The Palmwine House', code: 'PWH-7K3Q', reference: 'BKG_1', amountKobo: 18_275_000, reason: 'Late payment.', guestName: 'Adaeze Okafor', guestPhone: '+234803•••0001', refundStatus: 'PENDING' },
+  {
+    template: 'CITY_LEDGER_REMINDER',
+    hotelName: 'The Palmwine House',
+    accountName: 'Deltaline Oilfield Services Ltd',
+    contactName: 'Mrs Ifeoma Nwachukwu',
+    invoiceNumber: 'CL-2026-000004',
+    issueHuman: 'Mon 3 Aug 2026',
+    dueHuman: 'Wed 2 Sep 2026',
+    totalKobo: 184_000_000,
+    balanceKobo: 84_000_000,
+    daysOverdue: 21,
+    message: null,
+    statementUrl: 'https://admin.hotelos.ng/share/x',
+    hotelPhone: '+2348031234567',
+    hotelEmail: 'stay@palmwine.ng',
+  },
+  { template: 'GUARD_ALERT', hotelName: 'The Palmwine House', flags: [{ title: 'Room 204 occupied with no stay', amountKobo: null }], adminUrl: 'https://admin.hotelos.ng/guard', urgent: true },
+  { template: 'WHATSAPP_REPLY', text: 'Acknowledged 2 alerts for The Palmwine House.' },
 ];
 
 // Emoji and pictographs (the brand forbids them in every channel).

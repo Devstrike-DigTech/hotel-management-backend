@@ -28,6 +28,18 @@ export class OperationsProcessor extends WorkerHost {
         return this.ops.guardSweepAll();
       case OPS_JOBS.idempotencyPurge.name:
         return this.ops.purgeIdempotencyKeys();
+      case OPS_JOBS.stayover.name:
+        return this.ops.stayoverAll();
+      case OPS_JOBS.maintenanceSchedules.name:
+        return this.ops.maintenanceSchedulesAll();
+      case OPS_JOBS.roomBlocks.name:
+        return this.ops.roomBlocksAll();
+      case OPS_JOBS.cityLedgerStatements.name:
+        return this.ops.cityLedgerStatementsAll();
+      case OPS_JOBS.cityLedgerReminders.name:
+        return this.ops.cityLedgerRemindersAll();
+      case OPS_JOBS.guardAlerts.name:
+        return this.ops.guardAlertsDue();
       default:
         this.logger.warn(`Unknown job ${job.name}`);
         return undefined;
@@ -50,6 +62,6 @@ export class OperationsScheduler implements OnApplicationBootstrap {
         { name: j.name, opts: { removeOnComplete: 50, removeOnFail: 100, attempts: 2, backoff: { type: 'exponential', delay: 60_000 } } },
       );
     }
-    this.logger.log('Scheduled night audit 02:00, owner digest 23:00, guard sweep hourly (Africa/Lagos)');
+    this.logger.log('Scheduled night audit 02:00, owner digest 23:00, guard sweep hourly, stayover 07:00, maintenance 06:00, room blocks hourly, guard alerts every minute, city ledger statements (1st) and reminders 09:00 (Africa/Lagos)');
   }
 }

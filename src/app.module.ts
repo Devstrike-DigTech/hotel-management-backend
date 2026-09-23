@@ -3,7 +3,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthGuard } from './common/guards/auth.guard.js';
-import { RolesGuard } from './common/guards/roles.guard.js';
+import { PermissionGuard } from './common/guards/permission.guard.js';
 import { AppConfigModule } from './config/config.module.js';
 import { AppConfigService } from './config/app-config.service.js';
 import { AuditModule } from './modules/audit/audit.module.js';
@@ -26,6 +26,10 @@ import { GuestSideModule } from './modules/guest-side.module.js';
 import { OperationsModule } from './modules/operations.module.js';
 import { PlatformModule } from './modules/platform/platform.module.js';
 import { PropertyModule } from './modules/property/property.module.js';
+import { RatesModule } from './modules/rates/rates.module.js';
+import { CorporateModule } from './modules/corporate/corporate.module.js';
+import { MaintenanceModule } from './modules/maintenance/maintenance.module.js';
+import { WhatsAppModule } from './modules/whatsapp/whatsapp.module.js';
 import { StaffModule } from './modules/staff/staff.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 
@@ -57,6 +61,10 @@ function jobsEnabled(): boolean {
     DashboardModule,
     PropertyModule,
     StaffModule,
+    RatesModule,
+    CorporateModule,
+    MaintenanceModule,
+    WhatsAppModule,
     OperationsModule,
     GuestSideModule,
     BillingModule,
@@ -67,10 +75,11 @@ function jobsEnabled(): boolean {
     ...(jobsEnabled() ? [JobsModule] : []),
   ],
   providers: [
-    // Order matters: authenticate, then authorise by role, then block writes
-    // on read-only subscriptions, then check features and limits.
+    // Order matters: authenticate, then authorise by permission (re-reading
+    // the staff member's role), then block writes on read-only
+    // subscriptions, then check features and limits.
     { provide: APP_GUARD, useClass: AuthGuard },
-    { provide: APP_GUARD, useClass: RolesGuard },
+    { provide: APP_GUARD, useClass: PermissionGuard },
     { provide: APP_GUARD, useExisting: SubscriptionGuard },
     { provide: APP_GUARD, useExisting: FeatureGuard },
     { provide: APP_GUARD, useExisting: LimitGuard },

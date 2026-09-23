@@ -12,6 +12,12 @@ export const OPS_JOBS = {
   ownerDigest: { name: 'owner-digest', scheduler: 'owner-digest-daily', cron: '0 23 * * *' },
   guardSweep: { name: 'guard-sweep', scheduler: 'guard-sweep-hourly', cron: '5 * * * *' },
   idempotencyPurge: { name: 'idempotency-purge', scheduler: 'idempotency-purge-hourly', cron: '35 * * * *' },
+  stayover: { name: 'housekeeping-stayover', scheduler: 'housekeeping-stayover-daily', cron: '0 7 * * *' },
+  maintenanceSchedules: { name: 'maintenance-schedules', scheduler: 'maintenance-schedules-daily', cron: '0 6 * * *' },
+  roomBlocks: { name: 'room-blocks', scheduler: 'room-blocks-hourly', cron: '1 * * * *' },
+  cityLedgerStatements: { name: 'city-ledger-statements', scheduler: 'city-ledger-statements-monthly', cron: '0 6 1 * *' },
+  cityLedgerReminders: { name: 'city-ledger-reminders', scheduler: 'city-ledger-reminders-daily', cron: '0 9 * * *' },
+  guardAlerts: { name: 'guard-alerts', scheduler: 'guard-alerts-minutely', cron: '* * * * *' },
 } as const;
 
 /** ioredis connection options from a redis:// URL. */

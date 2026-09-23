@@ -13,6 +13,8 @@ export interface ProviderMessage {
   fromName?: string | null;
   template: string;
   meta?: Record<string, unknown>;
+  /** WhatsApp: send this approved template (outside the 24-hour window) instead of free-form text. */
+  waTemplate?: { name: string; language: string; params: string[] } | null;
 }
 
 export interface SendResult {
@@ -121,14 +123,22 @@ export class WhatsAppProvider implements ChannelProvider {
 
   async send(m: ProviderMessage): Promise<SendResult> {
     const base = this.config.get('WHATSAPP_API_BASE_URL').replace(/\/$/, '');
-    const res = await postJson(
-      `${base}/${this.config.get('WHATSAPP_PHONE_ID')}/messages`,
-      { messaging_product: 'whatsapp', to: m.to.replace(/^\+/, ''), type: 'text', text: { preview_url: true, body: m.text } },
-      { Authorization: `Bearer ${this.config.get('WHATSAPP_TOKEN')}` },
-    );
+    const to = m.to.replace(/^\+/, '');
+    const payload = m.waTemplate
+      ? { messaging_product: 'whatsapp', to, type: 'template', template: whatsappTemplatePayload(m.waTemplate) }
+      : { messaging_product: 'whatsapp', to, type: 'text', text: { preview_url: true, body: m.text } };
+    const res = await postJson(`${base}/${this.config.get('WHATSAPP_PHONE_ID')}/messages`, payload, { Authorization: `Bearer ${this.config.get('WHATSAPP_TOKEN')}` });
     const messages = res.messages as { id?: string }[] | undefined;
     return { providerMessageId: messages?.[0]?.id ?? null };
   }
+}
+
+/** Cloud API `template` object: body parameters in order (plus the code button of an OTP template). */
+export function whatsappTemplatePayload(t: { name: string; language: string; params: string[] }) {
+  const body = { type: 'body', parameters: t.params.map((text) => ({ type: 'text', text })) };
+  const components: Record<string, unknown>[] = [body];
+  if (t.name === 'otp_code') components.push({ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: t.params[0] }] });
+  return { name: t.name, language: { code: t.language }, components };
 }
 
 /** Development: nothing leaves the machine; the message lands in the dev outbox. */
@@ -149,7 +159,7 @@ export class OutboxProvider implements ChannelProvider {
       subject: m.subject,
       text: m.text,
       html: m.html,
-      meta: m.meta ?? {},
+      meta: { ...m.meta, ...(m.waTemplate && { waTemplate: m.waTemplate.name, waParams: m.waTemplate.params }) },
     });
     const otp = typeof m.meta?.otpCode === 'string' ? ` code=${m.meta.otpCode}` : '';
     this.logger.log(`${this.channel} ${m.template} to ${m.to}${otp}${m.subject ? ` "${m.subject}"` : ''}`);

@@ -147,12 +147,12 @@ export class DigestService {
   }
 
   /** Composes, delivers through the provider and stores the digest. */
-  async deliver(tenantId: string, businessDate: string, trigger: JobTrigger) {
+  async deliver(tenantId: string, businessDate: string, trigger: JobTrigger, recipientsOverride?: string[]) {
     const { data, body, recipients } = await this.db.tenant(tenantId, async (tx) => {
       const s = await this.settingsRow(tx, tenantId);
-      return { ...(await this.compose(tx, tenantId, businessDate)), recipients: s.recipients };
+      return { ...(await this.compose(tx, tenantId, businessDate)), recipients: recipientsOverride ?? s.recipients };
     });
-    const result = await this.provider.send(recipients, body).catch((e: Error) => ({ status: 'FAILED' as const, error: e.message }));
+    const result = await this.provider.send(recipients, body, data).catch((e: Error) => ({ status: 'FAILED' as const, error: e.message }));
     const row = await this.db.tenant(tenantId, (tx) =>
       tx.ownerDigest.create({
         data: {
