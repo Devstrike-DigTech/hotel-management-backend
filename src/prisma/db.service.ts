@@ -1,5 +1,8 @@
 import { Injectable } from '@nestjs/common';
+import { createHmac } from 'node:crypto';
 import type { Prisma } from '../generated/prisma/client.js';
+import { AppConfigService } from '../config/app-config.service.js';
+import { PlatformPrismaService } from './platform-prisma.service.js';
 import { PrismaService } from './prisma.service.js';
 
 /** The client handed to callbacks: a Prisma interactive transaction. */
@@ -8,50 +11,63 @@ export type Tx = Prisma.TransactionClient;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const TX_OPTIONS = { maxWait: 5_000, timeout: 15_000 } as const;
+const TX_OPTIONS = { maxWait: 10_000, timeout: 30_000 } as const;
+
+/** hex(HMAC-SHA256(secret, payload)); the database recomputes the same value. */
+export function signContext(secret: string, payload: string): string {
+  return createHmac('sha256', secret).update(payload, 'utf8').digest('hex');
+}
 
 /**
  * Entry point for every database access that touches RLS-protected tables.
  *
- * Each helper opens an interactive transaction on the `hotel_app` connection
- * and, as its first statement, sets a *transaction-local* GUC with
- * `set_config(name, value, true)`. The policies installed by the
- * `rls_grants_audit` migration read those GUCs. Because the setting is local
- * to the transaction it is discarded on COMMIT/ROLLBACK and can never leak to
- * another request that later reuses the pooled connection.
- *
- * - `tenant(tenantId, fn)`: normal hotel work. Only rows whose `tenant_id`
- *   equals `tenantId` are visible or writable.
- * - `public(fn)`: anonymous marketplace reads. SELECT-only, limited to hotel,
- *   room type, room and subscription-status rows.
- * - `system(fn)`: cross-tenant access. Reserved for the platform console,
- *   Paystack webhooks and background jobs. Grep for `.system(` to audit use.
+ * - `tenant(tenantId, fn)`: normal hotel work on the `hotel_app` connection.
+ *   The first statement of the transaction sets, transaction-locally,
+ *   `app.tenant_id` and `app.context_sig` = HMAC(DB_CONTEXT_SECRET,
+ *   'tenant:<id>'). The policies accept the tenant id only when the signature
+ *   verifies against the key in `app_private`, which hotel_app cannot read,
+ *   so SQL running as hotel_app cannot switch to another tenant by setting a
+ *   GUC.
+ * - `public(fn)`: anonymous marketplace reads (signed 'public' context);
+ *   SELECT-only on hotel, room type, room and subscription-status rows.
+ * - `system(fn)`: cross-tenant work on the separate `hotel_platform`
+ *   connection (policies granted TO hotel_platform). Reserved for the
+ *   platform console, Paystack webhooks and scheduled jobs that enumerate
+ *   tenants. Grep for `.system(` to audit use.
  */
 @Injectable()
 export class DbService {
-  constructor(readonly prisma: PrismaService) {}
+  private readonly secret: string;
+
+  constructor(
+    readonly prisma: PrismaService,
+    private readonly platform: PlatformPrismaService,
+    config: AppConfigService,
+  ) {
+    this.secret = config.get('DB_CONTEXT_SECRET');
+  }
 
   tenant<T>(tenantId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
     if (!UUID_RE.test(tenantId)) {
       throw new Error('DbService.tenant called without a valid tenant id');
     }
+    const id = tenantId.toLowerCase();
+    const sig = signContext(this.secret, `tenant:${id}`);
     return this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT set_config('app.tenant_id', ${tenantId}, true), set_config('app.context', 'tenant', true)`;
+      await tx.$executeRaw`SELECT set_config('app.tenant_id', ${id}, true), set_config('app.context_sig', ${sig}, true)`;
       return fn(tx);
     }, TX_OPTIONS);
   }
 
   public<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
+    const sig = signContext(this.secret, 'public');
     return this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT set_config('app.context', 'public', true)`;
+      await tx.$executeRaw`SELECT set_config('app.context', 'public', true), set_config('app.context_sig', ${sig}, true)`;
       return fn(tx);
     }, TX_OPTIONS);
   }
 
   system<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
-    return this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT set_config('app.context', 'system', true)`;
-      return fn(tx);
-    }, TX_OPTIONS);
+    return this.platform.$transaction((tx) => fn(tx), TX_OPTIONS);
   }
 }

@@ -3,6 +3,8 @@ import request from 'supertest';
 import {
   API,
   appRoleClient,
+  setSignedPublic,
+  setSignedTenant,
   createApp,
   createRoomType,
   ownerClient,
@@ -94,7 +96,7 @@ describe('Tenant isolation (RLS)', () => {
     async function inTenant<T>(tenantId: string, fn: () => Promise<T>): Promise<T> {
       await client.query('BEGIN');
       try {
-        await client.query(`SELECT set_config('app.tenant_id', $1, true)`, [tenantId]);
+        await setSignedTenant(client, tenantId);
         return await fn();
       } finally {
         await client.query('ROLLBACK');
@@ -145,7 +147,7 @@ describe('Tenant isolation (RLS)', () => {
     it('the public context can read hotels but never staff or tokens', async () => {
       await client.query('BEGIN');
       try {
-        await client.query(`SELECT set_config('app.context', 'public', true)`);
+        await setSignedPublic(client);
         const props = await client.query('SELECT count(*)::int AS n FROM properties');
         const users = await client.query('SELECT count(*)::int AS n FROM users');
         const tokens = await client.query('SELECT count(*)::int AS n FROM refresh_tokens');
@@ -177,7 +179,7 @@ describe('Tenant isolation (RLS)', () => {
       await c.connect();
       try {
         await c.query('BEGIN');
-        await c.query(`SELECT set_config('app.tenant_id', $1, true)`, [a.tenantId]);
+        await setSignedTenant(c, a.tenantId);
         await expect(c.query(`DELETE FROM audit_logs`)).rejects.toThrow(/permission denied/);
       } finally {
         await c.query('ROLLBACK');

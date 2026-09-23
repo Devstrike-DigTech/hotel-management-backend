@@ -5,6 +5,7 @@ import pg from 'pg';
 import request from 'supertest';
 import { AppModule } from '../src/app.module.js';
 import { setupApp } from '../src/setup-app.js';
+import { signContext } from '../src/prisma/db.service.js';
 
 export const API = '/api/v1';
 
@@ -85,4 +86,24 @@ export function appRoleClient(): pg.Client {
 /** Direct connection as the owner/superuser role. */
 export function ownerClient(): pg.Client {
   return new pg.Client({ connectionString: process.env.DATABASE_MIGRATION_URL });
+}
+
+/** Sets a correctly signed tenant context in the current transaction (as DbService does). */
+export async function setSignedTenant(client: pg.Client, tenantId: string): Promise<void> {
+  const sig = signContext(process.env.DB_CONTEXT_SECRET!, `tenant:${tenantId.toLowerCase()}`);
+  await client.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.context_sig', $2, true)`, [
+    tenantId.toLowerCase(),
+    sig,
+  ]);
+}
+
+/** Sets a correctly signed public marketplace context in the current transaction. */
+export async function setSignedPublic(client: pg.Client): Promise<void> {
+  const sig = signContext(process.env.DB_CONTEXT_SECRET!, 'public');
+  await client.query(`SELECT set_config('app.context', 'public', true), set_config('app.context_sig', $1, true)`, [sig]);
+}
+
+/** Direct connection as the platform role. */
+export function platformRoleClient(): pg.Client {
+  return new pg.Client({ connectionString: process.env.DATABASE_PLATFORM_URL });
 }
