@@ -46,6 +46,7 @@ export class OperationsProcessor extends WorkerHost {
       case OPS_JOBS.channelAriSweep.name:
       case OPS_JOBS.icalImport.name:
       case OPS_JOBS.pricingNightly.name:
+      case OPS_JOBS.pricingPace.name:
       case OPS_JOBS.loyaltyExpiry.name:
       case OPS_JOBS.domainChecks.name:
         return this.pro.run(job.name);

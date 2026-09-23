@@ -530,6 +530,7 @@ export class RatesService {
         roomTypeId: o.roomTypeId,
         date: fromDbDate(o.date),
         rateKobo: o.rateKobo,
+        source: o.source,
         note: o.note,
         updatedBy: o.updatedById ? { id: o.updatedById, fullName: o.updatedByName ?? '' } : null,
         updatedAt: o.updatedAt.toISOString(),
@@ -646,6 +647,12 @@ export class RatesService {
         select: { roomTypeId: true, arrivalAt: true, departureAt: true },
       });
       const unsellable = await unsellableByNight(tx, user.tenantId, windows);
+      const overrideSources = new Map(
+        (await tx.rateOverride.findMany({ where: { tenantId: user.tenantId, date: { gte: dbDate(from), lte: dbDate(to) } }, select: { roomTypeId: true, date: true, source: true } })).map((o) => [
+          `${o.roomTypeId}|${fromDbDate(o.date)}`,
+          o.source as 'MANUAL' | 'PRICING',
+        ]),
+      );
       const rooms = await tx.room.groupBy({ by: ['roomTypeId'], where: { tenantId: user.tenantId }, _count: { _all: true } });
       const roomCount = new Map(rooms.map((r) => [r.roomTypeId, r._count._all]));
       const occ = new Map<string, { sellable: number; booked: number }>();
@@ -671,6 +678,7 @@ export class RatesService {
               ruleId: bar.ruleId,
               ruleName: bar.ruleName,
               override: bar.source === 'OVERRIDE',
+              overrideSource: bar.source === 'OVERRIDE' ? (overrideSources.get(`${t.id}|${w.date}`) ?? 'MANUAL') : null,
               sold: price !== null,
               restriction: restrictionOn(ctx.restrictions, t.id, w.date),
               sellable,
