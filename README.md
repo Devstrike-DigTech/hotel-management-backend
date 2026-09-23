@@ -13,11 +13,17 @@ The product name is not final, so the code never hard-codes it. It comes from
 - PostgreSQL 16 with row-level security, Prisma 7.10 (driver adapter `@prisma/adapter-pg`)
 - BullMQ on Redis 7 for background jobs
 - argon2id password hashing, JWT access tokens (15 min), rotating opaque refresh tokens (30 days)
-- Paystack for subscription payments
+- Paystack for subscription payments and for guest bookings (split payments
+  to hotel subaccounts with the platform commission taken per transaction)
 - Hotel operations (M2): reservations with database-enforced no double booking,
   guest register (NDPA-aware), check-in/out, folios with Nigerian taxes,
   invoices and receipts, cashier shifts, Revenue Guard, night audit, reports,
   owner digest, and offline-safe writes with `Idempotency-Key`
+- The guest side (M3): availability-aware marketplace search, signed quotes,
+  20-minute holds, online payment or pay at hotel, commission ledger, guest
+  accounts with phone OTP, trips and manage-booking links, cancellations and
+  refunds, email/SMS/WhatsApp notifications with a dev outbox, verified-stay
+  reviews, hotel payout onboarding and a marketplace console
 - Vitest (unit and e2e, with supertest), oxlint
 
 Base URL: `http://localhost:4000/api/v1`. Swagger UI: `http://localhost:4000/docs`
@@ -65,6 +71,7 @@ The migrations create missing roles `NOLOGIN`, so the grants still apply.
 | Palmwine staff | `tunde@` (manager), `ngozi@` (front desk, morning), `chidinma@` (front desk, evening), `musa@` (housekeeping), `funmi@palmwine.ng` (accountant) | `Demo1234!` |
 | Starter hotel on trial (housekeeping is locked) | `owner@wusegarden.ng` | `Demo1234!` |
 | Starter hotel, PAST_DUE | `owner@marinacreek.ng` | `Demo1234!` |
+| Demo guest account (platform level) | phone `+2348030000001` (Adaeze Okafor) | sign in with an OTP; read the code from `GET /api/v1/public/dev/outbox` |
 
 The other marketplace hotels are `ikoyi-lantern` (Pro), `eko-tides` (Growth),
 `maitama-court` (Enterprise), `garden-city-lodge` (Growth), `bodija-heights`
@@ -90,6 +97,20 @@ room 107 and Ngozi's open cash shift. Room statuses match the stays. Re-run
 `pnpm db:seed` any day to refresh "today". This part deletes and regenerates
 the demo hotel's operational rows (the seed temporarily disables the
 append-only triggers for that, as superuser); nothing else is touched.
+
+**Guest-side demo data (M3).** Every seed hotel except Wuse Garden Suites
+has a (mock) Paystack subaccount, so Wuse shows payout onboarding and takes
+pay-at-hotel bookings only. Cancellation policies differ by hotel. Sixty
+verified-stay reviews are tied to checked-out stays (several with hotel
+replies, two flagged for moderation), and the hotel cards show their real
+aggregates. The Palmwine House has online bookings in every state: paid on
+the marketplace and on its booking site, pay at hotel, a guest cancellation
+with a processed refund and reversed commission, an expired hold, an
+orphaned late payment whose refund failed (retry it from the platform
+console) and one live hold with about 15 minutes left. The demo guest has
+upcoming trips at The Palmwine House and Eko Tides, a completed stay last
+week that can still be reviewed, and an older reviewed stay at The Ikoyi
+Lantern.
 
 The seed is idempotent. It upserts everything by natural key (codes, slugs,
 emails, room numbers) and writes a hotel's audit history only once, because
@@ -136,7 +157,16 @@ process refuses to start and lists every missing or invalid value.
 | `STORAGE_DRIVER` | no (`local`) | `local` or `s3` |
 | `STORAGE_LOCAL_DIR` | no (`./storage`) | directory for `local` |
 | `S3_BUCKET`, `S3_REGION`, `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_FORCE_PATH_STYLE` | for `s3` | any S3-compatible service |
-| `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`, `WHATSAPP_API_BASE_URL` | no | owner digest over WhatsApp Cloud API; empty = log and store |
+| `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`, `WHATSAPP_API_BASE_URL` | no | owner digest, guest messages for hotels with `whatsapp_messaging`, WhatsApp OTP; empty = log / dev outbox |
+| `GUEST_JWT_SECRET` | yes, min 32 chars | guest access tokens (audience `guest`) |
+| `GUEST_TOKEN_SECRET` | yes, min 32 chars | quote tokens, manage-booking and review links, magic links, OTP hashes |
+| `GUEST_ACCESS_TTL_SECONDS` | no (3600) | guest access token lifetime (refresh tokens: 30 days) |
+| `EMAIL_FROM` | no | sender, e.g. `"HotelOS <bookings@hotelos.ng>"` (default `APP_NAME <SUPPORT_EMAIL>`) |
+| `RESEND_API_KEY`, `RESEND_BASE_URL` | no | email through Resend (preferred) |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_SECURE` | no | email through SMTP (nodemailer) when Resend is not set |
+| `TERMII_API_KEY`, `TERMII_SENDER_ID`, `TERMII_BASE_URL`, `TERMII_CHANNEL` | no | SMS through Termii |
+| `PLATFORM_ALERT_EMAIL` | no | orphaned-payment alerts (default `SUPPORT_EMAIL`) |
+| `PUBLIC_RATE_LIMITS` | no (true) | Redis rate limits on public endpoints |
 | `DATABASE_MIGRATION_URL` | for migrate/seed | owner role `hotel` |
 | `DATABASE_POOL_MAX` | no (10) | pg pool size |
 | `REDIS_URL` | yes | BullMQ |
@@ -144,7 +174,7 @@ process refuses to start and lists every missing or invalid value.
 | `JWT_PLATFORM_SECRET` | yes, min 32 chars | platform console tokens (audience `platform`) |
 | `JWT_REFRESH_SECRET` | yes, min 32 chars | HMAC key for stored refresh-token hashes |
 | `JWT_ACCESS_TTL`, `REFRESH_TOKEN_TTL_DAYS` | no (15m, 30) | |
-| `PAYSTACK_SECRET_KEY` | no | empty means mock checkout (not allowed in production) |
+| `PAYSTACK_SECRET_KEY` | no | empty means mock checkout, mock banks and subaccounts, mock refunds (not allowed in production) |
 | `PAYSTACK_BASE_URL` | no | defaults to `https://api.paystack.co` |
 | `ADMIN_URL`, `WEB_URL` | yes | frontend origins, used for payment callbacks |
 | `CORS_ORIGINS` | no | comma-separated; defaults to both local frontends |
@@ -171,6 +201,14 @@ src/
     billing                    subscription, invoices, checkout, Paystack webhook, dunning logic
     jobs                       BullMQ queues, processors and schedules (dunning, night audit, digest, sweeps)
     platform                   Devstrike console: auth, metrics, tenants, overrides, plans
+    guest-side.module.ts       M3 wiring (global):
+      booking                  search availability, quotes, bookings, holds, Paystack payments,
+                               refunds, cancellations, commission ledger, trips, payouts,
+                               booking settings, online feed, marketplace console
+      guest-auth               platform-level guest accounts: OTP, magic links, refresh, trips list
+      reviews                  verified-stay reviews, replies, moderation, aggregates
+      notifications            NotificationService, providers, dev outbox, email/SMS templates
+      infra                    Redis client, rate limits, jobs bridge
     operations.module.ts       M2 wiring (global):
       reservations             bookings, availability, tape chart, check-in/out, room moves
       guests                   guest records, ID encryption and images, register, NDPA
@@ -210,7 +248,10 @@ Every tenant-scoped table has a `tenant_id` column: `properties`,
 `reservations`, `folios`, `folio_entries`, `document_counters`,
 `guest_invoices`, `receipts`, `tax_settings`, `digest_settings`,
 `cashier_shifts`, `guard_flags`, `owner_digests`, `night_audit_runs`,
-`daily_stats`, `housekeeping_tasks` and `idempotency_keys`. `tenants` is keyed
+`daily_stats`, `housekeeping_tasks` and `idempotency_keys`, and in M3
+`booking_payments`, `booking_refunds`, `commission_entries`,
+`payout_accounts`, `reviews` and `notification_logs` (rows without a tenant,
+such as OTP messages, match no tenant policy). `tenants` is keyed
 by its own `id`. All of them have `ENABLE` and `FORCE ROW LEVEL SECURITY`. The
 current policies come from
 `prisma/migrations/*_platform_role_signed_context` (which replaced the M1
@@ -267,6 +308,11 @@ await this.db.tenant(user.tenantId, async (tx) => {
 | Login and refresh-token lookup | `SECURITY DEFINER` functions `app_auth_find_user(email)` and `app_auth_find_refresh_token(hash)` | Return the single row that matches an exact email or token hash. |
 | Signup | none needed | The new tenant id is generated first and used as the (signed) tenant context. |
 | Platform console, Paystack webhooks, dunning, tenant enumeration for scheduled jobs | `db.system()`: a transaction on the **second Prisma client** connected as `hotel_platform` | Full access through `platform_access` policies granted `TO hotel_platform`. No GUC is involved. Audit with `grep -rn "\.system(" src`. Per-tenant job work (night audit posting, digests, sweeps) still runs in a signed tenant context on `hotel_app`. |
+| Online bookings (quote, book, availability of one hotel) | the hotel is looked up by slug in the public context; the rest runs in **that hotel's signed tenant context** on `hotel_app` | The tenant id comes from our own lookup (or from a quote token this API signed), never from the request. |
+| Marketplace search with dates | `app_public_room_type_peaks(property_ids, start, end)`, `SECURITY DEFINER`, answers only inside the signed public context | Returns peak counts per room type; no guest, code or date leaves the database. |
+| Manage-booking links, review links | signed stateless tokens (`GUEST_TOKEN_SECRET`) carrying tenant + reservation | Each call runs in that tenant's signed context. A token opens only its own booking (the code must match). |
+| Guest identity (`guest_accounts`, `guest_otp_challenges`, `guest_refresh_tokens`) and the cross-hotel trip list | `db.system()` only; `hotel_app` has **no grants** on these tables | Trips are read with a query filtered to the signed-in account (bookings made while signed in, or guest records carrying the verified phone). |
+| Published reviews | `public_read` policy on `reviews` (`status IN ('PUBLISHED','FLAGGED')`) and on `tax_settings` | SELECT only. |
 
 This replaces the M1 design, where `hotel_app` could switch itself into a
 `system` context by setting `app.context`. The e2e suite
@@ -535,6 +581,139 @@ sweeps never duplicate. Locked rules are skipped (and shown as locked by
 | reports, night audit, digests | all | today's board | read | - |
 | room status | any | any | - | dirty to clean only |
 
+## The guest side (M3)
+
+The request and response contract is in Swagger and in the M3 API document
+shared with the web and admin apps. This section explains the rules.
+
+### Channels and commission
+
+- A booking made on the marketplace has source `MARKETPLACE` and pays the
+  plan's `commissionBps` (snapshotted on the reservation). A booking on the
+  hotel's own site (`/h/:slug`, subdomain, custom domain) has source
+  `BOOKING_SITE` and pays nothing. The web app sends the channel; the API
+  checks it (marketplace bookings need a listed hotel).
+- Commission is charged on the room + tax total. Paid online, it is taken by
+  the Paystack split (`transaction_charge`) and recorded as `COLLECTED`; pay
+  at hotel on the marketplace records it as `ACCRUED` (a receivable the
+  platform invoices monthly and settles in the console). Refunds, guest and
+  hotel cancellations and no-shows add `REVERSED` entries (in proportion to
+  the refund). The ledger (`commission_entries`) is append-only for the API.
+
+### Quotes, holds and availability
+
+```
+web                         API                                           Paystack
+ | GET  /public/hotels?checkIn&checkOut   (peaks per room type, public context)
+ | POST /public/quotes ------> price like the folio will post it, signed 15 min
+ | POST /public/bookings ----> PENDING stay, holdExpiresAt = now + 20 min
+ |                             (advisory lock + peak check, like any M2 stay)
+ |                             POST /transaction/initialize --------------> subaccount,
+ |<------ authorizationUrl --- (metadata kind=booking)                       transaction_charge,
+ | guest pays ------------------------------------------------------------> bearer=subaccount
+ |                             <------------- POST /billing/webhooks/paystack  charge.success
+ |                             confirm, CARD_ONLINE payment + receipt,
+ |                             COLLECTED commission, notifications
+ | GET /public/payments/:ref/verify (also verifies with Paystack; idempotent)
+```
+
+- The quote freezes the rate and the tax components in the token, so the
+  booking charges exactly what the guest saw. Each night is priced through
+  the M2 tax model, so the quote equals what check-in and the night audit
+  post.
+- An online booking holds inventory as a `PENDING` reservation for 20
+  minutes, under the same capacity lock and exclusion constraint as desk
+  bookings: two guests racing for the last room get one `201` and one
+  `409 ROOM_UNAVAILABLE`. A BullMQ delayed job at the expiry time (plus a
+  one-minute sweep) cancels unpaid holds with reason `HOLD_EXPIRED`, after
+  asking Paystack once more in case the webhook is late.
+- Pay at hotel confirms at once (`guaranteeType NONE`).
+- Retrying `POST /public/bookings` with the same quote returns the same
+  booking (`Idempotent-Replayed: true`).
+
+### Payments, webhook and orphaned payments
+
+- The webhook (source of truth), the callback verification and the dev mock
+  confirm share one code path. It locks the payment row and then the
+  reservation, so whichever arrives first applies the payment and the others
+  are no-ops; the webhook ledger (`payment_events`) also drops replays.
+- A payment that cannot be applied is **orphaned** and refunded in full
+  through `POST /refund`: late after the hold expired and the room has gone
+  (a late payment while the room is still free revives the booking instead),
+  amount lower than the booking total, booking already cancelled, or a
+  second attempt paid after the first. The guest, the hotel and the platform
+  are told, and Revenue Guard raises `PAYMENT_ORPHANED`.
+- Refunds are sent after the business transaction commits; `refund.*`
+  webhooks finish them. A failed refund never undoes the cancellation: it
+  shows as FAILED in the platform console, which can retry it.
+
+### Cancellations
+
+- Per-hotel policy: free until `freeCancellationHours` (48) before check-in;
+  after that `lateCancellationFeePct` (100) of the first night (room + its
+  taxes) is kept. The folio gets an untaxed `Cancellation fee` line and a
+  `REFUND` line (method `CARD_ONLINE`), so it balances to zero.
+- A hotel cancelling a paid booking always refunds in full.
+
+### Guest accounts and trips
+
+- One account per phone number, at platform level. Six-digit OTP by SMS or
+  WhatsApp, valid 5 minutes, stored as an HMAC bound to the challenge; five
+  wrong codes burn the challenge and lock the number for 15 minutes; one
+  code per minute and five per hour per number. Email magic links are the
+  fallback for accounts with an email. Guest JWTs use their own secret and
+  audience; refresh tokens rotate with reuse detection, like staff tokens.
+- A verified phone links every hotel's guest record with that number to the
+  account, so earlier bookings appear in Trips.
+- Without an account, the confirmation carries a signed manage-booking link
+  (`/trips/:code?t=`), valid until 90 days after departure: view, cancel
+  (with a fee preview), calendar file, invoice and receipts, review link.
+
+### Notifications
+
+- Every message is a `notification_logs` row delivered through BullMQ (five
+  attempts, exponential backoff); without workers it is delivered inline.
+  OTP codes and magic links are sent immediately and logged redacted.
+- Providers: Resend or SMTP for email, Termii for SMS, WhatsApp Cloud API
+  (guest SMS go over WhatsApp for hotels with `whatsapp_messaging`). With no
+  provider in development, messages land in the **dev outbox** (Redis, last
+  50): `GET /api/v1/public/dev/outbox` shows them, including OTP codes, for
+  the web app's dev mailbox. The outbox and the dev payment confirm answer
+  404 in production.
+- Templates: booking confirmed, payment receipt, pay-at-hotel confirmed,
+  hold expired, cancellation and refund, pre-arrival (24 h before), review
+  request (4 h after check-out), orphaned-payment refund, OTP, magic link,
+  and the hotel and platform alerts. Emails are table-based HTML with inline
+  CSS in the brand system (Fraunces with a Georgia fallback, laterite
+  accent, hairlines, dark-mode block), with a plain-text part; booking-site
+  mail carries the hotel's name, logo and accent. SMS stay within 160
+  characters where possible and write naira as `N` (GSM-7).
+
+### Reviews
+
+- A signed link per checked-out stay allows one review within 30 days
+  (overall and four subscores, traveller type, 20 to 2000 characters). The
+  public name is first name + last initial. Text with a phone number or email
+  is held as FLAGGED. Aggregates live on the property and are recomputed in
+  the transaction of every change.
+- Hotels reply once (editable) and can report a review; they cannot hide or
+  delete one. Platform moderators hide or restore with a reason.
+
+### Payouts
+
+- Owners pick a bank (`GET /payouts/banks`, Paystack list cached 24 h),
+  resolve the account name and save it: the API creates (or updates) the
+  Paystack subaccount with `percentage_charge: 0`, stores the account number
+  encrypted (last four in clear) and marks the property `payoutReady`.
+  Without a subaccount a hotel takes pay-at-hotel bookings only.
+
+### Rate limits
+
+Redis fixed windows per IP on search, availability, quotes, bookings,
+payment verification, trip cancellation and reviews, plus per phone / email
+on bookings, OTP and magic links. Over the limit: `429 RATE_LIMITED` with
+`details.retryAfterSec` and a `Retry-After` header.
+
 ---
 
 ## Auth
@@ -651,7 +830,24 @@ The full contract is in Swagger at `/docs`. Summary:
   `shifts`), `/housekeeping/tasks`, `/me/approval-pin`, `/staff/approvers`
 - **Public**: `GET /public/documents/:token` (guest share link),
   `GET /files/:token` (signed file URL)
-- **Webhook**: `POST /billing/webhooks/paystack`
+- **Guest side** (M3, public): `GET /public/booking-config`,
+  `/public/hotels` (with `checkIn`, `checkOut`, `sort`),
+  `/public/hotels/:slug/availability`, `/public/hotels/:slug/reviews`,
+  `POST /public/quotes`, `POST /public/bookings`,
+  `GET /public/payments/:reference/verify`, `POST .../retry`,
+  `/public/trips/:code` (+ `cancel-preview`, `cancel`, `calendar.ics`,
+  `documents/:kind/:id`, `invoice`), `/public/reviews/request`,
+  `POST /public/reviews`, `/public/auth/otp/start|verify`,
+  `/public/auth/email/start|verify`, `/public/auth/refresh|logout`;
+  development only: `/public/dev/outbox`, `/public/dev/payments/:ref/confirm`
+- **Guest** (Bearer guest token): `GET|PATCH /guest/me`, `GET /guest/trips`
+- **Hotel** (M3): `/booking-settings`, `/payouts` (`banks`,
+  `resolve-account`, `account`, `summary`, `transactions`, `commission`),
+  `/online-bookings/feed`, `/reservations/:id/notifications`,
+  `/notifications` (+ `:id/preview`), `/reviews` (+ `summary`, `:id/reply`,
+  `:id/flag`)
+- **Webhook**: `POST /billing/webhooks/paystack` (subscriptions and bookings;
+  `charge.success`, `charge.failed`, `refund.*`)
 - **Platform** (Bearer platform token):
   - `POST /platform/auth/login`, `GET /platform/auth/me`
   - `GET /platform/metrics`
@@ -661,6 +857,11 @@ The full contract is in Swagger at `/docs`. Summary:
     `DELETE /platform/tenants/:id/features/:featureCode`
   - `GET /platform/plans`, `PATCH /platform/plans/:code`
   - `POST /platform/jobs/dunning/run`
+  - M3: `GET /platform/marketplace/summary`,
+    `GET /platform/commission/receivables`, `POST .../settle`,
+    `GET /platform/payments/orphaned`, `POST /platform/payments/:id/retry-refund`,
+    `GET|PATCH /platform/reviews`, `GET /platform/notifications`,
+    `POST /platform/jobs/holds/sweep`, `POST /platform/jobs/guest-notifications/run`
 
 Conventions:
 
@@ -675,7 +876,8 @@ Conventions:
 
 ```bash
 pnpm test        # unit (Vitest): tax maths, availability, guard rules, shift variance,
-                 # folio totals, encryption, tokens, phone numbers, codes, reports
+                 # folio totals, encryption, tokens, phone numbers, codes, reports,
+                 # quotes, commission, cancellation fees, OTP, reviews, .ics, templates
 pnpm test:e2e    # needs local Postgres (roles hotel, hotel_app, hotel_platform) and Redis
 ```
 
@@ -702,6 +904,26 @@ M2 suites:
 - `m2-guests`: phone dedupe, ID encryption at rest, ID images, register CSV,
   NDPA export and anonymisation, housekeeping status rule, room-status guard
   rules.
+
+M3 suites (with a stateful Paystack stub for initialize, verify, refund,
+banks, account resolution and subaccounts):
+
+- `m3-booking`: availability-aware search, a hold blocking a double sale
+  under concurrency, hold expiry freeing the room, idempotent booking
+  retries, the split initialisation, webhook success (confirmation, receipt,
+  commission, notifications), duplicate and badly signed webhooks,
+  verification on callback, zero commission on the booking site,
+  pay-at-hotel receivables and no-show reversal, orphaned late and
+  mismatched payments with refunds, late payments that revive a booking,
+  guest (free and late) and hotel cancellations with refunds and commission
+  reversal, the hotel feed, and a 429 from the quote rate limit.
+- `m3-guests`: OTP sign-in with hashed codes, resend limit, lockout after
+  five wrong codes, refresh-token reuse, token audiences kept apart, magic
+  links, trips visible only to their guest, reviews only for checked-out
+  stays and only once (with hotel reply and moderation), flagged review
+  text, seeded aggregates matching review rows, and RLS on the M3 tables
+  (no `hotel_app` access to guest identity, tenant isolation, the public
+  availability function answering only in the public context).
 
 ## Docker
 
