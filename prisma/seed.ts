@@ -13,6 +13,7 @@ import { FEATURES, PLANS } from './seed-data/catalogue.js';
 import { ALL_HOTELS, DEMO_HOTEL, type HotelSeed } from './seed-data/hotels.js';
 import { DEMO_GUEST, seedGuestSide } from './seed-data/guest-side.js';
 import { DEMO_PINS, seedOperations } from './seed-data/operations.js';
+import { seedGrowth, seedRatePlansEverywhere } from './seed-data/growth.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const NAIRA = 100;
@@ -158,6 +159,16 @@ async function seedHotel(h: HotelSeed, passwordHash: string) {
   const people = [h.owner, ...h.staff];
   const userIds = new Map<string, string>();
   for (const s of people) {
+    let customRoleId: string | null = null;
+    if (s.customRole) {
+      const cr = s.customRole;
+      const role = await prisma.customRole.upsert({
+        where: { tenantId_name: { tenantId: tenant.id, name: cr.name } },
+        create: { tenantId: tenant.id, name: cr.name, description: cr.description, basedOn: cr.basedOn, permissions: cr.permissions },
+        update: { description: cr.description, basedOn: cr.basedOn, permissions: cr.permissions },
+      });
+      customRoleId = role.id;
+    }
     const user = await prisma.user.upsert({
       where: { email: s.email },
       create: {
@@ -166,6 +177,7 @@ async function seedHotel(h: HotelSeed, passwordHash: string) {
         fullName: s.fullName,
         phone: s.phone,
         role: s.role,
+        customRoleId,
         passwordHash,
         createdAt,
       },
@@ -174,6 +186,7 @@ async function seedHotel(h: HotelSeed, passwordHash: string) {
         fullName: s.fullName,
         phone: s.phone,
         role: s.role,
+        customRoleId,
         passwordHash,
         isActive: true,
       },
@@ -326,6 +339,10 @@ async function main() {
   const guest = await seedGuestSide(prisma, DEMO_HOTEL.slug, process.env.APP_NAME ?? 'HotelOS');
   console.log('  %s', Object.entries(guest).map(([k, v]) => `${k}=${v}`).join(' '));
   console.log('  demo guest account: %s (%s); sign in with a phone OTP', DEMO_GUEST.phone, DEMO_GUEST.fullName);
+  console.log('Seeding rates everywhere and Growth-tier data for %s...', DEMO_HOTEL.slug);
+  const properties = await seedRatePlansEverywhere(prisma);
+  const growth = await seedGrowth(prisma, DEMO_HOTEL.slug);
+  console.log('  BAR plans=%d %s', properties, Object.entries(growth).map(([k, v]) => `${k}=${v}`).join(' '));
   console.log('Done. Hotel logins use password "%s"; demo owner: %s', HOTEL_PASSWORD, DEMO_HOTEL.owner.email);
 }
 

@@ -66,7 +66,21 @@ export interface StaffSeed {
   email: string;
   phone: string;
   role: StaffRole;
+  /** Required when `role` is CUSTOM (M4 custom roles). */
+  customRole?: { name: string; description: string; basedOn: string; permissions: string[] };
 }
+
+/** The demo hotel's custom role (M4). */
+export const NIGHT_AUDITOR_ROLE = {
+  name: 'Night Auditor',
+  description: 'Runs the night shift: desk work, folios and the night audit reports, but no refunds or discounts.',
+  basedOn: 'FRONT_DESK',
+  permissions: [
+    'reservations.view', 'reservations.create', 'reservations.edit', 'frontdesk.checkin', 'frontdesk.checkout',
+    'folio.view', 'folio.charge', 'payments.take', 'shifts.own', 'guests.view', 'guests.edit', 'rooms.status',
+    'housekeeping.view', 'maintenance.view', 'maintenance.report', 'rates.view', 'corporate.view', 'reports.view', 'guard.view',
+  ],
+};
 
 export interface HotelSeed {
   slug: string;
@@ -189,15 +203,19 @@ export const DEMO_HOTEL: HotelSeed = {
   owner: {
     fullName: 'Adaeze Okafor',
     email: 'demo@palmwine.ng',
-    phone: '+234 803 555 0100',
+    phone: '+2348031234567',
     role: 'OWNER',
   },
   staff: [
-    { fullName: 'Tunde Bakare', email: 'tunde@palmwine.ng', phone: '+234 805 555 0102', role: 'MANAGER' },
-    { fullName: 'Ngozi Eze', email: 'ngozi@palmwine.ng', phone: '+234 806 555 0103', role: 'FRONT_DESK' },
-    { fullName: 'Chidinma Obi', email: 'chidinma@palmwine.ng', phone: '+234 809 555 0106', role: 'FRONT_DESK' },
-    { fullName: 'Musa Abdullahi', email: 'musa@palmwine.ng', phone: '+234 807 555 0104', role: 'HOUSEKEEPING' },
-    { fullName: 'Funmilayo Adeyemi', email: 'funmi@palmwine.ng', phone: '+234 808 555 0105', role: 'ACCOUNTANT' },
+    { fullName: 'Tunde Bakare', email: 'tunde@palmwine.ng', phone: '+2348055550102', role: 'MANAGER' },
+    { fullName: 'Ngozi Eze', email: 'ngozi@palmwine.ng', phone: '+2348065550103', role: 'FRONT_DESK' },
+    { fullName: 'Chidinma Obi', email: 'chidinma@palmwine.ng', phone: '+2348095550106', role: 'FRONT_DESK' },
+    { fullName: 'Musa Abdullahi', email: 'musa@palmwine.ng', phone: '+2348075550104', role: 'HOUSEKEEPING' },
+    { fullName: 'Funmilayo Adeyemi', email: 'funmi@palmwine.ng', phone: '+2348085550105', role: 'ACCOUNTANT' },
+    { fullName: 'Blessing Nwachukwu', email: 'blessing@palmwine.ng', phone: '+2348135550107', role: 'HOUSEKEEPING' },
+    { fullName: 'Grace Ogunleye', email: 'grace@palmwine.ng', phone: '+2348145550108', role: 'SUPERVISOR' },
+    { fullName: 'Emeka Chukwu', email: 'emeka@palmwine.ng', phone: '+2348165550109', role: 'MAINTENANCE' },
+    { fullName: 'Seun Afolabi', email: 'seun@palmwine.ng', phone: '+2348175550110', role: 'CUSTOM', customRole: NIGHT_AUDITOR_ROLE },
   ],
   roomTypes: [
     {

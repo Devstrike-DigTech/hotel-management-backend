@@ -74,6 +74,12 @@ type SeedReservation = Omit<
   | 'guestAccountId'
   | 'cancelledBy'
   | 'cancellationFeeKobo'
+  // M4 columns: the growth seed sets the rate plan and per-night snapshot afterwards.
+  | 'ratePlanId'
+  | 'promoCodeId'
+  | 'corporateAccountId'
+  | 'nightlyRates'
+  | 'cancelPolicy'
 >;
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -159,6 +165,10 @@ async function resetTenant(prisma: PrismaClient, tenantId: string) {
     await tx.$executeRawUnsafe(`SET LOCAL session_replication_role = replica`);
     for (const table of [
       // M3 rows hang off reservations; the guest-side seed rebuilds them after this.
+      // M4 rows that reference reservations, rooms or folios; the growth seed rebuilds them.
+      'city_ledger_allocations', 'city_ledger_payments', 'city_ledger_charges', 'city_ledger_invoices',
+      'promo_redemptions', 'guard_alerts', 'room_blocks', 'maintenance_ticket_events', 'maintenance_tickets',
+      'lost_found_items',
       'notification_logs', 'reviews', 'commission_entries', 'booking_refunds', 'booking_payments',
       'idempotency_keys', 'guard_flags', 'owner_digests', 'daily_stats', 'night_audit_runs',
       'housekeeping_tasks', 'receipts', 'guest_invoices', 'folio_entries', 'folios', 'cashier_shifts',
@@ -795,7 +805,7 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
           tenantId: tenant.id,
           roomId: room!.id,
           reservationId: resId,
-          status: p.room === '305' ? 'IN_PROGRESS' : 'PENDING',
+          status: p.room === '305' ? 'IN_PROGRESS' : 'OPEN',
           reason: 'CHECKOUT',
           notes: p.room === '305' ? 'Deep clean, guest stayed four nights' : '',
           createdAt: checkedOutAt!,
