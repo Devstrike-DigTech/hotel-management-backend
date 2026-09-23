@@ -2,11 +2,12 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import type { ReservationStatus } from '../../generated/prisma/enums.js';
 import type { AuthUser } from '../../common/auth-types.js';
 import { AppException } from '../../common/errors/app-exception.js';
-import { addDays, dateRange, diffDays, isIsoDate, lagosDate, lagosDateTime, lagosStartOfDay, nightWindow } from '../../common/time/lagos.js';
+import { addDays, dateRange, diffDays, humanDateTime, isIsoDate, lagosDate, lagosDateTime, lagosStartOfDay, nightWindow } from '../../common/time/lagos.js';
 import { DbService, type Tx } from '../../prisma/db.service.js';
 import { LedgerService } from '../folios/ledger.service.js';
 import { advisoryLock, appError, Err, k, primaryProperty } from '../ops/ops.helpers.js';
-import { dailyAvailability, isFree, maxConcurrent } from './availability.logic.js';
+import { dailyAvailability, isFree } from './availability.logic.js';
+import { freeRoomsOverWindow, loadCapacity, roomBlockDuring, unsellableByNight } from '../rates/capacity.js';
 
 export const ACTIVE: ReservationStatus[] = ['PENDING', 'CONFIRMED', 'CHECKED_IN'];
 const MAX_RANGE_DAYS = 92;
@@ -35,18 +36,31 @@ export class AvailabilityService {
    */
   async assertAvailable(tx: Tx, tenantId: string, w: Window): Promise<void> {
     await advisoryLock(tx, `room-type:${tenantId}:${w.roomTypeId}`);
-    const rooms = await tx.room.findMany({ where: { tenantId, roomTypeId: w.roomTypeId } });
-    const sellable = rooms.filter((r) => r.status !== 'OUT_OF_ORDER');
     const exclude = w.excludeReservationId ? { id: { not: w.excludeReservationId } } : {};
     if (w.roomId) {
-      const room = rooms.find((r) => r.id === w.roomId);
-      if (!room) throw AppException.badRequest('The room does not belong to the selected room type');
-      if (room.status === 'OUT_OF_ORDER') {
-        throw appError(HttpStatus.CONFLICT, 'ROOM_UNAVAILABLE', `Room ${room.number} is out of order`, {
+      const room = await tx.room.findFirst({ where: { id: w.roomId, tenantId } });
+      if (!room || room.roomTypeId !== w.roomTypeId) throw AppException.badRequest('The room does not belong to the selected room type');
+      const block = await roomBlockDuring(tx, tenantId, room.id, w.arrivalAt, w.departureAt);
+      if (block) {
+        throw appError(HttpStatus.CONFLICT, 'ROOM_UNAVAILABLE', `Room ${room.number} is blocked (${block.reason}) until ${humanDateTime(block.endsAt)}`, {
           scope: 'ROOM',
+          reason: 'BLOCKED',
           roomId: room.id,
           roomTypeId: w.roomTypeId,
+          blockId: block.id,
         });
+      }
+      if (room.status === 'OUT_OF_ORDER') {
+        const now = new Date();
+        const coveringNow = await roomBlockDuring(tx, tenantId, room.id, now, new Date(now.getTime() + 1));
+        if (!coveringNow) {
+          throw appError(HttpStatus.CONFLICT, 'ROOM_UNAVAILABLE', `Room ${room.number} is out of order`, {
+            scope: 'ROOM',
+            reason: 'OUT_OF_ORDER',
+            roomId: room.id,
+            roomTypeId: w.roomTypeId,
+          });
+        }
       }
       const clashes = await tx.reservation.findMany({
         where: {
@@ -62,30 +76,26 @@ export class AvailabilityService {
       if (clashes.length) {
         throw appError(HttpStatus.CONFLICT, 'ROOM_UNAVAILABLE', `Room ${room.number} is already booked for part of these dates`, {
           scope: 'ROOM',
+          reason: 'BOOKED',
           roomId: room.id,
           roomTypeId: w.roomTypeId,
           conflicts: clashes.map((c) => ({ reservationId: c.id, code: c.code })),
         });
       }
     }
-    const stays = await tx.reservation.findMany({
-      where: {
-        tenantId,
-        roomTypeId: w.roomTypeId,
-        status: { in: ACTIVE },
-        arrivalAt: { lt: w.departureAt },
-        departureAt: { gt: w.arrivalAt },
-        ...exclude,
-      },
-      select: { arrivalAt: true, departureAt: true },
-    });
-    const peak = maxConcurrent(stays.map((s) => ({ start: s.arrivalAt, end: s.departureAt })), w.arrivalAt, w.departureAt);
-    if (peak + 1 > sellable.length) {
+    const cap = (await loadCapacity(tx, tenantId, [w.roomTypeId], w.arrivalAt, w.departureAt, { excludeReservationId: w.excludeReservationId })).get(w.roomTypeId)!;
+    if (freeRoomsOverWindow(cap, w.arrivalAt, w.departureAt) < 1) {
       throw appError(HttpStatus.CONFLICT, 'ROOM_UNAVAILABLE', 'No room of this type is free for these dates', {
         scope: 'ROOM_TYPE',
         roomTypeId: w.roomTypeId,
       });
     }
+  }
+
+  /** Rooms of each type free for the whole window (blocks and out-of-order rooms excluded). */
+  async freeByType(tx: Tx, tenantId: string, roomTypeIds: string[], arrivalAt: Date, departureAt: Date): Promise<Map<string, number>> {
+    const caps = await loadCapacity(tx, tenantId, roomTypeIds, arrivalAt, departureAt);
+    return new Map(roomTypeIds.map((id) => [id, freeRoomsOverWindow(caps.get(id)!, arrivalAt, departureAt)]));
   }
 
   private checkRange(from: string, to: string) {
@@ -116,20 +126,21 @@ export class AvailabilityService {
         },
         select: { roomTypeId: true, arrivalAt: true, departureAt: true },
       });
+      const unsellable = await unsellableByNight(tx, user.tenantId, nights);
       return {
         from,
         to,
         roomTypes: types.map((t) => {
           const ooo = t.rooms.filter((r) => r.status === 'OUT_OF_ORDER').length;
+          const typeStays = stays.filter((s) => s.roomTypeId === t.id).map((s) => ({ start: s.arrivalAt, end: s.departureAt }));
           return {
             roomType: { id: t.id, name: t.name, basePriceKobo: t.basePriceKobo, hourlyPriceKobo: t.hourlyPriceKobo },
             totalRooms: t.rooms.length,
-            days: dailyAvailability(
-              nights,
-              t.rooms.length,
-              ooo,
-              stays.filter((s) => s.roomTypeId === t.id).map((s) => ({ start: s.arrivalAt, end: s.departureAt })),
-            ),
+            days: nights.map((n) => {
+              const blocked = unsellable.get(`${t.id}|${n.date}`) ?? 0;
+              const day = dailyAvailability([n], t.rooms.length, blocked, typeStays)[0];
+              return { date: n.date, sellable: day.sellable, outOfOrder: ooo, blocked, booked: day.booked, available: day.available };
+            }),
           };
         }),
       };
@@ -211,13 +222,16 @@ export class AvailabilityService {
         select: { roomId: true, departureAt: true },
       });
       const occupant = new Map(inHouse.map((r) => [r.roomId, r.departureAt]));
-      const sellable = rooms.filter((r) => r.status !== 'OUT_OF_ORDER').length;
-      const peak = maxConcurrent(stays.map((s) => ({ start: s.arrivalAt, end: s.departureAt })), arrivalAt, departureAt);
+      const cap = (await loadCapacity(tx, user.tenantId, [q.roomTypeId], arrivalAt, departureAt, { excludeReservationId: q.excludeReservationId })).get(q.roomTypeId)!;
+      const blocks = await tx.roomBlock.findMany({
+        where: { tenantId: user.tenantId, roomId: { in: rooms.map((r) => r.id) }, startsAt: { lt: departureAt }, endsAt: { gt: arrivalAt } },
+        orderBy: { endsAt: 'desc' },
+      });
       rooms.sort((a, b) => a.floor - b.floor || collator.compare(a.number, b.number));
       return {
         roomTypeId: q.roomTypeId,
         forCheckIn,
-        available: Math.max(0, sellable - peak),
+        available: freeRoomsOverWindow(cap, arrivalAt, departureAt),
         rooms: rooms.map((r) => {
           const booked = !isFree(
             stays.filter((s) => s.roomId === r.id).map((s) => ({ start: s.arrivalAt, end: s.departureAt })),
@@ -226,9 +240,13 @@ export class AvailabilityService {
           );
           const occupiedUntil = occupant.get(r.id) ?? null;
           const clean = r.status === 'VACANT_CLEAN' || r.status === 'RESERVED';
-          const free = r.status !== 'OUT_OF_ORDER' && !booked && !(forCheckIn && occupiedUntil);
+          const block = blocks.find((b) => b.roomId === r.id) ?? null;
+          const openEndedOoo = cap.openEndedOutOfOrder.includes(r.id);
+          const free = !openEndedOoo && !block && !booked && !(forCheckIn && occupiedUntil);
           const reason =
-            r.status === 'OUT_OF_ORDER'
+            block
+              ? 'BLOCKED'
+              : openEndedOoo || (forCheckIn && r.status === 'OUT_OF_ORDER')
               ? 'OUT_OF_ORDER'
               : occupiedUntil
                 ? 'OCCUPIED'
@@ -246,6 +264,8 @@ export class AvailabilityService {
             clean,
             checkInReady: free && clean && !occupiedUntil,
             occupiedUntil: occupiedUntil?.toISOString() ?? null,
+            blocked: !!block,
+            blockedUntil: block?.endsAt.toISOString() ?? null,
             reason,
           };
         }),
@@ -277,6 +297,13 @@ export class AvailabilityService {
         orderBy: { arrivalAt: 'asc' },
       });
       const balances = await this.ledger.balances(tx, rows.map((r) => r.folio?.id).filter((x): x is string => !!x));
+      const blocks = await tx.roomBlock.findMany({
+        where: { tenantId: user.tenantId, startsAt: { lt: end }, endsAt: { gt: start } },
+        include: { ticket: { select: { number: true } } },
+        orderBy: { startsAt: 'asc' },
+      });
+      const plans = await tx.ratePlan.findMany({ where: { tenantId: user.tenantId }, select: { id: true, code: true } });
+      const planCode = new Map(plans.map((x) => [x.id, x.code]));
       const stays = rows.map((r) => ({
         reservationId: r.id,
         code: r.code,
@@ -294,6 +321,8 @@ export class AvailabilityService {
         balanceKobo: r.folio ? (balances.get(r.folio.id) ?? 0) : 0,
         paymentMode: r.paymentMode,
         holdExpiresAt: r.status === 'PENDING' && r.paymentMode === 'ONLINE' ? (r.holdExpiresAt?.toISOString() ?? null) : null,
+        ratePlanCode: r.ratePlanId ? (planCode.get(r.ratePlanId) ?? null) : null,
+        corporate: !!r.corporateAccountId,
       }));
       return {
         from,
@@ -311,6 +340,15 @@ export class AvailabilityService {
         roomTypes: types.map((t) => ({ id: t.id, name: t.name, roomCount: t._count.rooms })),
         stays: stays.filter((s) => s.roomId),
         unassigned: stays.filter((s) => !s.roomId && ACTIVE.includes(s.status)),
+        blocks: blocks.map((b) => ({
+          id: b.id,
+          roomId: b.roomId,
+          from: b.startsAt.toISOString(),
+          to: b.endsAt.toISOString(),
+          reason: b.reason,
+          ticketId: b.ticketId,
+          ticketNumber: b.ticket?.number ?? null,
+        })),
       };
     });
   }
