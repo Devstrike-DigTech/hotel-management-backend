@@ -1,6 +1,6 @@
 import { Body, Controller, HttpCode, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { ThrottlerGuard } from '@nestjs/throttler';
+import { TrustedThrottlerGuard } from '../../common/guards/trusted-throttler.guard.js';
 import type { AppRequest } from '../../common/auth-types.js';
 import { AllowWhenReadOnly, Public } from '../../common/decorators/index.js';
 import { LoginDto, RefreshDto, SignupDto } from './auth.dto.js';
@@ -14,7 +14,7 @@ const meta = (req: AppRequest): RequestMeta => ({
 @ApiTags('Auth')
 @Public()
 @AllowWhenReadOnly()
-@UseGuards(ThrottlerGuard)
+@UseGuards(TrustedThrottlerGuard)
 @Controller('auth')
 export class AuthController {
   constructor(private readonly auth: AuthService) {}

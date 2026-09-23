@@ -51,6 +51,27 @@ export const envSchema = z.object({
     .optional()
     .transform((v) => (v && v.trim().length > 0 ? v.trim() : undefined)),
   WHATSAPP_API_BASE_URL: z.url().default('https://graph.facebook.com/v21.0'),
+  /** Meta app secret: verifies X-Hub-Signature-256 on the inbound webhook. Empty = every POST rejected. */
+  WHATSAPP_APP_SECRET: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim().length > 0 ? v.trim() : undefined)),
+  /** Token Meta echoes when subscribing the webhook (GET hub.verify_token). */
+  WHATSAPP_VERIFY_TOKEN: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim().length > 0 ? v.trim() : undefined)),
+  /** Comma-separated template names Meta has approved (shown as APPROVED in the admin). */
+  WHATSAPP_APPROVED_TEMPLATES: z.string().default(''),
+  /**
+   * Shared secret between the web server and the API. When a request carries
+   * X-Proxy-Auth equal to it, X-Client-IP is used as the client IP for rate
+   * limiting. Empty (or under 16 characters) = the header is ignored.
+   */
+  TRUSTED_PROXY_SECRET: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim().length >= 16 ? v.trim() : undefined)),
   REDIS_URL: z.url(),
 
   JWT_ACCESS_SECRET: z.string().min(32),

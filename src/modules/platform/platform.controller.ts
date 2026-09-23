@@ -13,7 +13,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { ThrottlerGuard } from '@nestjs/throttler';
+import { TrustedThrottlerGuard } from '../../common/guards/trusted-throttler.guard.js';
 import type { PlatformPrincipal } from '../../common/auth-types.js';
 import {
   ClientIp,
@@ -39,7 +39,7 @@ export class PlatformAuthController {
 
   @Post('login')
   @Public()
-  @UseGuards(ThrottlerGuard)
+  @UseGuards(TrustedThrottlerGuard)
   @HttpCode(200)
   login(@Body() dto: PlatformLoginDto, @ClientIp() ip?: string) {
     return this.auth.login(dto.email, dto.password, ip);

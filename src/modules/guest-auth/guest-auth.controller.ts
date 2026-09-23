@@ -1,7 +1,7 @@
 import { Body, Controller, Get, HttpCode, Patch, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { GuestPrincipal } from '../../common/auth-types.js';
-import { ClientIp, CurrentGuest, GuestOnly, Public } from '../../common/decorators/index.js';
+import { CurrentGuest, GuestOnly, Public, RateLimitIp } from '../../common/decorators/index.js';
 import { EmailStartDto, EmailVerifyDto, GuestRefreshDto, OtpStartDto, OtpVerifyDto, UpdateGuestMeDto } from './guest-auth.dto.js';
 import { GuestAuthService } from './guest-auth.service.js';
 
@@ -14,21 +14,21 @@ export class GuestAuthController {
   @Post('otp/start')
   @HttpCode(200)
   @ApiOperation({ summary: 'Send a 6-digit sign-in code by SMS or WhatsApp' })
-  otpStart(@Body() dto: OtpStartDto, @ClientIp() ip?: string) {
+  otpStart(@Body() dto: OtpStartDto, @RateLimitIp() ip?: string) {
     return this.svc.otpStart(dto.phone, dto.channel, ip);
   }
 
   @Post('otp/verify')
   @HttpCode(200)
   @ApiOperation({ summary: 'Verify the code; creates the account on first sign-in' })
-  otpVerify(@Body() dto: OtpVerifyDto, @ClientIp() ip?: string) {
+  otpVerify(@Body() dto: OtpVerifyDto, @RateLimitIp() ip?: string) {
     return this.svc.otpVerify(dto.challengeId, dto.code, ip);
   }
 
   @Post('email/start')
   @HttpCode(200)
   @ApiOperation({ summary: 'Email a magic sign-in link (always answers { sent: true })' })
-  emailStart(@Body() dto: EmailStartDto, @ClientIp() ip?: string) {
+  emailStart(@Body() dto: EmailStartDto, @RateLimitIp() ip?: string) {
     return this.svc.emailStart(dto.email, ip);
   }
 
@@ -40,7 +40,7 @@ export class GuestAuthController {
 
   @Post('refresh')
   @HttpCode(200)
-  refresh(@Body() dto: GuestRefreshDto, @ClientIp() ip?: string) {
+  refresh(@Body() dto: GuestRefreshDto, @RateLimitIp() ip?: string) {
     return this.svc.refresh(dto.refreshToken, ip);
   }
 

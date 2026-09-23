@@ -12,6 +12,7 @@ import type { AppRequest } from '../../common/auth-types.js';
 import { AppException, ErrorCode } from '../../common/errors/app-exception.js';
 import { AppConfigService } from '../../config/app-config.service.js';
 import { RedisService } from './redis.service.js';
+import { rateLimitIp } from '../../common/trusted-ip.js';
 
 export interface RateRule {
   /** Bucket name, e.g. "quote". */
@@ -85,6 +86,7 @@ export class RateLimitGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly limits: RateLimitService,
+    private readonly config: AppConfigService,
   ) {}
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
@@ -92,7 +94,7 @@ export class RateLimitGuard implements CanActivate {
     if (!rules?.length) return true;
     const req = ctx.switchToHttp().getRequest<AppRequest>();
     const res = ctx.switchToHttp().getResponse<Response>();
-    const ip = req.ip ?? 'unknown';
+    const ip = rateLimitIp(req, this.config.get('TRUSTED_PROXY_SECRET'));
     for (const r of rules) {
       await this.limits.consume(`${r.name}:ip:${ip}`, r.limit, r.windowSec, 'ip', undefined, res);
     }
