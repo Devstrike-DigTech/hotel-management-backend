@@ -1,0 +1,404 @@
+// Prisma schema for the multi-tenant hotel management platform.
+//
+// Every tenant-scoped table carries a `tenant_id` column and is protected by
+// PostgreSQL Row-Level Security (see prisma/migrations/*_rls). The runtime
+// role `hotel_app` can only see rows for the tenant set in the
+// transaction-local setting `app.tenant_id`.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  READ_ONLY
+  SUSPENDED
+  CANCELLED
+}
+
+enum BillingInterval {
+  MONTHLY
+  YEARLY
+}
+
+enum StaffRole {
+  OWNER
+  MANAGER
+  FRONT_DESK
+  HOUSEKEEPING
+  ACCOUNTANT
+}
+
+enum RoomStatus {
+  VACANT_CLEAN
+  VACANT_DIRTY
+  OCCUPIED
+  RESERVED
+  OUT_OF_ORDER
+}
+
+enum InvoiceStatus {
+  PENDING
+  PAID
+  FAILED
+  VOID
+}
+
+enum PlatformRole {
+  SUPER_ADMIN
+  SUPPORT
+}
+
+// ---------------------------------------------------------------------------
+// Tenancy
+// ---------------------------------------------------------------------------
+
+model Tenant {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  slug      String   @unique
+  city      String
+  state     String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  properties       Property[]
+  roomTypes        RoomType[]
+  rooms            Room[]
+  users            User[]
+  refreshTokens    RefreshToken[]
+  featureOverrides TenantFeatureOverride[]
+  subscription     Subscription?
+  invoices         Invoice[]
+  auditLogs        AuditLog[]
+
+  @@map("tenants")
+}
+
+model Property {
+  id                     String    @id @default(uuid()) @db.Uuid
+  tenantId               String    @map("tenant_id") @db.Uuid
+  name                   String
+  slug                   String    @unique
+  tagline                String    @default("")
+  description            String    @default("")
+  address                String    @default("")
+  city                   String
+  state                  String
+  area                   String    @default("")
+  phone                  String    @default("")
+  email                  String    @default("")
+  checkInTime            String    @default("14:00") @map("check_in_time")
+  checkOutTime           String    @default("12:00") @map("check_out_time")
+  coverImageUrl          String?   @map("cover_image_url")
+  /// Array of `{ url, alt }`.
+  images                 Json      @default("[]")
+  amenities              String[]  @default([])
+  policies               String[]  @default([])
+  accentColor            String?   @map("accent_color")
+  logoUrl                String?   @map("logo_url")
+  listedOnMarketplace    Boolean   @default(true) @map("listed_on_marketplace")
+  featured               Boolean   @default(false)
+  rating                 Float?
+  reviewCount            Int       @default(0) @map("review_count")
+  customDomain           String?   @unique @map("custom_domain")
+  customDomainVerifiedAt DateTime? @map("custom_domain_verified_at") @db.Timestamptz(3)
+  createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  roomTypes RoomType[]
+  rooms     Room[]
+
+  @@index([tenantId])
+  @@index([city])
+  @@map("properties")
+}
+
+model RoomType {
+  id              String   @id @default(uuid()) @db.Uuid
+  tenantId        String   @map("tenant_id") @db.Uuid
+  propertyId      String   @map("property_id") @db.Uuid
+  name            String
+  description     String   @default("")
+  basePriceKobo   Int      @map("base_price_kobo")
+  hourlyPriceKobo Int?     @map("hourly_price_kobo")
+  capacity        Int      @default(2)
+  bedType         String   @default("Queen") @map("bed_type")
+  sizeSqm         Int      @default(20) @map("size_sqm")
+  amenities       String[] @default([])
+  /// Array of `{ url, alt }`.
+  images          Json     @default("[]")
+  sortOrder       Int      @default(0) @map("sort_order")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  rooms    Room[]
+
+  @@unique([propertyId, name])
+  @@index([tenantId])
+  @@map("room_types")
+}
+
+model Room {
+  id         String     @id @default(uuid()) @db.Uuid
+  tenantId   String     @map("tenant_id") @db.Uuid
+  propertyId String     @map("property_id") @db.Uuid
+  roomTypeId String     @map("room_type_id") @db.Uuid
+  number     String
+  floor      Int
+  status     RoomStatus @default(VACANT_CLEAN)
+  notes      String?
+  createdAt  DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  roomType RoomType @relation(fields: [roomTypeId], references: [id], onDelete: Restrict)
+
+  @@unique([propertyId, number])
+  @@index([tenantId, status])
+  @@index([roomTypeId])
+  @@map("rooms")
+}
+
+// ---------------------------------------------------------------------------
+// Hotel staff + sessions
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String    @id @default(uuid()) @db.Uuid
+  tenantId     String    @map("tenant_id") @db.Uuid
+  email        String    @unique
+  fullName     String    @map("full_name")
+  phone        String    @default("")
+  role         StaffRole
+  passwordHash String    @map("password_hash")
+  isActive     Boolean   @default(true) @map("is_active")
+  lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(3)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  refreshTokens RefreshToken[]
+
+  @@index([tenantId])
+  @@map("users")
+}
+
+/// Opaque rotating refresh tokens. Only an HMAC of the secret is stored.
+/// Tokens issued from one login share a `familyId`; presenting a token that
+/// was already rotated revokes the whole family (reuse detection).
+model RefreshToken {
+  id           String    @id @default(uuid()) @db.Uuid
+  tenantId     String    @map("tenant_id") @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  familyId     String    @map("family_id") @db.Uuid
+  tokenHash    String    @unique @map("token_hash")
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz(3)
+  revokeReason String?   @map("revoke_reason")
+  replacedById String?   @map("replaced_by_id") @db.Uuid
+  userAgent    String?   @map("user_agent")
+  ip           String?
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([userId])
+  @@index([familyId])
+  @@map("refresh_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// Platform (Devstrike staff)
+// ---------------------------------------------------------------------------
+
+model PlatformUser {
+  id           String       @id @default(uuid()) @db.Uuid
+  email        String       @unique
+  fullName     String       @map("full_name")
+  passwordHash String       @map("password_hash")
+  role         PlatformRole @default(SUPER_ADMIN)
+  isActive     Boolean      @default(true) @map("is_active")
+  lastLoginAt  DateTime?    @map("last_login_at") @db.Timestamptz(3)
+  createdAt    DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("platform_users")
+}
+
+// ---------------------------------------------------------------------------
+// Plans, features, entitlements
+// ---------------------------------------------------------------------------
+
+model Plan {
+  id               String   @id @default(uuid()) @db.Uuid
+  code             String   @unique
+  name             String
+  tagline          String   @default("")
+  priceMonthlyKobo Int?     @map("price_monthly_kobo")
+  priceYearlyKobo  Int?     @map("price_yearly_kobo")
+  /// Record<limitCode, number>; -1 means unlimited.
+  limits           Json     @default("{}")
+  commissionBps    Int?     @map("commission_bps")
+  highlighted      Boolean  @default(false)
+  sortOrder        Int      @default(0) @map("sort_order")
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  features      PlanFeature[]
+  subscriptions Subscription[]
+
+  @@map("plans")
+}
+
+model Feature {
+  code        String @id
+  name        String
+  description String @default("")
+  category    String
+
+  plans     PlanFeature[]
+  overrides TenantFeatureOverride[]
+
+  @@map("features")
+}
+
+model PlanFeature {
+  planId      String @map("plan_id") @db.Uuid
+  featureCode String @map("feature_code")
+
+  plan    Plan    @relation(fields: [planId], references: [id], onDelete: Cascade)
+  feature Feature @relation(fields: [featureCode], references: [code], onDelete: Cascade)
+
+  @@id([planId, featureCode])
+  @@map("plan_features")
+}
+
+/// Per-tenant add-ons (enabled = true) or removals (enabled = false).
+model TenantFeatureOverride {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  featureCode String   @map("feature_code")
+  enabled     Boolean
+  note        String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  feature Feature @relation(fields: [featureCode], references: [code], onDelete: Cascade)
+
+  @@unique([tenantId, featureCode])
+  @@map("tenant_feature_overrides")
+}
+
+// ---------------------------------------------------------------------------
+// Billing
+// ---------------------------------------------------------------------------
+
+model Subscription {
+  id                       String             @id @default(uuid()) @db.Uuid
+  tenantId                 String             @unique @map("tenant_id") @db.Uuid
+  planId                   String             @map("plan_id") @db.Uuid
+  status                   SubscriptionStatus
+  interval                 BillingInterval    @default(MONTHLY)
+  trialEndsAt              DateTime?          @map("trial_ends_at") @db.Timestamptz(3)
+  currentPeriodStart       DateTime?          @map("current_period_start") @db.Timestamptz(3)
+  currentPeriodEnd         DateTime?          @map("current_period_end") @db.Timestamptz(3)
+  pastDueAt                DateTime?          @map("past_due_at") @db.Timestamptz(3)
+  readOnlyAt               DateTime?          @map("read_only_at") @db.Timestamptz(3)
+  suspendedAt              DateTime?          @map("suspended_at") @db.Timestamptz(3)
+  cancelledAt              DateTime?          @map("cancelled_at") @db.Timestamptz(3)
+  paystackCustomerCode     String?            @map("paystack_customer_code")
+  paystackSubscriptionCode String?            @map("paystack_subscription_code")
+  createdAt                DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plan     Plan      @relation(fields: [planId], references: [id], onDelete: Restrict)
+  invoices Invoice[]
+
+  @@index([status])
+  @@map("subscriptions")
+}
+
+model Invoice {
+  id                String          @id @default(uuid()) @db.Uuid
+  tenantId          String          @map("tenant_id") @db.Uuid
+  subscriptionId    String          @map("subscription_id") @db.Uuid
+  reference         String          @unique
+  amountKobo        Int             @map("amount_kobo")
+  currency          String          @default("NGN")
+  status            InvoiceStatus   @default(PENDING)
+  planCode          String          @map("plan_code")
+  interval          BillingInterval
+  provider          String          @default("paystack")
+  authorizationUrl  String?         @map("authorization_url")
+  paidAt            DateTime?       @map("paid_at") @db.Timestamptz(3)
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@map("invoices")
+}
+
+/// Webhook idempotency ledger. `eventKey` is derived from the provider event
+/// and is unique, so a replayed webhook is detected and acknowledged without
+/// being processed twice.
+model PaymentEvent {
+  id          String    @id @default(uuid()) @db.Uuid
+  provider    String    @default("paystack")
+  eventKey    String    @unique @map("event_key")
+  eventType   String    @map("event_type")
+  tenantId    String?   @map("tenant_id") @db.Uuid
+  payload     Json
+  processedAt DateTime? @map("processed_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([tenantId])
+  @@map("payment_events")
+}
+
+// ---------------------------------------------------------------------------
+// Audit (append-only, enforced by a database trigger)
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id                  String   @id @default(uuid()) @db.Uuid
+  tenantId            String   @map("tenant_id") @db.Uuid
+  /// Staff actor. Deliberately not a foreign key: staff can be deleted while
+  /// their audit history (which may never be updated) is retained.
+  actorUserId         String?  @map("actor_user_id") @db.Uuid
+  actorPlatformUserId String?  @map("actor_platform_user_id") @db.Uuid
+  /// Snapshot of the actor's name at the time of the action.
+  actorName           String?  @map("actor_name")
+  action              String
+  entityType          String   @map("entity_type")
+  entityId            String?  @map("entity_id")
+  metadata            Json     @default("{}")
+  ip                  String?
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@map("audit_logs")
+}
