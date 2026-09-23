@@ -3,6 +3,7 @@ import { assertCan } from '../../common/permissions/can.js';
 import { Prisma as PrismaNS, type Guest, type Prisma, type Reservation, type Room, type RoomType } from '../../generated/prisma/client.js';
 import type { ReservationStatus } from '../../generated/prisma/enums.js';
 import type { AuthUser } from '../../common/auth-types.js';
+import { runStayHooksAfter, runStayHooksTx, stayDetailExtras } from '../../common/stay-hooks.js';
 import { AppException } from '../../common/errors/app-exception.js';
 import {
   addDays,
@@ -170,6 +171,12 @@ export class ReservationsService {
     return rows.map((r) => this.listItem(r, r.folio ? (balances.get(r.folio.id) ?? 0) : 0));
   }
 
+  /** M5: a guest's latest stays in one property (guest inbox context). */
+  async guestStays(tx: Tx, tenantId: string, guestId: string, propertyId: string, take = 5) {
+    const rows = await tx.reservation.findMany({ where: { tenantId, guestId, propertyId }, include, orderBy: { arrivalAt: 'desc' }, take });
+    return this.listItems(tx, rows);
+  }
+
   async detail(tx: Tx, tenantId: string, id: string) {
     const r = await this.load(tx, tenantId, id);
     const balance = r.folio ? await this.ledger.balance(tx, r.folio.id) : 0;
@@ -218,6 +225,14 @@ export class ReservationsService {
       createdBy: r.createdById ? { id: r.createdById, fullName: names.get(r.createdById) ?? 'Former staff member' } : null,
       guest: this.guests.toView(r.guest, stats.get(r.guestId)),
       online: await this.hotelBooking.onlineInfo(tx, r, r.guest.guestAccountId),
+      // M5
+      expectedArrivalTime: r.expectedArrivalTime,
+      otaChannel: r.otaChannel,
+      otaRef: r.otaRef,
+      otaCommissionKobo: r.otaCommissionKobo === null ? null : k(r.otaCommissionKobo),
+      overbooked: r.overbooked,
+      loyalty: null,
+      ...(await stayDetailExtras(tx, tenantId, r.id)),
     };
   }
 
@@ -681,7 +696,7 @@ export class ReservationsService {
     const clientCreatedAt = parseClientCreatedAt(dto.clientCreatedAt);
     let roomTypeForError = '';
     try {
-      return await this.db.tenant(user.tenantId, async (tx) => {
+      const detail = await this.db.tenant(user.tenantId, async (tx) => {
         const r = await this.load(tx, user.tenantId, id);
         roomTypeForError = r.roomTypeId;
         if (r.status !== 'PENDING' && r.status !== 'CONFIRMED') throw Err.invalidState(r.status, ['PENDING', 'CONFIRMED'], 'This reservation');
@@ -821,8 +836,11 @@ export class ReservationsService {
           },
           ip,
         });
+        await runStayHooksTx('checkedInTx', tx, user.tenantId, id);
         return this.detail(tx, user.tenantId, id);
       });
+      await runStayHooksAfter('afterCheckIn', user.tenantId, id);
+      return detail;
     } catch (e) {
       if (isExclusionViolation(e)) throw this.overlapError(roomTypeForError, dto.roomId ?? null);
       throw e;
@@ -966,9 +984,11 @@ export class ReservationsService {
         },
         ip,
       });
+      await runStayHooksTx('checkedOutTx', tx, user.tenantId, id);
       return { reservation: await this.detail(tx, user.tenantId, id), invoice, cityLedger };
     }).then(async (out) => {
       await runAfter(() => this.guestJobs.scheduleReviewRequest(user.tenantId, id, new Date(out.reservation.checkedOutAt ?? Date.now())), this.logger);
+      await runStayHooksAfter('afterCheckOut', user.tenantId, id);
       return out;
     });
   }

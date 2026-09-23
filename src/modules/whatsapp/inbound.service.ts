@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { AppException, ErrorCode } from '../../common/errors/app-exception.js';
 import { permissionsFor } from '../../common/permissions/catalogue.js';
@@ -7,6 +8,7 @@ import { AppConfigService } from '../../config/app-config.service.js';
 import { DbService } from '../../prisma/db.service.js';
 import { DigestService } from '../digest/digest.service.js';
 import { EntitlementsService } from '../entitlements/entitlements.service.js';
+import { GuestInboxService } from '../inbox/inbox.service.js';
 import { NotificationService } from '../notifications/notification.service.js';
 import { isUniqueViolation } from '../ops/ops.helpers.js';
 import { parseCommand } from './alerts.logic.js';
@@ -27,14 +29,40 @@ interface InboundMessage {
   id: string;
   from: string;
   text: string;
+  /** M5: the business number that received it, and the sender's WhatsApp profile name. */
+  phoneNumberId?: string;
+  name?: string;
+}
+
+export interface InboundStatus {
+  id: string;
+  status: string;
+  error?: string;
+}
+
+/** Delivery statuses (sent, delivered, read, failed) out of a Cloud API webhook payload. */
+export function extractStatuses(payload: unknown): InboundStatus[] {
+  const out: InboundStatus[] = [];
+  const entries = (payload as { entry?: unknown[] })?.entry ?? [];
+  for (const e of entries as { changes?: { value?: { statuses?: Record<string, unknown>[] } }[] }[]) {
+    for (const c of e.changes ?? []) {
+      for (const st of c.value?.statuses ?? []) {
+        if (typeof st.id !== 'string' || typeof st.status !== 'string') continue;
+        const err = (st.errors as { title?: string; message?: string }[] | undefined)?.[0];
+        out.push({ id: st.id, status: st.status, ...(err && { error: err.message ?? err.title ?? 'Delivery failed' }) });
+      }
+    }
+  }
+  return out;
 }
 
 /** Pulls text messages (and quick-reply button presses) out of a Cloud API webhook payload. */
 export function extractMessages(payload: unknown): InboundMessage[] {
   const out: InboundMessage[] = [];
   const entries = (payload as { entry?: unknown[] })?.entry ?? [];
-  for (const e of entries as { changes?: { value?: { messages?: Record<string, unknown>[] } }[] }[]) {
+  for (const e of entries as { changes?: { value?: { messages?: Record<string, unknown>[]; metadata?: { phone_number_id?: string }; contacts?: { wa_id?: string; profile?: { name?: string } }[] } }[] }[]) {
     for (const c of e.changes ?? []) {
+      const phoneNumberId = c.value?.metadata?.phone_number_id;
       for (const m of c.value?.messages ?? []) {
         const id = typeof m.id === 'string' ? m.id : null;
         const from = typeof m.from === 'string' ? m.from : null;
@@ -43,7 +71,8 @@ export function extractMessages(payload: unknown): InboundMessage[] {
           (m.button as { text?: string } | undefined)?.text ??
           (m.interactive as { button_reply?: { title?: string } } | undefined)?.button_reply?.title ??
           '';
-        if (id && from) out.push({ id, from, text: String(text) });
+        const name = c.value?.contacts?.find((x) => x.wa_id === from)?.profile?.name;
+        if (id && from) out.push({ id, from, text: String(text), ...(phoneNumberId && { phoneNumberId }), ...(name && { name }) });
       }
     }
   }
@@ -67,7 +96,12 @@ export class WhatsAppInboundService {
     private readonly digests: DigestService,
     private readonly entitlements: EntitlementsService,
     private readonly notifications: NotificationService,
+    private readonly refs: ModuleRef,
   ) {}
+
+  private get inbox() {
+    return this.refs.get(GuestInboxService, { strict: false });
+  }
 
   verifySubscription(mode: string | undefined, token: string | undefined, challenge: string | undefined): string {
     const expected = this.config.get('WHATSAPP_VERIFY_TOKEN');
@@ -85,6 +119,14 @@ export class WhatsAppInboundService {
         if (await this.handle(m)) handled++;
       } catch (e) {
         this.logger.error(`WhatsApp message ${m.id} failed: ${(e as Error).message}`);
+      }
+    }
+    // M5: delivery statuses of guest inbox messages.
+    for (const st of extractStatuses(payload)) {
+      try {
+        await this.inbox.applyStatus(st.id, st.status, st.error);
+      } catch (e) {
+        this.logger.error(`WhatsApp status ${st.id} failed: ${(e as Error).message}`);
       }
     }
     return { received: true, handled };
@@ -119,6 +161,12 @@ export class WhatsAppInboundService {
     }
     const staff = await this.staffFor(digits);
     if (!staff.length) {
+      // M5: a guest writing to a hotel with the guest inbox.
+      const routed = await this.inbox.receiveGuest({ providerMessageId: m.id, from: digits, text: m.text, name: m.name ?? null, phoneNumberId: m.phoneNumberId ?? null });
+      if (routed.routed) {
+        await this.db.system((tx) => tx.whatsAppInbound.update({ where: { messageId: m.id }, data: { tenantId: routed.tenantId, result: 'guest inbox', handledAt: new Date() } }));
+        return true;
+      }
       this.logger.log(`WhatsApp message from an unknown number ${phone.slice(0, 7)}••• ignored`);
       await this.db.system((tx) => tx.whatsAppInbound.update({ where: { messageId: m.id }, data: { result: 'unknown sender', handledAt: new Date() } }));
       return false;

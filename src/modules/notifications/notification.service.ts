@@ -161,6 +161,16 @@ export class NotificationService {
    * stores `redacted` text only.
    */
   async sendSensitive(m: OutgoingMessage & { redactedText: string }): Promise<{ ok: boolean; logId: string }> {
+    const r = await this.sendNow(m);
+    return { ok: r.ok, logId: r.logId };
+  }
+
+  /**
+   * Sends one message right away (no queue) and reports the outcome: used by
+   * the guest inbox, whose message rows mirror the delivery status.
+   * `redactedText` (OTP codes) is what the log keeps instead of the text.
+   */
+  async sendNow(m: OutgoingMessage & { redactedText?: string }): Promise<{ ok: boolean; logId: string; providerMessageId: string | null; outbox: boolean; error: string | null }> {
     const provider = this.providers[m.channel];
     const logId = randomUUID();
     await this.db.system((tx) =>
@@ -174,8 +184,9 @@ export class NotificationService {
           audience: m.audience ?? 'GUEST',
           recipient: m.to,
           subject: m.subject,
-          bodyText: m.redactedText,
+          bodyText: m.redactedText ?? m.text,
           bodyHtml: null,
+          reservationId: m.reservationId ?? null,
           status: 'QUEUED',
           provider: provider.name,
         } satisfies Prisma.NotificationLogUncheckedCreateInput,
@@ -190,13 +201,12 @@ export class NotificationService {
           data: { status: res.outbox ? 'OUTBOX' : 'SENT', providerMessageId: res.providerMessageId, attempts: 1, sentAt: new Date() },
         }),
       );
-      return { ok: true, logId };
+      return { ok: true, logId, providerMessageId: res.providerMessageId, outbox: !!res.outbox, error: null };
     } catch (e) {
-      this.logger.error(`${m.template} to ${m.channel} failed: ${(e as Error).message}`);
-      await this.db.system((tx) =>
-        tx.notificationLog.update({ where: { id: logId }, data: { status: 'FAILED', attempts: 1, error: (e as Error).message.slice(0, 500) } }),
-      );
-      return { ok: false, logId };
+      const error = (e as Error).message.slice(0, 500);
+      this.logger.error(`${m.template} to ${m.channel} failed: ${error}`);
+      await this.db.system((tx) => tx.notificationLog.update({ where: { id: logId }, data: { status: 'FAILED', attempts: 1, error } }));
+      return { ok: false, logId, providerMessageId: null, outbox: false, error };
     }
   }
 

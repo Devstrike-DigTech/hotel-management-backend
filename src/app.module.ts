@@ -35,6 +35,7 @@ import { StaffModule } from './modules/staff/staff.module.js';
 import { PosModule } from './modules/pos/pos.module.js';
 import { ChannelsModule } from './modules/channels/channels.module.js';
 import { DynamicPricingModule } from './modules/pricing/pricing.module.js';
+import { InboxModule } from './modules/inbox/inbox.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 
 function jobsEnabled(): boolean {
@@ -72,6 +73,7 @@ function jobsEnabled(): boolean {
     PosModule,
     ChannelsModule,
     DynamicPricingModule,
+    InboxModule,
     OperationsModule,
     GuestSideModule,
     BillingModule,

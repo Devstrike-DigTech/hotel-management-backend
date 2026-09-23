@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { runStayHooksAfter } from '../../common/stay-hooks.js';
 import { DbService } from '../../prisma/db.service.js';
 import { JobsBridge } from '../infra/jobs-bridge.js';
 import { NotificationService } from '../notifications/notification.service.js';
@@ -67,6 +68,8 @@ export class GuestJobsService {
       return this.notifications.queueTx(tx, msgs);
     });
     await this.notifications.dispatch(ids);
+    // M5: the guest inbox asks WhatsApp guests to confirm their arrival time.
+    if (ids.length) await runStayHooksAfter('afterPreArrival', tenantId, reservationId);
     return ids.length > 0;
   }
 

@@ -21,6 +21,9 @@ not need a template.
 | `review_request` | UTILITY | en | Review request 4 hours after check-out (guests without an email address) |
 | `payment_receipt` | UTILITY | en | Payment receipt (online payments) when the guest has no email address |
 | `otp_code` | AUTHENTICATION | en | Guest sign-in code sent over WhatsApp |
+| `guest_message` | UTILITY | en | Guest inbox: staff start or resume a conversation outside the 24-hour window |
+| `pre_arrival_confirm` | UTILITY | en | Guest inbox: pre-arrival arrival-time confirmation 24 hours before check-in |
+| `in_stay_welcome` | UTILITY | en | Guest inbox: welcome after check-in, inviting requests |
 
 ## owner_daily_digest
 
@@ -202,3 +205,58 @@ deliveries are checked against `X-Hub-Signature-256` using `WHATSAPP_APP_SECRET`
 - `1` (or `ACK`): acknowledge the latest Revenue Guard alert and its flags.
 - `DIGEST`: receive today's summary now.
 - anything else: a short help message.
+
+## guest_message
+
+- Category: UTILITY
+- Language: English (`en`)
+- Used for: Guest inbox: staff start or resume a conversation outside the 24-hour window
+
+Body:
+
+```
+Hello {{1}}, this is {{2}}. {{3}} Reply to this message to chat with us.
+```
+
+| Placeholder | Meaning | Sample value |
+| --- | --- | --- |
+| `{{1}}` | guest first name | Adaeze |
+| `{{2}}` | hotel name | The Palmwine House |
+| `{{3}}` | message | Your airport pickup is confirmed for 3pm tomorrow. |
+
+## pre_arrival_confirm
+
+- Category: UTILITY
+- Language: English (`en`)
+- Used for: Guest inbox: pre-arrival arrival-time confirmation 24 hours before check-in
+- Button: quick reply `1`
+
+Body:
+
+```
+Hello {{1}}, we look forward to welcoming you at {{2}} on {{3}}. Reply 1 to confirm your arrival time.
+```
+
+| Placeholder | Meaning | Sample value |
+| --- | --- | --- |
+| `{{1}}` | guest first name | Adaeze |
+| `{{2}}` | hotel name | The Palmwine House |
+| `{{3}}` | arrival date | Fri 2 Oct 2026 |
+
+## in_stay_welcome
+
+- Category: UTILITY
+- Language: English (`en`)
+- Used for: Guest inbox: welcome after check-in, inviting requests
+
+Body:
+
+```
+Welcome to {{1}}, {{2}}. You are in room {{3}}. Reply to this message with any request and our team will help.
+```
+
+| Placeholder | Meaning | Sample value |
+| --- | --- | --- |
+| `{{1}}` | hotel name | The Palmwine House |
+| `{{2}}` | guest first name | Adaeze |
+| `{{3}}` | room number | 204 |

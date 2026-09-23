@@ -14,7 +14,10 @@ export type WhatsAppTemplateName =
   | 'pre_arrival'
   | 'review_request'
   | 'payment_receipt'
-  | 'otp_code';
+  | 'otp_code'
+  | 'guest_message'
+  | 'pre_arrival_confirm'
+  | 'in_stay_welcome';
 
 export interface WhatsAppTemplateDef {
   name: WhatsAppTemplateName;
@@ -157,6 +160,45 @@ export const WHATSAPP_TEMPLATES: WhatsAppTemplateDef[] = [
     params: [{ index: 1, name: 'code', example: '482913' }],
     buttons: [{ type: 'COPY_CODE', text: 'Copy code' }],
     usedFor: 'Guest sign-in code sent over WhatsApp',
+  },
+  {
+    name: 'guest_message',
+    language: 'en',
+    category: 'UTILITY',
+    body: 'Hello {{1}}, this is {{2}}. {{3}} Reply to this message to chat with us.',
+    params: [
+      { index: 1, name: 'guest first name', example: 'Adaeze' },
+      { index: 2, name: 'hotel name', example: 'The Palmwine House' },
+      { index: 3, name: 'message', example: 'Your airport pickup is confirmed for 3pm tomorrow.' },
+    ],
+    buttons: [],
+    usedFor: 'Guest inbox: staff start or resume a conversation outside the 24-hour window',
+  },
+  {
+    name: 'pre_arrival_confirm',
+    language: 'en',
+    category: 'UTILITY',
+    body: 'Hello {{1}}, we look forward to welcoming you at {{2}} on {{3}}. Reply 1 to confirm your arrival time.',
+    params: [
+      { index: 1, name: 'guest first name', example: 'Adaeze' },
+      { index: 2, name: 'hotel name', example: 'The Palmwine House' },
+      { index: 3, name: 'arrival date', example: 'Fri 2 Oct 2026' },
+    ],
+    buttons: [{ type: 'QUICK_REPLY', text: '1' }],
+    usedFor: 'Guest inbox: pre-arrival arrival-time confirmation 24 hours before check-in',
+  },
+  {
+    name: 'in_stay_welcome',
+    language: 'en',
+    category: 'UTILITY',
+    body: 'Welcome to {{1}}, {{2}}. You are in room {{3}}. Reply to this message with any request and our team will help.',
+    params: [
+      { index: 1, name: 'hotel name', example: 'The Palmwine House' },
+      { index: 2, name: 'guest first name', example: 'Adaeze' },
+      { index: 3, name: 'room number', example: '204' },
+    ],
+    buttons: [],
+    usedFor: 'Guest inbox: welcome after check-in, inviting requests',
   },
 ];
 
