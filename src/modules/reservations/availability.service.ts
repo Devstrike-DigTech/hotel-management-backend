@@ -159,14 +159,42 @@ export class AvailabilityService {
     };
   }
 
+  /**
+   * Room picker for a window.
+   *
+   * - `free`: no active stay (pending, confirmed or checked in) overlaps the
+   *   window. With `forCheckIn`, the window starts now (check-in moves the
+   *   arrival to now), so a room whose guest is still checked in is never free
+   *   for a check-in, even if that guest departs later today.
+   * - `checkInReady`: free, clean (VACANT_CLEAN or RESERVED) and nobody is
+   *   checked in to it right now. Only these rooms pass check-in.
+   * - `occupiedUntil`: departure of the guest currently checked in, if any.
+   * - `reason`: why `checkInReady` is false (first that applies): OUT_OF_ORDER,
+   *   OCCUPIED (a guest is checked in now), BOOKED (another stay overlaps the
+   *   window), DIRTY; null when the room is ready.
+   */
   roomsFor(
     user: AuthUser,
-    q: { roomTypeId: string; stayType?: string; arrivalDate?: string; departureDate?: string; arrivalAt?: string; departureAt?: string; excludeReservationId?: string },
+    q: {
+      roomTypeId: string;
+      stayType?: string;
+      arrivalDate?: string;
+      departureDate?: string;
+      arrivalAt?: string;
+      departureAt?: string;
+      excludeReservationId?: string;
+      forCheckIn?: string;
+    },
   ) {
+    const forCheckIn = q.forCheckIn === 'true';
     return this.db.tenant(user.tenantId, async (tx) => {
-      const { arrivalAt, departureAt } = await this.resolveWindow(tx, user.tenantId, q);
+      const w = await this.resolveWindow(tx, user.tenantId, q);
+      const now = new Date();
+      const arrivalAt = forCheckIn && now < w.arrivalAt ? now : w.arrivalAt;
+      const departureAt = w.departureAt;
       if (departureAt <= arrivalAt) throw Err.validation('departureAt', 'Departure must be after arrival');
       const rooms = await tx.room.findMany({ where: { tenantId: user.tenantId, roomTypeId: q.roomTypeId } });
+      const exclude = q.excludeReservationId ? { id: { not: q.excludeReservationId } } : {};
       const stays = await tx.reservation.findMany({
         where: {
           tenantId: user.tenantId,
@@ -174,30 +202,53 @@ export class AvailabilityService {
           status: { in: ACTIVE },
           arrivalAt: { lt: departureAt },
           departureAt: { gt: arrivalAt },
-          ...(q.excludeReservationId && { id: { not: q.excludeReservationId } }),
+          ...exclude,
         },
         select: { roomId: true, arrivalAt: true, departureAt: true },
       });
+      const inHouse = await tx.reservation.findMany({
+        where: { tenantId: user.tenantId, roomId: { in: rooms.map((r) => r.id) }, status: 'CHECKED_IN', ...exclude },
+        select: { roomId: true, departureAt: true },
+      });
+      const occupant = new Map(inHouse.map((r) => [r.roomId, r.departureAt]));
       const sellable = rooms.filter((r) => r.status !== 'OUT_OF_ORDER').length;
       const peak = maxConcurrent(stays.map((s) => ({ start: s.arrivalAt, end: s.departureAt })), arrivalAt, departureAt);
       rooms.sort((a, b) => a.floor - b.floor || collator.compare(a.number, b.number));
       return {
         roomTypeId: q.roomTypeId,
+        forCheckIn,
         available: Math.max(0, sellable - peak),
-        rooms: rooms.map((r) => ({
-          id: r.id,
-          number: r.number,
-          floor: r.floor,
-          status: r.status,
-          free:
-            r.status !== 'OUT_OF_ORDER' &&
-            isFree(
-              stays.filter((s) => s.roomId === r.id).map((s) => ({ start: s.arrivalAt, end: s.departureAt })),
-              arrivalAt,
-              departureAt,
-            ),
-          clean: r.status === 'VACANT_CLEAN' || r.status === 'RESERVED',
-        })),
+        rooms: rooms.map((r) => {
+          const booked = !isFree(
+            stays.filter((s) => s.roomId === r.id).map((s) => ({ start: s.arrivalAt, end: s.departureAt })),
+            arrivalAt,
+            departureAt,
+          );
+          const occupiedUntil = occupant.get(r.id) ?? null;
+          const clean = r.status === 'VACANT_CLEAN' || r.status === 'RESERVED';
+          const free = r.status !== 'OUT_OF_ORDER' && !booked && !(forCheckIn && occupiedUntil);
+          const reason =
+            r.status === 'OUT_OF_ORDER'
+              ? 'OUT_OF_ORDER'
+              : occupiedUntil
+                ? 'OCCUPIED'
+                : booked
+                  ? 'BOOKED'
+                  : !clean
+                    ? 'DIRTY'
+                    : null;
+          return {
+            id: r.id,
+            number: r.number,
+            floor: r.floor,
+            status: r.status,
+            free,
+            clean,
+            checkInReady: free && clean && !occupiedUntil,
+            occupiedUntil: occupiedUntil?.toISOString() ?? null,
+            reason,
+          };
+        }),
       };
     });
   }

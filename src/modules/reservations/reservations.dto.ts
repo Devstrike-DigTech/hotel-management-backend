@@ -137,6 +137,8 @@ export class RoomsAvailabilityQueryDto {
   @IsOptional() @IsISO8601() arrivalAt?: string;
   @IsOptional() @IsISO8601() departureAt?: string;
   @IsOptional() @IsUUID() excludeReservationId?: string;
+  /** "true": the window starts now; rooms with a guest still checked in are not free. */
+  @IsOptional() @IsIn(['true', 'false']) forCheckIn?: 'true' | 'false';
 }
 
 export class TapeChartQueryDto {
