@@ -66,12 +66,14 @@ export const envSchema = z.object({
   /**
    * Shared secret between the web server and the API. When a request carries
    * X-Proxy-Auth equal to it, X-Client-IP is used as the client IP for rate
-   * limiting. Empty (or under 16 characters) = the header is ignored.
+   * limiting. Empty = off (the header is ignored); when set it must be at
+   * least 16 characters, so a weak value fails at start-up.
    */
   TRUSTED_PROXY_SECRET: z
     .string()
     .optional()
-    .transform((v) => (v && v.trim().length >= 16 ? v.trim() : undefined)),
+    .transform((v) => (v && v.trim().length > 0 ? v.trim() : undefined))
+    .refine((v) => v === undefined || v.length >= 16, { message: 'TRUSTED_PROXY_SECRET must be at least 16 characters (or empty to turn it off)' }),
   REDIS_URL: z.url(),
 
   JWT_ACCESS_SECRET: z.string().min(32),
