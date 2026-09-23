@@ -19,7 +19,19 @@ import { MeModule } from './modules/me/me.module.js';
 import { PublicModule } from './modules/public/public.module.js';
 import { RoomTypesModule } from './modules/room-types/room-types.module.js';
 import { RoomsModule } from './modules/rooms/rooms.module.js';
+import { BillingModule } from './modules/billing/billing.module.js';
+import { DashboardModule } from './modules/dashboard/dashboard.module.js';
+import { HousekeepingModule } from './modules/housekeeping/housekeeping.module.js';
+import { JobsModule } from './modules/jobs/jobs.module.js';
+import { PlatformModule } from './modules/platform/platform.module.js';
+import { PropertyModule } from './modules/property/property.module.js';
+import { StaffModule } from './modules/staff/staff.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
+
+function jobsEnabled(): boolean {
+  const v = process.env.JOBS_ENABLED;
+  return v === undefined || v === 'true' || v === '1';
+}
 
 @Module({
   imports: [
@@ -41,6 +53,16 @@ import { PrismaModule } from './prisma/prisma.module.js';
     MeModule,
     RoomTypesModule,
     RoomsModule,
+    DashboardModule,
+    PropertyModule,
+    StaffModule,
+    HousekeepingModule,
+    BillingModule,
+    PlatformModule,
+    // BullMQ workers + the daily dunning schedule. Skipped when
+    // JOBS_ENABLED=false (tests, scripts); decided before config validation
+    // because module lists are static.
+    ...(jobsEnabled() ? [JobsModule] : []),
   ],
   providers: [
     // Order matters: authenticate, then authorise by role, then block writes
