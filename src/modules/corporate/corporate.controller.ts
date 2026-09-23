@@ -1,7 +1,7 @@
 import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { AuthUser } from '../../common/auth-types.js';
-import { ClientIp, CurrentUser, RequirePermission } from '../../common/decorators/index.js';
+import { ClientIp, CurrentUser, GroupWide, RequirePermission } from '../../common/decorators/index.js';
 import { RequireFeature } from '../entitlements/entitlements.decorators.js';
 import {
   AccountPaymentDto,
@@ -20,6 +20,7 @@ import { CorporateService } from './corporate.service.js';
 @ApiTags('Corporate')
 @ApiBearerAuth()
 @RequireFeature('promotions')
+@GroupWide()
 @Controller()
 export class CorporateController {
   constructor(private readonly svc: CorporateService) {}

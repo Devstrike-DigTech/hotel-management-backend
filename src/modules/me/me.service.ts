@@ -52,6 +52,9 @@ export class MeService {
         properties,
         propertyAccess: { allProperties, propertyIds: granted },
         group,
+        // M5: the property to use without a header, and whether an inaccessible X-Property-Id was ignored.
+        suggestedPropertyId: auth.defaultPropertyId ?? currentProperty?.id ?? null,
+        propertyHeaderIgnored: !!auth.propertyHeaderIgnored,
       };
     });
   }

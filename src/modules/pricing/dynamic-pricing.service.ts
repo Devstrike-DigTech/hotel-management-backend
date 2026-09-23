@@ -14,7 +14,7 @@ import { appError, Err, paginate, primaryProperty, userNames, userRef } from '..
 import { ACTIVE_STATUSES } from '../rates/capacity.js';
 import { barForNight } from '../rates/rates.logic.js';
 import { RatesService } from '../rates/rates.service.js';
-import { suggest, type EngineInput, type EngineOutput, type Factor, type Guardrail as EngineGuardrail } from './engine.js';
+import { relevantCompetitors, suggest, type EngineInput, type EngineOutput, type Factor, type Guardrail as EngineGuardrail } from './engine.js';
 import { IMPACT_BPS, nationalEventsBetween, type CalendarEvent, type EventImpact } from './events.js';
 
 const MAX_RANGE_DAYS = 366;
@@ -452,15 +452,17 @@ export class DynamicPricingService {
           });
         }
         const key = `${t.id}|${date}`;
+        const currentKobo = barForNight(t, date, ctx.rules, ctx.overrides).baseRateKobo;
         const input: EngineInput = {
           date,
-          currentKobo: barForNight(t, date, ctx.rules, ctx.overrides).baseRateKobo,
+          currentKobo,
+          baseKobo: t.basePriceKobo,
           capacity: roomCount.get(t.id) ?? 0,
           sold,
           daysOut,
           reference,
           events: events.filter((e) => e.dateFrom <= date && e.dateTo >= date).map((e) => ({ name: e.name, upliftBps: e.upliftBps })),
-          competitorKobo: competitors.filter((c) => fromDbDate(c.date) === date && (!c.roomTypeId || c.roomTypeId === t.id)).map((c) => c.rateKobo),
+          competitorKobo: relevantCompetitors(currentKobo, competitors.filter((c) => fromDbDate(c.date) === date), t.id),
           guardrail: guardrails.get(t.id)!,
           minChangeBps: settings.minChangeBps,
           frozen: frozenSet.has(`*|${date}`) || frozenSet.has(key),

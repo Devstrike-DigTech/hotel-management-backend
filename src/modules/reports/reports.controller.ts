@@ -4,7 +4,7 @@ import { IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 import { RequireFeature } from '../entitlements/entitlements.decorators.js';
 import { GroupReportsService } from './group-reports.service.js';
 import type { AuthUser } from '../../common/auth-types.js';
-import { CurrentUser, RequirePermission } from '../../common/decorators/index.js';
+import { CurrentUser, GroupWide, RequirePermission } from '../../common/decorators/index.js';
 import { ReportsService } from './reports.service.js';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -34,6 +34,7 @@ export class ReportsController {
   ) {}
 
   @Get('group')
+  @GroupWide()
   @RequireFeature('multi_property')
   @ApiOperation({ summary: 'Group report: every accessible property, consolidated and compared (M5)' })
   groupReport(@CurrentUser() user: AuthUser, @Query() q: GroupQueryDto) {

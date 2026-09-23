@@ -6,7 +6,9 @@ import { createHash } from 'node:crypto';
 import type { Folio, Guest, Prisma, PrismaClient, Property, Reservation, Room, RoomType } from '../../src/generated/prisma/client.js';
 import type { TaxComponent } from '../../src/modules/folios/tax.logic.js';
 import { orderTotals, type TotalsLine } from '../../src/modules/pos/pos.logic.js';
-import { suggest, type EngineInput } from '../../src/modules/pricing/engine.js';
+import { relevantCompetitors, suggest, type EngineInput } from '../../src/modules/pricing/engine.js';
+import { barForNight } from '../../src/modules/rates/rates.logic.js';
+import { toRuleLike } from '../../src/modules/rates/rates.service.js';
 import { IMPACT_BPS, nationalEventsBetween } from '../../src/modules/pricing/events.js';
 import { earnPoints, memberNumber, tierFor } from '../../src/modules/loyalty/loyalty.logic.js';
 import { mockRatePlanId, mockRoomTypeId } from '../../src/modules/channels/channel-provider.js';
@@ -1006,7 +1008,7 @@ function pick3<T>(rand: () => number, xs: T[]): T {
 // =============================================================================
 
 async function seedPricing(ctx: SeedCtx, x: { lekki: Property; ikoyi: Property; lekkiTypes: Map<string, RoomType>; ikoyiTypes: Map<string, RoomType> }): Promise<number> {
-  const { prisma, tenantId, now, today, rand } = ctx;
+  const { prisma, tenantId, today, rand } = ctx;
   const tunde = ctx.users.get('tunde@palmwine.ng')!;
   const owner = ctx.users.get('demo@palmwine.ng')!;
   let suggestions = 0;
@@ -1039,7 +1041,12 @@ async function seedPricing(ctx: SeedCtx, x: { lekki: Property; ikoyi: Property; 
     const events = [...nationalEventsBetween(today, addDays(today, days)), ...custom.map((e) => ({ name: e.name, dateFrom: e.from, dateTo: e.to, upliftBps: IMPACT_BPS[e.impact], city: 'Lagos', disabled: false }))];
     const rooms = await prisma.room.groupBy({ by: ['roomTypeId'], where: { propertyId: p.id }, _count: { _all: true } });
     const cap = new Map(rooms.map((r) => [r.roomTypeId, r._count._all]));
-    const stays = await prisma.reservation.findMany({ where: { propertyId: p.id, status: { notIn: ['CANCELLED', 'NO_SHOW'] }, departureAt: { gt: lagosDateTime(addDays(today, -28), '12:00') } }, select: { roomTypeId: true, arrivalAt: true, departureAt: true, status: true, createdAt: true } });
+    const stays = await prisma.reservation.findMany({ where: { propertyId: p.id, status: { notIn: ['CANCELLED', 'NO_SHOW'] }, departureAt: { gt: lagosDateTime(addDays(today, -35), '12:00') } }, select: { roomTypeId: true, arrivalAt: true, departureAt: true, status: true, createdAt: true } });
+    // Today's BAR (seasons and manual overrides), as the engine sees it.
+    const rules = (await prisma.rateRule.findMany({ where: { propertyId: p.id, active: true } })).map(toRuleLike);
+    const overrides = new Map((await prisma.rateOverride.findMany({ where: { propertyId: p.id } })).map((o) => [`${o.roomTypeId}|${o.date.toISOString().slice(0, 10)}`, o.rateKobo]));
+    const manual = new Set((await prisma.rateOverride.findMany({ where: { propertyId: p.id, source: 'MANUAL' } })).map((o) => `${o.roomTypeId}|${o.date.toISOString().slice(0, 10)}`));
+    const comps = await prisma.competitorRate.findMany({ where: { propertyId: p.id } });
     for (const t of types.values()) {
       for (const d of dateRange(addDays(today, 1), addDays(today, days))) {
         if (p.id === x.lekki.id && d === addDays(today, 31)) continue;
@@ -1049,27 +1056,30 @@ async function seedPricing(ctx: SeedCtx, x: { lekki: Property; ikoyi: Property; 
           return stays.filter((r) => r.roomTypeId === t.id && r.arrivalAt < e && r.departureAt > s);
         };
         const daysOut = Math.round((lagosDateTime(d, '12:00').getTime() - lagosDateTime(today, '12:00').getTime()) / DAY);
+        // Same weekday in the past four weeks, read at the same lead time (the same rule as the service).
         const reference = [1, 2, 3, 4]
           .map((w) => addDays(d, -7 * w))
-          .filter((r) => r < today && r >= addDays(today, -28))
+          .filter((r) => r < today && r >= addDays(today, -35))
           .map((r) => {
             const c = covering(r);
-            const cutoff = new Date(now.getTime() - (Math.round((lagosDateTime(d, '12:00').getTime() - lagosDateTime(r, '12:00').getTime()) / DAY)) * DAY);
+            const cutoff = new Date(lagosDateTime(r, '12:00').getTime() - daysOut * DAY);
             return { otbAtLead: c.filter((s) => s.createdAt <= cutoff).length, final: c.length };
           });
+        const currentKobo = barForNight(t, d, rules, overrides).baseRateKobo;
         const input: EngineInput = {
           date: d,
-          currentKobo: t.basePriceKobo,
+          currentKobo,
+          baseKobo: t.basePriceKobo,
           capacity: cap.get(t.id) ?? 0,
           sold: covering(d).filter((s) => s.status !== 'CHECKED_OUT').length,
           daysOut,
           reference,
           events: events.filter((e) => !e.disabled && e.dateFrom <= d && e.dateTo >= d && (!e.city || e.city === 'Lagos')).map((e) => ({ name: e.name, upliftBps: e.upliftBps })),
-          competitorKobo: [],
+          competitorKobo: relevantCompetitors(currentKobo, comps.filter((c) => c.date.toISOString().slice(0, 10) === d), t.id),
           guardrail: { enabled: true, floorKobo: Math.round((t.basePriceKobo * 0.75) / 50_000) * 50_000, ceilingKobo: Math.round((t.basePriceKobo * 1.8) / 50_000) * 50_000, maxDailyChangeBps: 1500 },
           minChangeBps: 300,
           frozen: false,
-          manualOverride: false,
+          manualOverride: manual.has(`${t.id}|${d}`),
         };
         if (!input.capacity) continue;
         const out = suggest(input);

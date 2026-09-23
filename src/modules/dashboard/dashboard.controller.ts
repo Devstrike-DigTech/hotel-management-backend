@@ -1,7 +1,7 @@
 import { Controller, Get } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { AuthUser } from '../../common/auth-types.js';
-import { CurrentUser, RequirePermission } from '../../common/decorators/index.js';
+import { CurrentUser, GroupWide, RequirePermission } from '../../common/decorators/index.js';
 import { RequireFeature } from '../entitlements/entitlements.decorators.js';
 import { GroupReportsService } from '../reports/group-reports.service.js';
 import { DashboardService } from './dashboard.service.js';
@@ -16,6 +16,7 @@ export class DashboardController {
   ) {}
 
   @Get('group')
+  @GroupWide()
   @RequirePermission('reports.view')
   @RequireFeature('multi_property')
   @ApiOperation({ summary: 'Today across every property the user can access (M5)' })

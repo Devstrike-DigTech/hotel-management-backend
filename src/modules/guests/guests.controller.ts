@@ -17,7 +17,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import type { AuthUser } from '../../common/auth-types.js';
-import { ClientIp, CurrentUser, Public, RequirePermission } from '../../common/decorators/index.js';
+import { ClientIp, CurrentUser, GroupWide, Public, RequirePermission } from '../../common/decorators/index.js';
 import { RequireFeature } from '../entitlements/entitlements.decorators.js';
 import { ReservationsService } from '../reservations/reservations.service.js';
 import {
@@ -33,6 +33,7 @@ import { GuestsService, MAX_ID_IMAGE_BYTES, type UploadedFileLike } from './gues
 @ApiTags('Guests')
 @ApiBearerAuth()
 @RequireFeature('guest_register')
+@GroupWide()
 @Controller('guests')
 export class GuestsController {
   constructor(

@@ -12,7 +12,7 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { PropertyAccessDto } from '../property/property.dto.js';
 import type { AuthUser } from '../../common/auth-types.js';
-import { ClientIp, CurrentUser, RequirePermission } from '../../common/decorators/index.js';
+import { ClientIp, CurrentUser, GroupWide, RequirePermission } from '../../common/decorators/index.js';
 import { CheckLimit } from '../entitlements/entitlements.decorators.js';
 import { CreateStaffDto, UpdateStaffDto } from './staff.dto.js';
 import { StaffService } from './staff.service.js';
@@ -20,6 +20,7 @@ import { StaffService } from './staff.service.js';
 @ApiTags('Staff')
 @ApiBearerAuth()
 @RequirePermission('staff.manage')
+@GroupWide()
 @Controller('staff')
 export class StaffController {
   constructor(private readonly svc: StaffService) {}

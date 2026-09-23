@@ -19,6 +19,7 @@ export const ANY_PERMISSION_KEY = 'auth:anyPermission';
 export const IS_GUEST_KEY = 'auth:isGuest';
 export const OPTIONAL_GUEST_KEY = 'auth:optionalGuest';
 export const ALLOW_READ_ONLY_KEY = 'billing:allowReadOnly';
+export const GROUP_WIDE_KEY = 'property:groupWide';
 
 /** Route needs no authentication. */
 export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
@@ -51,6 +52,13 @@ export const AnyPermission = (...permissions: string[]) => SetMetadata(ANY_PERMI
  * SUSPENDED (e.g. paying the bill, logging out).
  */
 export const AllowWhenReadOnly = () => SetMetadata(ALLOW_READ_ONLY_KEY, true);
+
+/**
+ * M5: a tenant-wide route (the hotel group). An `X-Property-Id` the user
+ * cannot access is ignored here (the request runs in their default property)
+ * instead of answering 403 PROPERTY_ACCESS_DENIED.
+ */
+export const GroupWide = () => SetMetadata(GROUP_WIDE_KEY, true);
 
 export const CurrentUser = createParamDecorator(
   (_data: unknown, ctx: ExecutionContext): AuthUser => {

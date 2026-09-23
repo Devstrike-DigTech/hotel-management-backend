@@ -26,7 +26,12 @@ export class KdsService {
     return rows.map((t) => ticketView(t, t.order.roomId ? (rooms.get(t.order.roomId) ?? null) : null, now));
   }
 
-  list(user: AuthUser, q: { station?: 'KITCHEN' | 'BAR'; outletId?: string; status?: string; since?: string }) {
+  /**
+   * Tickets oldest first, `limit` per page (default 100, max 200) with an
+   * opaque `cursor` for the next page. SERVED and CANCELLED tickets are only
+   * those finished in the last `finishedWithinMinutes` (default 120).
+   */
+  async list(user: AuthUser, q: { station?: 'KITCHEN' | 'BAR'; outletId?: string; status?: string; since?: string; limit?: number; cursor?: string; finishedWithinMinutes?: number }) {
     const statuses = q.status
       ? (q.status.split(',').map((s) => s.trim().toUpperCase()).filter((s) => s in KDS_TRANSITIONS) as KdsTicketStatus[])
       : ACTIVE;
@@ -35,6 +40,17 @@ export class KdsService {
       since = new Date(q.since);
       if (Number.isNaN(since.getTime())) throw Err.validation('since', 'since must be an ISO timestamp');
     }
+    let after: { at: Date; id: string } | null = null;
+    if (q.cursor) {
+      const [at, id] = Buffer.from(q.cursor, 'base64url').toString('utf8').split('|');
+      const d = new Date(at ?? '');
+      if (!id || Number.isNaN(d.getTime())) throw Err.validation('cursor', 'Invalid cursor');
+      after = { at: d, id };
+    }
+    const limit = Math.min(200, Math.max(1, q.limit ?? 100));
+    const finishedAfter = new Date(Date.now() - (q.finishedWithinMinutes ?? 120) * 60_000);
+    const live = statuses.filter((s) => s !== 'SERVED' && s !== 'CANCELLED');
+    const done = statuses.filter((s) => s === 'SERVED' || s === 'CANCELLED');
     return this.db.tenant(user.tenantId, async (tx) => {
       const rows = await tx.posTicket.findMany({
         where: {
@@ -42,13 +58,21 @@ export class KdsService {
           ...(q.station && { station: q.station as KdsStation }),
           ...(q.outletId && { outletId: q.outletId }),
           // With `since`, every ticket changed since then (so bumped ones disappear on the screen).
-          ...(since ? { updatedAt: { gte: since } } : { status: { in: statuses } }),
+          AND: [
+            since
+              ? { updatedAt: { gte: since } }
+              : { OR: [...(live.length ? [{ status: { in: live } }] : []), ...(done.length ? [{ status: { in: done }, updatedAt: { gte: finishedAfter } }] : []), ...(statuses.length ? [] : [{ id: { in: [] } }])] },
+            ...(after ? [{ OR: [{ createdAt: { gt: after.at } }, { createdAt: after.at, id: { gt: after.id } }] }] : []),
+          ],
         },
         include,
-        orderBy: { createdAt: 'asc' },
-        take: 200,
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        take: limit + 1,
       });
-      return this.views(tx, rows);
+      const page = rows.slice(0, limit);
+      const last = page[page.length - 1];
+      const nextCursor = rows.length > limit && last ? Buffer.from(`${last.createdAt.toISOString()}|${last.id}`, 'utf8').toString('base64url') : null;
+      return { items: await this.views(tx, page), nextCursor };
     });
   }
 

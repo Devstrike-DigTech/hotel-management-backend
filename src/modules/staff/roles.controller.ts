@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/commo
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ArrayMaxSize, IsArray, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import type { AuthUser } from '../../common/auth-types.js';
-import { ClientIp, CurrentUser, RequirePermission } from '../../common/decorators/index.js';
+import { ClientIp, CurrentUser, GroupWide, RequirePermission } from '../../common/decorators/index.js';
 import { RolesService } from './roles.service.js';
 
 export class CreateRoleDto {
@@ -20,6 +20,7 @@ export class UpdateRoleDto {
 
 @ApiTags('Staff')
 @ApiBearerAuth()
+@GroupWide()
 @Controller()
 export class RolesController {
   constructor(private readonly roles: RolesService) {}

@@ -280,6 +280,9 @@ export class KdsQueryDto {
   @IsOptional() @IsUUID() outletId?: string;
   @IsOptional() @IsString() @MaxLength(80) status?: string;
   @IsOptional() @IsString() @MaxLength(40) since?: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(200) limit?: number;
+  @IsOptional() @IsString() @MaxLength(200) cursor?: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(5) @Max(1440) finishedWithinMinutes?: number;
 }
 
 export class KdsStatusDto {

@@ -1,7 +1,7 @@
 import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Put } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { AuthUser } from '../../common/auth-types.js';
-import { ClientIp, CurrentUser, RequirePermission } from '../../common/decorators/index.js';
+import { ClientIp, CurrentUser, GroupWide, RequirePermission } from '../../common/decorators/index.js';
 import { CheckLimit, RequireFeature } from '../entitlements/entitlements.decorators.js';
 import { CreatePropertyDto, CurrentPropertyDto, UpdatePropertyM5Dto } from './property.dto.js';
 import { PropertyService } from './property.service.js';
@@ -35,6 +35,7 @@ export class PropertyController {
 /** M5: the hotel group's properties (tenant-wide; X-Property-Id is ignored). */
 @ApiTags('Properties')
 @ApiBearerAuth()
+@GroupWide()
 @Controller()
 export class PropertiesController {
   constructor(private readonly svc: PropertyService) {}

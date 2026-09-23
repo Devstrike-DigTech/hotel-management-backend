@@ -187,9 +187,12 @@ export class KdsController {
 
   @Get('tickets')
   @ApiOperation({ summary: 'Kitchen / bar tickets (poll every 5 s; ?since= returns changes)' })
-  tickets(@CurrentUser() u: AuthUser, @Query() q: KdsQueryDto, @Res({ passthrough: true }) res: Response) {
+  async tickets(@CurrentUser() u: AuthUser, @Query() q: KdsQueryDto, @Res({ passthrough: true }) res: Response) {
     res.setHeader('X-Server-Time', new Date().toISOString());
-    return this.kds.list(u, q);
+    // The body stays a KdsTicket[] (compatible); the next page's cursor is a header.
+    const page = await this.kds.list(u, q);
+    if (page.nextCursor) res.setHeader('X-Next-Cursor', page.nextCursor);
+    return page.items;
   }
 
   @Post('tickets/:id/status') @HttpCode(200)

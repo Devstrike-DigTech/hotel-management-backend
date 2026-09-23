@@ -25,7 +25,7 @@ export function setupApp(app: INestApplication): void {
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Property-Id'],
-    exposedHeaders: ['Idempotent-Replayed', 'Content-Disposition', 'X-Property-Id', 'X-Server-Time'],
+    exposedHeaders: ['Idempotent-Replayed', 'Content-Disposition', 'X-Property-Id', 'X-Server-Time', 'X-Next-Cursor'],
     maxAge: 600,
   });
   app.useGlobalPipes(createValidationPipe());

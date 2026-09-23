@@ -49,14 +49,30 @@ const MOON: Record<number, { fitr: string; kabir: string; mawlid: string }> = {
   2029: { fitr: '2029-02-14', kabir: '2029-04-24', mawlid: '2029-07-24' },
 };
 
-/** The weekend around a fixed date: Friday before to Sunday after when it touches a weekend. */
-function withWeekend(date: string): { from: string; to: string } {
-  const dow = new Date(`${date}T12:00:00Z`).getUTCDay();
-  if (dow === 1) return { from: addDays(date, -3), to: date }; // Monday: Fri-Mon
-  if (dow === 5) return { from: date, to: addDays(date, 2) }; // Friday: Fri-Sun
-  if (dow === 4) return { from: date, to: addDays(date, 3) }; // Thursday: long weekend
-  if (dow === 2) return { from: addDays(date, -4), to: date }; // Tuesday: bridge
-  return { from: date, to: date };
+/**
+ * Event dates are NIGHTS (the date a guest sleeps over): the eve of each day
+ * off. A public holiday on a weekday takes the adjoining weekend (and the
+ * usual bridge day for Tuesday / Thursday holidays); nothing spills onto a
+ * night followed by a working day.
+ */
+export function holidayNights(holiday: string): { from: string; to: string } {
+  const dow = new Date(`${holiday}T12:00:00Z`).getUTCDay();
+  switch (dow) {
+    case 1: // Monday: Sat, Sun, Mon off
+      return { from: addDays(holiday, -3), to: addDays(holiday, -1) };
+    case 2: // Tuesday (+ Monday bridge): Sat-Tue off
+      return { from: addDays(holiday, -4), to: addDays(holiday, -1) };
+    case 4: // Thursday (+ Friday bridge): Thu-Sun off
+      return { from: addDays(holiday, -1), to: addDays(holiday, 2) };
+    case 5: // Friday: Fri-Sun off
+      return { from: addDays(holiday, -1), to: addDays(holiday, 1) };
+    case 6: // Saturday: Sat, Sun off
+      return { from: addDays(holiday, -1), to: holiday };
+    case 0: // Sunday: Sat, Sun off
+      return { from: addDays(holiday, -2), to: addDays(holiday, -1) };
+    default: // Wednesday: the eve only
+      return { from: addDays(holiday, -1), to: addDays(holiday, -1) };
+  }
 }
 
 /** The Nigerian national calendar for one year (keys are stable per year). */
@@ -76,21 +92,23 @@ export function nationalEvents(year: number): CalendarEvent[] {
     ...extra,
   });
   const easter = easterSunday(year);
+  const h = (date: string) => holidayNights(date);
   const out: CalendarEvent[] = [
-    ev('new-year', "New Year's Day", `${year}-01-01`, `${year}-01-01`, 'HIGH'),
-    ev('easter', 'Easter (Good Friday to Easter Monday)', addDays(easter, -2), addDays(easter, 1), 'HIGH'),
-    ev('workers-day', "Workers' Day", withWeekend(`${year}-05-01`).from, withWeekend(`${year}-05-01`).to, 'LOW'),
-    ev('democracy-day', 'Democracy Day', withWeekend(`${year}-06-12`).from, withWeekend(`${year}-06-12`).to, 'MEDIUM'),
-    ev('independence-day', 'Independence Day weekend', withWeekend(`${year}-10-01`).from, withWeekend(`${year}-10-01`).to, 'HIGH'),
-    ev('christmas', 'Christmas and Boxing Day', `${year}-12-24`, `${year}-12-26`, 'VERY_HIGH'),
-    ev('detty-december', 'Detty December', `${year}-12-15`, `${year + 1}-01-05`, 'HIGH', { city: 'Lagos', note: 'Concerts, weddings and returnees in Lagos.' }),
+    // Nights are inclusive: `dateTo` is the last night that gets the uplift.
+    ev('new-year', "New Year's Eve and Day", `${year - 1}-12-31`, `${year - 1}-12-31`, 'HIGH'),
+    ev('easter', 'Easter (Good Friday to Easter Monday)', addDays(easter, -3), easter, 'HIGH'),
+    ev('workers-day', "Workers' Day", h(`${year}-05-01`).from, h(`${year}-05-01`).to, 'LOW'),
+    ev('democracy-day', 'Democracy Day', h(`${year}-06-12`).from, h(`${year}-06-12`).to, 'MEDIUM'),
+    ev('independence-day', 'Independence Day weekend', h(`${year}-10-01`).from, h(`${year}-10-01`).to, 'HIGH'),
+    ev('christmas', 'Christmas and Boxing Day', `${year}-12-24`, `${year}-12-25`, 'VERY_HIGH'),
+    ev('detty-december', 'Detty December', `${year}-12-15`, `${year + 1}-01-04`, 'HIGH', { city: 'Lagos', note: 'Concerts, weddings and returnees in Lagos.' }),
   ];
   const moon = MOON[year];
   if (moon) {
     out.push(
-      ev('eid-el-fitr', 'Eid el-Fitr', moon.fitr, addDays(moon.fitr, 1), 'MEDIUM', { moonDependent: true, note: 'Approximate: confirm when the moon is sighted.' }),
-      ev('eid-el-kabir', 'Eid el-Kabir', moon.kabir, addDays(moon.kabir, 1), 'MEDIUM', { moonDependent: true, note: 'Approximate: confirm when the moon is sighted.' }),
-      ev('mawlid', 'Eid el-Maulud', moon.mawlid, moon.mawlid, 'LOW', { moonDependent: true, note: 'Approximate: confirm when the moon is sighted.' }),
+      ev('eid-el-fitr', 'Eid el-Fitr', addDays(moon.fitr, -1), moon.fitr, 'MEDIUM', { moonDependent: true, note: 'Approximate: confirm when the moon is sighted.' }),
+      ev('eid-el-kabir', 'Eid el-Kabir', addDays(moon.kabir, -1), moon.kabir, 'MEDIUM', { moonDependent: true, note: 'Approximate: confirm when the moon is sighted.' }),
+      ev('mawlid', 'Eid el-Maulud', addDays(moon.mawlid, -1), addDays(moon.mawlid, -1), 'LOW', { moonDependent: true, note: 'Approximate: confirm when the moon is sighted.' }),
     );
   }
   return out;

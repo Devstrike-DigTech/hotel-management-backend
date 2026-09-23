@@ -30,6 +30,19 @@ export interface OutgoingMessage {
 }
 
 export const NOTIFY_JOB = 'notify';
+
+/**
+ * Every OTP carries the same meta on every channel (SMS, WhatsApp inside or
+ * outside the 24-hour window): `otpCode` and the `otp_code` template
+ * parameters. Providers ignore meta; the dev outbox shows it.
+ */
+export function otpMeta(m: Pick<OutgoingMessage, 'template' | 'meta' | 'waTemplate'>): Record<string, unknown> {
+  if (m.template !== 'OTP') return {};
+  const fromMeta = typeof m.meta?.otpCode === 'string' ? m.meta.otpCode : null;
+  const code = fromMeta ?? m.waTemplate?.params[0] ?? null;
+  if (!code) return {};
+  return { otpCode: code, waTemplate: 'otp_code', waParams: [code] };
+}
 export const NOTIFY_ATTEMPTS = 5;
 
 /**
@@ -194,7 +207,7 @@ export class NotificationService {
     );
     try {
       const wa = m.channel === 'WHATSAPP' && m.waTemplate && !(await this.inServiceWindow(m.to)) ? m.waTemplate : null;
-      const res = await provider.send({ to: m.to, subject: m.subject, text: m.text, html: m.html, template: m.template, meta: { ...m.meta, notificationId: logId }, waTemplate: wa });
+      const res = await provider.send({ to: m.to, subject: m.subject, text: m.text, html: m.html, template: m.template, meta: { ...m.meta, ...otpMeta(m), notificationId: logId }, waTemplate: wa });
       await this.db.system((tx) =>
         tx.notificationLog.update({
           where: { id: logId },

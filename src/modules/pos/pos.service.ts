@@ -576,6 +576,8 @@ export class PosService {
   list(user: AuthUser, q: OrdersQueryDto) {
     const pg = paginate(q.page, q.pageSize);
     return this.db.tenant(user.tenantId, async (tx) => {
+      // `q` also matches the room number of room-service / room-charge orders.
+      const roomIds = q.q ? (await tx.room.findMany({ where: { tenantId: user.tenantId, number: { contains: q.q.trim(), mode: 'insensitive' } }, select: { id: true } })).map((r) => r.id) : [];
       const statuses = (q.status ?? 'OPEN').split(',').map((s) => s.trim().toUpperCase()).filter((s) => ['OPEN', 'SETTLED', 'CANCELLED'].includes(s));
       const where: Prisma.PosOrderWhereInput = {
         tenantId: user.tenantId,
@@ -587,6 +589,7 @@ export class PosService {
             { number: { contains: q.q, mode: 'insensitive' } },
             { tableLabel: { contains: q.q, mode: 'insensitive' } },
             { guestName: { contains: q.q, mode: 'insensitive' } },
+            ...(roomIds.length ? [{ roomId: { in: roomIds } }] : []),
           ],
         }),
       };

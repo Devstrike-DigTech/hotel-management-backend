@@ -1,3 +1,4 @@
+import { otpMeta } from '../notification.service.js';
 import { fullAddress, naira, renderTemplate, TEMPLATES, type BrandContext, type StayContext, type TemplateData } from './templates.js';
 
 const brand: BrandContext = {
@@ -123,5 +124,14 @@ describe('notification templates', () => {
     expect(naira(18_275_000)).toBe('₦182,750');
     expect(naira(12_345)).toBe('₦123.45');
     expect(fullAddress({ address: '14 Fola Osibo Road, Lekki Phase 1', area: 'Lekki Phase 1', city: 'Lagos' })).toBe('14 Fola Osibo Road, Lekki Phase 1, Lagos');
+  });
+});
+
+describe('OTP outbox meta', () => {
+  it('is the same on every channel, from meta or from the WhatsApp template', () => {
+    const expected = { otpCode: '482913', waTemplate: 'otp_code', waParams: ['482913'] };
+    expect(otpMeta({ template: 'OTP', meta: { otpCode: '482913' }, waTemplate: null })).toEqual(expected);
+    expect(otpMeta({ template: 'OTP', meta: {}, waTemplate: { name: 'otp_code', language: 'en', params: ['482913'] } })).toEqual(expected);
+    expect(otpMeta({ template: 'BOOKING_CONFIRMED', meta: { otpCode: 'x' }, waTemplate: null })).toEqual({});
   });
 });

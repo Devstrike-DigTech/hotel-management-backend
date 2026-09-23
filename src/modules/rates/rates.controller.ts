@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Put, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { AuthUser } from '../../common/auth-types.js';
-import { AnyPermission, ClientIp, CurrentUser, RequirePermission } from '../../common/decorators/index.js';
+import { AnyPermission, ClientIp, CurrentUser, GroupWide, RequirePermission } from '../../common/decorators/index.js';
 import { lagosDate } from '../../common/time/lagos.js';
 import { DbService } from '../../prisma/db.service.js';
 import { RequireFeature } from '../entitlements/entitlements.decorators.js';
@@ -134,6 +134,7 @@ export class RatesQuoteController {
 @ApiTags('Rates')
 @ApiBearerAuth()
 @RequireFeature('promotions')
+@GroupWide()
 @Controller('promo-codes')
 export class PromoCodesController {
   constructor(

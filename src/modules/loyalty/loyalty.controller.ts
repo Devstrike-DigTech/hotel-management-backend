@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, P
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import type { AuthUser, GuestPrincipal } from '../../common/auth-types.js';
-import { ClientIp, CurrentGuest, CurrentUser, GuestOnly, MaybeGuest, OptionalGuest, Public, RequirePermission } from '../../common/decorators/index.js';
+import { ClientIp, CurrentGuest, CurrentUser, GroupWide, GuestOnly, MaybeGuest, OptionalGuest, Public, RequirePermission } from '../../common/decorators/index.js';
 import { PaginationQueryDto } from '../../common/utils/pagination.dto.js';
 import { RequireFeature } from '../entitlements/entitlements.decorators.js';
 import { AdjustDto, EnrolDto, GuestEnrolDto, MembersQueryDto, ProgrammeDto, RedeemDto, RedeemStartDto, TierDto, UpdateTierDto } from './loyalty.dto.js';
@@ -11,6 +11,7 @@ import { LoyaltyService } from './loyalty.service.js';
 @ApiTags('Loyalty')
 @ApiBearerAuth()
 @RequireFeature('loyalty')
+@GroupWide()
 @Controller('loyalty')
 export class LoyaltyController {
   constructor(private readonly loyalty: LoyaltyService) {}

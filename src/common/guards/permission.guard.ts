@@ -3,7 +3,7 @@ import { Reflector } from '@nestjs/core';
 import type { StaffRole } from '../../generated/prisma/enums.js';
 import { DbService } from '../../prisma/db.service.js';
 import type { AppRequest } from '../auth-types.js';
-import { ANY_PERMISSION_KEY, PERMISSIONS_KEY } from '../decorators/index.js';
+import { ANY_PERMISSION_KEY, GROUP_WIDE_KEY, PERMISSIONS_KEY } from '../decorators/index.js';
 import { AppException } from '../errors/app-exception.js';
 import { forbidden } from '../permissions/can.js';
 import { permissionsFor } from '../permissions/catalogue.js';
@@ -126,7 +126,11 @@ export class PermissionGuard implements CanActivate {
       const header = Array.isArray(raw) ? raw[0] : raw;
       req.user.propertyIds = accessible;
       req.user.allProperties = access.role === 'OWNER' || access.allProperties !== false;
-      req.user.propertyId = resolveRequestProperty(accessible, header, access.defaultPropertyId);
+      const groupWide = this.reflector.getAllAndOverride<boolean | undefined>(GROUP_WIDE_KEY, targets);
+      const usable = groupWide && header && !accessible.includes(header.trim().toLowerCase()) ? undefined : header;
+      req.user.propertyId = resolveRequestProperty(accessible, usable, access.defaultPropertyId);
+      req.user.propertyHeaderIgnored = usable !== header;
+      req.user.defaultPropertyId = resolveRequestProperty(accessible, undefined, access.defaultPropertyId);
     }
     return true;
   }

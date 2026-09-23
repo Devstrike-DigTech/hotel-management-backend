@@ -53,6 +53,10 @@ export interface AuthUser {
   propertyId?: string;
   propertyIds?: string[];
   allProperties?: boolean;
+  /** M5: the property used without a header (saved default, else the first accessible). */
+  defaultPropertyId?: string;
+  /** M5: an inaccessible X-Property-Id was ignored on a group-wide route. */
+  propertyHeaderIgnored?: boolean;
 }
 
 export interface PlatformPrincipal {

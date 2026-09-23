@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { IsIn, IsOptional, IsString, IsUUID, Matches, MaxLength } from 'class-validator';
 import type { Response } from 'express';
 import type { AuthUser } from '../../common/auth-types.js';
-import { ClientIp, CurrentUser, RequirePermission } from '../../common/decorators/index.js';
+import { ClientIp, CurrentUser, GroupWide, RequirePermission } from '../../common/decorators/index.js';
 import { PaginationQueryDto } from '../../common/utils/pagination.dto.js';
 import { RequireFeature } from '../entitlements/entitlements.decorators.js';
 import { AuditService } from './audit.service.js';
@@ -28,6 +28,7 @@ export class AuditExportDto {
 
 @ApiTags('Audit logs')
 @ApiBearerAuth()
+@GroupWide()
 @Controller('audit-logs')
 export class AuditController {
   constructor(private readonly audit: AuditService) {}

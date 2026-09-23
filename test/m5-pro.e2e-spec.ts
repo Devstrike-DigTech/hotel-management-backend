@@ -69,6 +69,11 @@ describe('M5 Pro tier', () => {
       const email = `desk-a-${uniq()}@e2e.test`;
       await request(server()).post(`${API}/staff`).set(h.owner.auth).send({ fullName: 'Desk A', email, phone: freshPhone(), role: 'FRONT_DESK', password: 'Passw0rd!x', allProperties: false, propertyIds: [h.propertyId] }).expect(201);
       const deskA = await login(app, email);
+      // Group-wide routes ignore a property the user cannot open (and say so); property routes refuse it.
+      const me = await request(server()).get(`${API}/me`).set(as(deskA, B)).expect(200);
+      expect(me.body).toMatchObject({ propertyHeaderIgnored: true, suggestedPropertyId: h.propertyId, currentProperty: { id: h.propertyId } });
+      expect(me.body.properties.map((p: { id: string }) => p.id)).toEqual([h.propertyId]);
+      await request(server()).get(`${API}/staff`).set(as(h.manager, 'not-a-uuid')).expect(200);
       const denied = await request(server()).get(`${API}/rooms`).set(as(deskA, B)).expect(403);
       expect(denied.body).toMatchObject({ code: 'PROPERTY_ACCESS_DENIED', details: { propertyId: B } });
       await request(server()).get(`${API}/rooms`).set(as(deskA, 'not-a-uuid')).expect(403);
@@ -149,6 +154,27 @@ describe('M5 Pro tier', () => {
       expect(ok.body.folioId).toBe(stay.folioId);
       const folio = await request(server()).get(`${API}/folios/${stay.folioId}`).set(h.desk).expect(200);
       expect(folio.body.entries.some((e: { type: string; description: string }) => e.type === 'EXTRA' && e.description.includes(o.body.number))).toBe(true);
+    });
+
+    it('finds orders by room number, and pages the kitchen display', async () => {
+      const stay = await checkedInStay(app, h.desk, h, h.rooms[2]!.id, 1);
+      const o = await request(server()).post(`${API}/pos/orders`).set(h.desk).send({ outletId, reservationId: stay.id, lines: [{ itemId, quantity: 1 }], send: true }).expect(201);
+      const found = await request(server()).get(`${API}/pos/orders`).query({ q: h.rooms[2]!.number }).set(h.desk).expect(200);
+      expect(found.body.items.map((x: { id: string }) => x.id)).toContain(o.body.id);
+
+      const first = await request(server()).get(`${API}/kds/tickets`).query({ limit: 1, status: 'NEW,PREPARING,READY,SERVED' }).set(h.owner.auth).expect(200);
+      expect(first.body).toHaveLength(1);
+      const cursor = first.headers['x-next-cursor'];
+      expect(cursor).toEqual(expect.any(String));
+      const second = await request(server()).get(`${API}/kds/tickets`).query({ limit: 1, status: 'NEW,PREPARING,READY,SERVED', cursor }).set(h.owner.auth).expect(200);
+      expect(second.body[0].id).not.toBe(first.body[0].id);
+      await request(server()).get(`${API}/kds/tickets`).query({ cursor: 'garbage' }).set(h.owner.auth).expect(400);
+      // Served tickets older than the window drop off.
+      await db.query(`UPDATE pos_tickets SET status = 'SERVED', updated_at = now() - interval '3 hours' WHERE property_id = $1`, [h.propertyId]);
+      const recent = await request(server()).get(`${API}/kds/tickets`).query({ status: 'SERVED' }).set(h.owner.auth).expect(200);
+      expect(recent.body).toHaveLength(0);
+      const wider = await request(server()).get(`${API}/kds/tickets`).query({ status: 'SERVED', finishedWithinMinutes: 240 }).set(h.owner.auth).expect(200);
+      expect(wider.body.length).toBeGreaterThan(0);
     });
 
     it('voiding a line after it was sent raises POS_VOID_AFTER_SEND', async () => {

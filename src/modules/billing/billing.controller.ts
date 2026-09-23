@@ -9,13 +9,14 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { AppRequest, AuthUser } from '../../common/auth-types.js';
-import { AllowWhenReadOnly, ClientIp, CurrentUser, Public, RequirePermission } from '../../common/decorators/index.js';
+import { AllowWhenReadOnly, ClientIp, CurrentUser, GroupWide, Public, RequirePermission } from '../../common/decorators/index.js';
 import { CheckoutDto, ConfirmDto } from './billing.dto.js';
 import { BillingService } from './billing.service.js';
 import { PaystackWebhookService } from './paystack-webhook.service.js';
 
 @ApiTags('Billing')
 @ApiBearerAuth()
+@GroupWide()
 @Controller('billing')
 export class BillingController {
   constructor(
