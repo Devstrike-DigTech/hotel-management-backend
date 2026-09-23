@@ -6,6 +6,8 @@ import { AppException } from '../../common/errors/app-exception.js';
 import {
   addDays,
   billableHours,
+  humanDate,
+  roomNightLabel,
   diffDays,
   lagosDate,
   lagosDateTime,
@@ -509,7 +511,7 @@ export class ReservationsService {
         const departureDate = lagosDate(r.departureAt);
         const dateOk = r.stayType === 'DAY_USE' ? today === arrivalDate : today >= arrivalDate && today < departureDate;
         if (!dateOk) {
-          throw appError(HttpStatus.CONFLICT, 'INVALID_STATE', `This stay is for ${arrivalDate}; it cannot be checked in today`, {
+          throw appError(HttpStatus.CONFLICT, 'INVALID_STATE', `This stay is for ${humanDate(arrivalDate)}; it cannot be checked in today`, {
             status: r.status,
             allowed: ['PENDING', 'CONFIRMED'],
           });
@@ -584,7 +586,7 @@ export class ReservationsService {
             tx,
             user.tenantId,
             folio,
-            { type: 'ROOM', description: `Room ${room.number}, night of ${arrivalDate}`, amountKobo: rate, businessDate: arrivalDate, clientCreatedAt },
+            { type: 'ROOM', description: roomNightLabel(room.number, arrivalDate), amountKobo: rate, businessDate: arrivalDate, clientCreatedAt },
             actorOf(user),
           );
         } else {
@@ -828,7 +830,7 @@ export class ReservationsService {
           tx,
           user.tenantId,
           folio,
-          { type: 'ROOM', description: `Room ${r.room?.number ?? ''}, night of ${today} (converted from day use)`, amountKobo: rate, businessDate: today },
+          { type: 'ROOM', description: `${roomNightLabel(r.room?.number, today)} (converted from day use)`, amountKobo: rate, businessDate: today },
           actorOf(user),
         );
         await this.audit.record(tx, {

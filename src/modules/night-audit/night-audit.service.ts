@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { NightAuditRun, Prisma } from '../../generated/prisma/client.js';
 import type { JobTrigger } from '../../generated/prisma/enums.js';
 import type { AuthUser } from '../../common/auth-types.js';
-import { addDays, dbDate, fromDbDate, isIsoDate, lagosDate, lagosStartOfDay } from '../../common/time/lagos.js';
+import { humanDate, roomNightLabel, addDays, dbDate, fromDbDate, isIsoDate, lagosDate, lagosStartOfDay } from '../../common/time/lagos.js';
 import { DbService } from '../../prisma/db.service.js';
 import { AuditService, SYSTEM_ACTOR, userActor } from '../audit/audit.service.js';
 import { LedgerService, SYSTEM } from '../folios/ledger.service.js';
@@ -122,7 +122,7 @@ export class NightAuditService {
             tx,
             tenantId,
             folio,
-            { type: 'ROOM', description: `Room ${r.room?.number ?? ''}, night of ${businessDate}`, amountKobo: k(r.rateKobo), businessDate },
+            { type: 'ROOM', description: roomNightLabel(r.room?.number, businessDate), amountKobo: k(r.rateKobo), businessDate },
             SYSTEM,
           );
           summary.roomChargesPosted += 1;
@@ -137,7 +137,7 @@ export class NightAuditService {
         if (unarrived.length) {
           await tx.reservation.updateMany({
             where: { id: { in: unarrived.map((u) => u.id) } },
-            data: { status: 'NO_SHOW', noShowAt: new Date(), cancelReason: `Not checked in by the night audit of ${businessDate}` },
+            data: { status: 'NO_SHOW', noShowAt: new Date(), cancelReason: `Not checked in by the night audit of ${humanDate(businessDate)}` },
           });
           summary.noShows = unarrived.length;
         }

@@ -1,4 +1,5 @@
 import type { GuardRule, GuardSeverity, PaymentMethod } from '../../generated/prisma/enums.js';
+import { humanDate } from '../../common/time/lagos.js';
 import { PAYMENT_METHODS } from '../reports/stats.compute.js';
 
 export interface DigestData {
@@ -31,13 +32,13 @@ const METHOD_LABEL: Record<PaymentMethod, string> = {
 /** Plain-text WhatsApp message (uses *bold*). */
 export function renderDigest(d: DigestData, appName: string): string {
   const lines = [
-    `*${d.hotelName}* daily summary, ${d.businessDate}`,
+    `*${d.hotelName}* daily summary, ${humanDate(d.businessDate)}`,
     '',
     `Rooms sold: *${d.roomsSold}* of ${d.roomsAvailable} (${Math.round(d.occupancyRate * 100)}% occupancy)`,
     `Day-use stays: ${d.dayUseCount}`,
     `Check-ins: ${d.arrivals}   Check-outs: ${d.departures}`,
     '',
-    `Revenue: *${naira(d.totalRevenueKobo)}* (rooms ${naira(d.roomRevenueKobo)})`,
+    `Revenue: *${naira(d.totalRevenueKobo)}* (room charges ${naira(d.roomRevenueKobo)})`,
     `Money received: *${naira(d.paymentsTotalKobo)}*`,
     ...PAYMENT_METHODS.filter((m) => d.revenueByMethod[m]).map((m) => `  ${METHOD_LABEL[m]}: ${naira(d.revenueByMethod[m])}`),
     '',

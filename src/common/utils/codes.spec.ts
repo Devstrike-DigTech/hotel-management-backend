@@ -1,6 +1,6 @@
 import { CODE_ALPHABET, codePrefix, reservationCode } from './codes.js';
 import { amountInWords } from './money-words.js';
-import { addDays, billableHours, lagosDate, lagosDateTime, nightsBetween } from '../time/lagos.js';
+import { addDays, billableHours, humanDate, humanDateTime, lagosDate, lagosDateTime, nightsBetween, roomNightLabel } from '../time/lagos.js';
 
 describe('reservation codes', () => {
   it('derives a prefix from the hotel name', () => {
@@ -36,5 +36,15 @@ describe('Lagos time', () => {
   it('counts nights and billable hours', () => {
     expect(nightsBetween(lagosDateTime('2026-09-23', '14:00'), lagosDateTime('2026-09-26', '12:00'))).toBe(3);
     expect(billableHours(new Date('2026-09-23T10:00:00Z'), new Date('2026-09-23T13:10:00Z'))).toBe(4);
+  });
+});
+
+describe('human dates for guest-facing text', () => {
+  it('formats dates the Nigerian way, in Lagos time', () => {
+    expect(humanDate('2026-09-22')).toBe('Tue 22 Sep 2026');
+    expect(humanDate('2027-01-01')).toBe('Fri 1 Jan 2027');
+    // 23:30 UTC is already the next day in Lagos.
+    expect(humanDateTime(new Date('2026-09-22T23:30:00Z'))).toBe('Wed 23 Sep 2026, 00:30');
+    expect(roomNightLabel('101', '2026-09-22')).toBe('Room 101, night of Tue 22 Sep 2026');
   });
 });

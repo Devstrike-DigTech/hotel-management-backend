@@ -35,7 +35,9 @@ import {
   addDays,
   dateRange,
   dbDate,
+  humanDate,
   lagosDate,
+  roomNightLabel,
   lagosDateTime,
   lagosYear,
 } from '../../src/common/time/lagos.js';
@@ -624,7 +626,7 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
       checkedOutAt,
       checkedOutById: checkOutBy?.id ?? null,
       cancelledAt: status === 'CANCELLED' ? new Date(arrivalAt.getTime() - 30 * HOUR) : null,
-      cancelReason: status === 'CANCELLED' ? 'Guest postponed the trip' : status === 'NO_SHOW' ? `Not checked in by the night audit of ${p.arrival}` : null,
+      cancelReason: status === 'CANCELLED' ? 'Guest postponed the trip' : status === 'NO_SHOW' ? `Not checked in by the night audit of ${humanDate(p.arrival)}` : null,
       noShowAt: status === 'NO_SHOW' ? at(addDays(p.arrival, 1), '02:00') : null,
       clientCreatedAt: null,
       regArrivingFrom: regComplete ? pick(rand, CITIES) : null,
@@ -665,15 +667,15 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
       for (const night of dateRange(p.arrival, lastNight < p.arrival ? p.arrival : lastNight)) {
         const first = night === p.arrival;
         const when = first ? checkedInAt! : at(addDays(night, 1), '02:00');
-        const { main } = charge(folioId, 'ROOM', `Room ${room!.number}, night of ${night}`, rate, night, when, first ? by : null);
+        const { main } = charge(folioId, 'ROOM', roomNightLabel(room!.number, night), rate, night, when, first ? by : null);
         if (first && p.smallDiscount) {
-          charge(folioId, 'DISCOUNT', `Discount on Room ${room!.number}, night of ${night}`, -Math.round(rate * 0.05), night, new Date(when.getTime() + 2 * MIN), by, {
+          charge(folioId, 'DISCOUNT', `Discount on ${roomNightLabel(room!.number, night)}`, -Math.round(rate * 0.05), night, new Date(when.getTime() + 2 * MIN), by, {
             parentEntryId: main.id,
             reason: 'Returning guest courtesy',
           });
         }
         if (first && p.approvedDiscount) {
-          charge(folioId, 'DISCOUNT', `Discount on Room ${room!.number}, night of ${night}`, -Math.round(rate * 0.15), night, new Date(when.getTime() + 3 * MIN), by, {
+          charge(folioId, 'DISCOUNT', `Discount on ${roomNightLabel(room!.number, night)}`, -Math.round(rate * 0.15), night, new Date(when.getTime() + 3 * MIN), by, {
             parentEntryId: main.id,
             reason: 'Service recovery: noisy generator overnight',
             approvedById: tunde.id,

@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { GuardFlag, Prisma } from '../../generated/prisma/client.js';
 import type { GuardRule, GuardSeverity } from '../../generated/prisma/enums.js';
 import { DbService, type Tx } from '../../prisma/db.service.js';
-import { lagosDate } from '../../common/time/lagos.js';
+import { humanDateTime, lagosDate } from '../../common/time/lagos.js';
 import { EntitlementsService } from '../entitlements/entitlements.service.js';
 import { k } from '../ops/ops.helpers.js';
 import {
@@ -158,7 +158,7 @@ export class GuardService {
         created += await this.raise(tx, tenantId, features, {
           rule: 'DAY_USE_OVERSTAY',
           title: `Day-use ${s.code} is ${minutes} minutes past checkout`,
-          detail: `${s.guest.fullName} in room ${s.room?.number ?? '-'} booked until ${s.departureAt.toISOString()}.`,
+          detail: `${s.guest.fullName} in room ${s.room?.number ?? '-'} booked until ${humanDateTime(s.departureAt)}.`,
           dedupeKey: `DAY_USE_OVERSTAY:${s.id}`,
           reservationId: s.id,
           roomId: s.roomId,

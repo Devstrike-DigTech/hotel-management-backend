@@ -98,3 +98,25 @@ export function overlaps(
 ): boolean {
   return aStart.getTime() < bEnd.getTime() && bStart.getTime() < aEnd.getTime();
 }
+
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** Human date for guest- and owner-facing text: "Tue 22 Sep 2026". */
+export function humanDate(date: string): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  return `${WEEKDAYS[d.getUTCDay()]} ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+
+/** Human date and 24-hour Lagos time: "Tue 22 Sep 2026, 15:30". */
+export function humanDateTime(at: Date): string {
+  const lagos = new Date(at.getTime() + OFFSET_MS);
+  const hh = String(lagos.getUTCHours()).padStart(2, '0');
+  const mm = String(lagos.getUTCMinutes()).padStart(2, '0');
+  return `${humanDate(lagosDate(at))}, ${hh}:${mm}`;
+}
+
+/** Folio line for a room night: "Room 101, night of Tue 22 Sep 2026". */
+export function roomNightLabel(roomNumber: string | undefined | null, night: string): string {
+  return `Room ${roomNumber ?? ''}, night of ${humanDate(night)}`.replace('Room , ', 'Room, ');
+}
