@@ -65,6 +65,8 @@ export class QuoteDto {
   /** M4 */
   @IsOptional() @IsString() @Length(36, 36) ratePlanId?: string;
   @IsOptional() @IsString() @MaxLength(30) promoCode?: string;
+  /** M5: loyalty points to redeem (signed-in member). */
+  @IsOptional() @IsInt() @Min(1) @Max(10_000_000) redeemPoints?: number;
 }
 
 export class BookingGuestDto {

@@ -48,12 +48,17 @@ export interface PriceBreakdown {
   ratePlan: { id: string; code: string; name: string; kind: string; includesBreakfast: boolean; refundable: boolean } | null;
   promo: { code: string; description: string; type: string; discountKobo: number } | null;
   discountLines: { date: string; description: string; amountKobo: number }[];
+  /** M5: the part of `discountKobo` paid with loyalty points (pre-tax). */
+  loyaltyDiscountKobo?: number;
 }
 
 export interface PricedNight {
   date: string;
   rateKobo: number;
+  /** All discounts on the night (promo + loyalty points). */
   discountKobo?: number;
+  /** M5: the loyalty-points part of `discountKobo`. */
+  loyaltyDiscountKobo?: number;
   ruleName?: string | null;
 }
 
@@ -70,12 +75,16 @@ export function priceNights(input: {
   nights: PricedNight[];
   ratePlan?: PriceBreakdown['ratePlan'];
   promo?: { code: string; description: string; type: string } | null;
+  /** M5: label of loyalty discount lines, e.g. "Palmwine Circle points". */
+  loyaltyLabel?: string;
 }): PriceBreakdown {
   const taxes = new Map<string, TaxLineView>();
   const lines: PriceBreakdown['lines'] = [];
   const discountLines: PriceBreakdown['discountLines'] = [];
   let net = 0;
   let discount = 0;
+  let promoDiscount = 0;
+  let loyalty = 0;
   let first = 0;
   const addTax = (l: { code: TaxLineView['code']; label: string; rateBps: number; inclusive: boolean; amountKobo: number }) => {
     const cur = taxes.get(l.code);
@@ -88,12 +97,14 @@ export function priceNights(input: {
     net += b.netKobo;
     b.lines.forEach(addTax);
     let gross = b.grossKobo;
-    const d = n.discountKobo ?? 0;
-    if (d > 0) {
-      const mirror = b.lines.map((l) => ({ code: l.code, label: l.label, rateBps: l.rateBps, inclusive: false }));
-      const db = computeCharge(-d, mirror);
-      discount += d;
-      discountLines.push({ date: n.date, description: `Promo ${input.promo?.code ?? ''}`.trim(), amountKobo: db.netKobo });
+    const mirror = b.lines.map((l) => ({ code: l.code, label: l.label, rateBps: l.rateBps, inclusive: false }));
+    // Promo and loyalty discounts are separate lines, each with mirrored tax (as posted).
+    for (const part of nightDiscounts(n, input.promo?.code ?? null, input.loyaltyLabel)) {
+      const db = computeCharge(-part.amountKobo, mirror);
+      discount += part.amountKobo;
+      if (part.loyalty) loyalty += part.amountKobo;
+      else promoDiscount += part.amountKobo;
+      discountLines.push({ date: n.date, description: part.description, amountKobo: db.netKobo });
       db.lines.forEach(addTax);
       gross += db.grossKobo;
     }
@@ -118,9 +129,20 @@ export function priceNights(input: {
     nightly: input.nights.map((n) => ({ date: n.date, rateKobo: n.rateKobo, discountKobo: n.discountKobo ?? 0, ruleName: n.ruleName ?? null })),
     averageNightlyKobo: count ? Math.round(roomSum / count) : 0,
     ratePlan: input.ratePlan ?? null,
-    promo: input.promo && discount > 0 ? { ...input.promo, discountKobo: discount } : null,
+    promo: input.promo && promoDiscount > 0 ? { ...input.promo, discountKobo: promoDiscount } : null,
     discountLines,
+    ...(loyalty > 0 && { loyaltyDiscountKobo: loyalty }),
   };
+}
+
+/** A night's discount lines in posting order: the promo part, then the loyalty-points part. */
+export function nightDiscounts(n: { discountKobo?: number; loyaltyDiscountKobo?: number }, promoCode: string | null, loyaltyLabel = 'Loyalty points'): { description: string; amountKobo: number; loyalty: boolean }[] {
+  const total = n.discountKobo ?? 0;
+  const points = Math.min(total, n.loyaltyDiscountKobo ?? 0);
+  const out: { description: string; amountKobo: number; loyalty: boolean }[] = [];
+  if (total - points > 0) out.push({ description: `Promo ${promoCode ?? ''}`.trim(), amountKobo: total - points, loyalty: false });
+  if (points > 0) out.push({ description: loyaltyLabel, amountKobo: points, loyalty: true });
+  return out;
 }
 
 /** Uniform-rate stay (M3 shape) or a day-use block. */

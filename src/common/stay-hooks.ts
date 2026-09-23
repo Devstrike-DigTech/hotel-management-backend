@@ -13,9 +13,13 @@ import type { Tx } from '../prisma/db.service.js';
  */
 export interface StayHooks {
   name: string;
-  checkedInTx?(tx: Tx, tenantId: string, reservationId: string): Promise<void>;
+  checkedInTx?(tx: Tx, tenantId: string, reservationId: string, opts: Record<string, unknown>): Promise<void>;
   afterCheckIn?(tenantId: string, reservationId: string): Promise<void>;
-  checkedOutTx?(tx: Tx, tenantId: string, reservationId: string): Promise<void>;
+  checkedOutTx?(tx: Tx, tenantId: string, reservationId: string, opts: Record<string, unknown>): Promise<void>;
+  /** A stay that will not happen (cancelled, hold expired): `opts.why` says why. */
+  releasedTx?(tx: Tx, tenantId: string, reservationId: string, opts: Record<string, unknown>): Promise<void>;
+  /** Folio entries just voided (inside the void's transaction). */
+  entriesVoidedTx?(tx: Tx, tenantId: string, entryIds: string[]): Promise<void>;
   afterCheckOut?(tenantId: string, reservationId: string): Promise<void>;
   /** After the 24-hour pre-arrival message went out. */
   afterPreArrival?(tenantId: string, reservationId: string): Promise<void>;
@@ -29,20 +33,25 @@ export function registerStayHooks(h: StayHooks): void {
   registry.set(h.name, h);
 }
 
-export async function runStayHooksTx(kind: 'checkedInTx' | 'checkedOutTx', tx: Tx, tenantId: string, reservationId: string): Promise<void> {
+export async function runStayHooksTx(kind: 'checkedInTx' | 'checkedOutTx' | 'releasedTx', tx: Tx, tenantId: string, reservationId: string, opts: Record<string, unknown> = {}): Promise<void> {
   for (const h of registry.values()) {
     const fn = h[kind];
     if (!fn) continue;
     const sp = `stay_hook_${h.name.replace(/\W/g, '_')}`;
     await tx.$executeRawUnsafe(`SAVEPOINT ${sp}`);
     try {
-      await fn.call(h, tx, tenantId, reservationId);
+      await fn.call(h, tx, tenantId, reservationId, opts);
       await tx.$executeRawUnsafe(`RELEASE SAVEPOINT ${sp}`);
     } catch (e) {
       await tx.$executeRawUnsafe(`ROLLBACK TO SAVEPOINT ${sp}`);
       logger.error(`${h.name}.${kind} failed for reservation ${reservationId}: ${(e as Error).message}`);
     }
   }
+}
+
+/** Voided folio entries (not under a savepoint: a failure fails the void, keeping points and ledger in step). */
+export async function runVoidHooksTx(tx: Tx, tenantId: string, entryIds: string[]): Promise<void> {
+  for (const h of registry.values()) if (h.entriesVoidedTx) await h.entriesVoidedTx(tx, tenantId, entryIds);
 }
 
 export async function runStayHooksAfter(kind: 'afterCheckIn' | 'afterCheckOut' | 'afterPreArrival', tenantId: string, reservationId: string): Promise<void> {

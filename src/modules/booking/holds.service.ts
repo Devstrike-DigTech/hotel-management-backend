@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { runStayHooksTx } from '../../common/stay-hooks.js';
 import { DbService } from '../../prisma/db.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { PaystackClient } from '../billing/paystack.client.js';
@@ -51,6 +52,7 @@ export class HoldsService {
         data: { status: 'CANCELLED', cancelledAt: now, cancelReason: HOLD_EXPIRED_REASON, cancelledBy: 'SYSTEM' },
       });
       await this.promos.release(tx, tenantId, r.id);
+      await runStayHooksTx('releasedTx', tx, tenantId, r.id, { why: 'Booking hold expired' });
       await this.audit.record(tx, {
         tenantId,
         actor: { kind: 'system', name: 'Online booking' },

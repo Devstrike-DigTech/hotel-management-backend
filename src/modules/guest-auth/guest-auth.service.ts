@@ -323,11 +323,16 @@ export class GuestAuthService {
         take: 200,
       }),
     );
-    type Trip = ReturnType<BookingViewService['tripSummary']>;
+    // M5: points earned per stay (loyalty).
+    const earned = rows.length
+      ? await this.db.system((tx) => tx.loyaltyTransaction.findMany({ where: { type: 'EARN', reservationId: { in: rows.map((r) => r.id) } }, select: { reservationId: true, points: true } }))
+      : [];
+    const earnedBy = new Map(earned.map((e) => [e.reservationId, e.points]));
+    type Trip = ReturnType<BookingViewService['tripSummary']> & { pointsEarned: number | null };
     const upcoming: Trip[] = [];
     const past: Trip[] = [];
     for (const r of rows) {
-      const t = this.views.tripSummary(r, now);
+      const t = { ...this.views.tripSummary(r, now), pointsEarned: earnedBy.get(r.id) ?? null };
       const active = ['AWAITING_PAYMENT', 'CONFIRMED', 'CHECKED_IN'].includes(t.displayStatus) && r.departureAt > now;
       (active ? upcoming : past).push(t);
     }

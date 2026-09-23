@@ -114,6 +114,8 @@ export class CheckInDto {
   @IsOptional() @ValidateNested() @Type(() => DepositDto) deposit?: DepositDto;
   @IsOptional() @ValidateNested() @Type(() => OverrideDto) override?: OverrideDto;
   @IsOptional() @IsISO8601() clientCreatedAt?: string;
+  /** M5: enrol the guest in the group's loyalty programme. */
+  @IsOptional() @IsBoolean() enrolLoyalty?: boolean;
 }
 
 export class CheckOutDto {

@@ -23,6 +23,7 @@ import { dateRange, dbDate } from '../../common/time/lagos.js';
 import { freeRoomsOverWindow, loadCapacity } from '../rates/capacity.js';
 import { PricingService, type StayPricing } from '../rates/pricing.service.js';
 import { PromosService } from '../rates/promos.service.js';
+import { LoyaltyService, type QuoteLoyalty } from '../loyalty/loyalty.service.js';
 import { planUnavailable, resolveNights, restrictionHits, restrictionOn, stayDates, type NightlyRate, type PlanLike } from '../rates/rates.logic.js';
 import { planLabel, planTerms, RatesService, type RateContext } from '../rates/rates.service.js';
 import {
@@ -103,6 +104,7 @@ export class PublicBookingService {
     private readonly rates: RatesService,
     private readonly pricing: PricingService,
     private readonly promos: PromosService,
+    private readonly loyalty: LoyaltyService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -455,7 +457,7 @@ export class PublicBookingService {
   // Quote
   // ---------------------------------------------------------------------------
 
-  async quote(dto: QuoteDto) {
+  async quote(dto: QuoteDto, guest?: GuestPrincipal) {
     const ref = await this.hotelRef(dto.hotelSlug);
     return runInProperty(ref.tenantId, ref.id, () => this.db.tenant(ref.tenantId, async (tx) => {
       const p = await this.loadHotel(tx, ref);
@@ -489,6 +491,32 @@ export class PublicBookingService {
       } else {
         breakdown = this.price(rt, w, comps)!;
       }
+      // M5 loyalty: points to earn, and a redemption spread over the nights (pre-tax).
+      let loyalty: QuoteLoyalty | null = null;
+      let pointsPerNight: number[] | null = null;
+      let loyaltyMeta: { memberId: string | null; programme: string | null } = { memberId: null, programme: null };
+      if (priced) {
+        const l = await this.loyalty.quoteLoyalty(tx, ref.tenantId, guest, priced.nights, dto.redeemPoints);
+        if (l) {
+          loyalty = l.block;
+          loyaltyMeta = { memberId: l.memberId, programme: l.programme };
+          if (l.block.redeemValueKobo > 0) {
+            pointsPerNight = l.perNight;
+            breakdown = priceNights({
+              roomTypeName: rt.name,
+              components: comps,
+              nights: priced.nights.map((n, i) => ({ date: n.date, rateKobo: n.rateKobo, discountKobo: n.discountKobo + l.perNight[i], loyaltyDiscountKobo: l.perNight[i], ruleName: n.ruleName })),
+              ratePlan: priced.breakdown.ratePlan,
+              promo: priced.promo ? { code: priced.promo.code, description: priced.promo.description, type: priced.promo.type } : null,
+              loyaltyLabel: `${l.programme} points`,
+            });
+          }
+        }
+      } else {
+        if (dto.redeemPoints) throw Err.validation('redeemPoints', 'Points can be redeemed on overnight stays only');
+        const l = await this.loyalty.quoteLoyalty(tx, ref.tenantId, guest, [{ rateKobo: breakdown.roomSubtotalKobo }]);
+        loyalty = l?.block ?? null;
+      }
       const policy = effectivePolicy(p, priced?.plan.cancelPolicy ?? null);
       const signed = this.tokens.signQuote({
         tid: ref.tenantId,
@@ -512,6 +540,7 @@ export class PublicBookingService {
           pk: priced.promo?.code ?? null,
           cp: priced.plan.cancelPolicy,
         }),
+        ...(pointsPerNight && loyalty && { lp: loyalty.pointsRedeemed, lm: loyaltyMeta.memberId!, ln: loyaltyMeta.programme!, ld: pointsPerNight }),
       });
       const payOnline = p.payoutReady;
       const payAtHotel = p.allowPayAtHotel && !policy.nonRefundable;
@@ -567,6 +596,7 @@ export class PublicBookingService {
         ],
         ratePlan: breakdown.ratePlan,
         promo: breakdown.promo,
+        loyalty,
         cancellationPolicy: policyView(policy),
         freeCancellationUntil: freeCancellationUntil(w.arrivalAt, policy)?.toISOString() ?? null,
         holdMinutes: HOLD_MINUTES,
@@ -660,7 +690,10 @@ export class PublicBookingService {
         await this.availability.assertAvailable(tx, q.tid, { roomTypeId: rt.id, arrivalAt, departureAt });
 
         const frozen: NightlyRate[] | null = q.nr
-          ? q.nr.map(([date, rateKobo, discountKobo, baseRateKobo, source, ruleName]) => ({ date, rateKobo, discountKobo, baseRateKobo, source: source as NightlyRate['source'], ruleId: null, ruleName }))
+          ? q.nr.map(([date, rateKobo, promoKobo, baseRateKobo, source, ruleName], i) => {
+              const points = q.ld?.[i] ?? 0;
+              return { date, rateKobo, discountKobo: promoKobo + points, baseRateKobo, source: source as NightlyRate['source'], ruleId: null, ruleName, ...(points > 0 && { loyaltyDiscountKobo: points }) };
+            })
           : null;
         const plan = q.rp ? await tx.ratePlan.findFirst({ where: { id: q.rp, tenantId: q.tid } }) : null;
         const breakdown =
@@ -671,6 +704,7 @@ export class PublicBookingService {
                 nights: frozen,
                 ratePlan: plan ? { id: plan.id, code: plan.code, name: plan.name, kind: plan.kind, includesBreakfast: plan.includesBreakfast, refundable: !q.cp?.nonRefundable } : null,
                 promo: q.pk ? { code: q.pk, description: '', type: '' } : null,
+                ...(q.ln && { loyaltyLabel: `${q.ln} points` }),
               })
             : q.st === 'NIGHTLY'
               ? priceStay({ stayType: 'NIGHTLY', rateKobo: q.rate, roomTypeName: rt.name, components: q.tax, arrivalDate: q.day, nights: q.u })
@@ -730,6 +764,15 @@ export class PublicBookingService {
           },
         });
         await tx.folio.create({ data: { tenantId: q.tid, propertyId: p.id, kind: 'RESERVATION', reservationId: r.id, guestId: guest.id, name: guest.fullName } });
+        if (q.lp && q.lm) {
+          // Points redeemed in the quote: only the signed-in member can book with them.
+          const member = principal ? await this.loyalty.memberForGuest(tx, q.tid, principal) : null;
+          if (!member || member.id !== q.lm || member.guestId !== guest.id) {
+            throw appError(HttpStatus.CONFLICT, 'LOYALTY_NOT_MEMBER', 'Sign in as the loyalty member to book with points');
+          }
+          await this.loyalty.holdForBooking(tx, q.tid, q.lm, r.id, q.lp, p.id, code);
+          await tx.reservation.update({ where: { id: r.id }, data: { loyaltyPoints: q.lp } });
+        }
         if (q.pc) {
           await this.promos.redeem(tx, q.tid, {
             promoCodeId: q.pc,

@@ -1,5 +1,6 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { AppException } from '../../common/errors/app-exception.js';
+import { runStayHooksTx } from '../../common/stay-hooks.js';
 import type { Tx } from '../../prisma/db.service.js';
 import { AuditService, type AuditActor } from '../audit/audit.service.js';
 import { LedgerService, type Actor } from '../folios/ledger.service.js';
@@ -87,6 +88,7 @@ export class CancellationService {
       },
     });
     await this.promos.release(tx, tenantId, r.id);
+    await runStayHooksTx('releasedTx', tx, tenantId, r.id, { why: 'Booking cancelled' });
     const refundIds: string[] = [];
     if (outcome.paidKobo > 0 && r.folio) {
       const folio = await this.docs.loadFolio(tx, tenantId, r.folio.id);

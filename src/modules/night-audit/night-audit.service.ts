@@ -5,6 +5,7 @@ import type { NightAuditRun, Prisma } from '../../generated/prisma/client.js';
 import type { JobTrigger } from '../../generated/prisma/enums.js';
 import type { AuthUser } from '../../common/auth-types.js';
 import { humanDate, roomNightLabel, addDays, dbDate, fromDbDate, isIsoDate, lagosDate, lagosStartOfDay } from '../../common/time/lagos.js';
+import { pointsLabel } from '../loyalty/loyalty.logic.js';
 import { DbService } from '../../prisma/db.service.js';
 import { AuditService, SYSTEM_ACTOR, userActor } from '../audit/audit.service.js';
 import { LedgerService, SYSTEM } from '../folios/ledger.service.js';
@@ -148,7 +149,7 @@ export class NightAuditService {
             tx,
             tenantId,
             folio,
-            { date: businessDate, rateKobo: night.rateKobo, discountKobo: night.discountKobo, promoCode: r.promoCode?.code ?? null, description: roomNightLabel(r.room?.number, businessDate) },
+            { date: businessDate, rateKobo: night.rateKobo, discountKobo: night.discountKobo, ...(night.loyaltyDiscountKobo ? { loyaltyDiscountKobo: night.loyaltyDiscountKobo, loyaltyLabel: await pointsLabel(tx, tenantId) } : {}), promoCode: r.promoCode?.code ?? null, description: roomNightLabel(r.room?.number, businessDate) },
             SYSTEM,
           );
           summary.roomChargesPosted += 1;

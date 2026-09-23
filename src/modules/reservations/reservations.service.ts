@@ -17,6 +17,7 @@ import {
   nightsBetween,
 } from '../../common/time/lagos.js';
 import { codePrefix, reservationCode } from '../../common/utils/codes.js';
+import { pointsLabel } from '../loyalty/loyalty.logic.js';
 import { DbService, type Tx } from '../../prisma/db.service.js';
 import { AuditService, userActor } from '../audit/audit.service.js';
 import { EntitlementsService } from '../entitlements/entitlements.service.js';
@@ -642,6 +643,7 @@ export class ReservationsService {
       }
       await tx.reservation.update({ where: { id }, data: { status: 'CANCELLED', cancelledAt: new Date(), cancelReason: dto.reason, cancelledBy: 'HOTEL' } });
       await this.promos.release(tx, user.tenantId, id);
+      await runStayHooksTx('releasedTx', tx, user.tenantId, id, { why: 'Booking cancelled' });
       if (dto.feeKobo && r.folio) {
         const folio = await this.docs.loadFolio(tx, user.tenantId, r.folio.id);
         await this.ledger.postCharge(tx, user.tenantId, folio, { type: 'EXTRA', description: `Cancellation fee (${r.code})`, amountKobo: dto.feeKobo }, actorOf(user));
@@ -782,7 +784,7 @@ export class ReservationsService {
             tx,
             user.tenantId,
             folio,
-            { date: arrivalDate, rateKobo: night.rateKobo, discountKobo: night.discountKobo, promoCode: r.promoCode?.code ?? null, description: roomNightLabel(room.number, arrivalDate), clientCreatedAt },
+            { date: arrivalDate, rateKobo: night.rateKobo, discountKobo: night.discountKobo, ...(night.loyaltyDiscountKobo ? { loyaltyDiscountKobo: night.loyaltyDiscountKobo, loyaltyLabel: await pointsLabel(tx, user.tenantId) } : {}), promoCode: r.promoCode?.code ?? null, description: roomNightLabel(room.number, arrivalDate), clientCreatedAt },
             actorOf(user),
           );
         } else {
@@ -836,7 +838,7 @@ export class ReservationsService {
           },
           ip,
         });
-        await runStayHooksTx('checkedInTx', tx, user.tenantId, id);
+        await runStayHooksTx('checkedInTx', tx, user.tenantId, id, { enrolLoyalty: !!dto.enrolLoyalty, userId: user.userId });
         return this.detail(tx, user.tenantId, id);
       });
       await runStayHooksAfter('afterCheckIn', user.tenantId, id);

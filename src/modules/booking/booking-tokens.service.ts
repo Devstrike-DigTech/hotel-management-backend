@@ -35,6 +35,11 @@ export interface QuotePayload {
   pc?: string | null;
   pk?: string | null;
   cp?: { nonRefundable: boolean; freeCancellationHours: number; lateCancellationFeePct: number } | null;
+  /** M5 loyalty: points redeemed, member id, programme name, per-night points discount (aligned with nr). */
+  lp?: number;
+  lm?: string;
+  ln?: string;
+  ld?: number[];
 }
 
 interface TripPayload {

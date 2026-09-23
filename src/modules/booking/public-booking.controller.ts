@@ -62,8 +62,8 @@ export class PublicBookingController {
   @OptionalGuest()
   @RateLimit({ name: 'quote', limit: 30, windowSec: MINUTE })
   @ApiOperation({ summary: 'Authoritative price + quoteToken (15 minutes)' })
-  quote(@Body() dto: QuoteDto) {
-    return this.booking.quote(dto);
+  quote(@Body() dto: QuoteDto, @MaybeGuest() guest: GuestPrincipal | undefined) {
+    return this.booking.quote(dto, guest);
   }
 
   @Post('bookings')

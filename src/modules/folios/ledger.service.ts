@@ -10,6 +10,8 @@ import { dbDate, lagosDate } from '../../common/time/lagos.js';
 import { DbService, type Tx } from '../../prisma/db.service.js';
 import { AuditService, userActor } from '../audit/audit.service.js';
 import { GuardService } from '../guard/guard.service.js';
+import { runVoidHooksTx } from '../../common/stay-hooks.js';
+import { nightDiscounts } from '../booking/booking.logic.js';
 import { voidedPaymentSeverity } from '../guard/guard.logic.js';
 import { DocumentsService, folioDocInclude, type FolioForDoc } from '../invoices/documents.service.js';
 import { appError, Err, k, paginate, parseClientCreatedAt, primaryProperty, userNames } from '../ops/ops.helpers.js';
@@ -208,23 +210,25 @@ export class LedgerService {
     tx: Tx,
     tenantId: string,
     folio: { id: string; propertyId: string; status: string },
-    night: { date: string; rateKobo: number; discountKobo?: number; description: string; promoCode?: string | null; clientCreatedAt?: Date | null },
+    night: { date: string; rateKobo: number; discountKobo?: number; loyaltyDiscountKobo?: number; loyaltyLabel?: string; description: string; promoCode?: string | null; clientCreatedAt?: Date | null },
     actor: Actor,
   ): Promise<FolioEntry> {
     const charge = await this.postCharge(tx, tenantId, folio, { type: 'ROOM', description: night.description, amountKobo: night.rateKobo, businessDate: night.date, clientCreatedAt: night.clientCreatedAt ?? null }, actor);
-    const d = night.discountKobo ?? 0;
-    if (d > 0) {
+    const parts = nightDiscounts(night, night.promoCode ?? null, night.loyaltyLabel);
+    if (parts.length) {
       const taxLines = await tx.folioEntry.findMany({ where: { parentEntryId: charge.id, type: { in: ['TAX', 'SERVICE_CHARGE'] } } });
       const comps: TaxComponent[] = taxLines
         .filter((e) => e.taxCode)
         .map((e) => ({ code: e.taxCode as TaxCode, label: e.description, rateBps: e.rateBps ?? 0, inclusive: false }));
-      await this.postWithTaxes(tx, tenantId, folio.id, 'DISCOUNT', `Promo ${night.promoCode ?? ''}`.trim(), -d, comps, {
-        businessDate: night.date,
-        actor,
-        clientCreatedAt: night.clientCreatedAt ?? null,
-        parentEntryId: charge.id,
-        reason: night.promoCode ? `Promo code ${night.promoCode}` : 'Promo code',
-      });
+      for (const part of parts) {
+        await this.postWithTaxes(tx, tenantId, folio.id, 'DISCOUNT', part.description, -part.amountKobo, comps, {
+          businessDate: night.date,
+          actor,
+          clientCreatedAt: night.clientCreatedAt ?? null,
+          parentEntryId: charge.id,
+          reason: part.loyalty ? 'Loyalty points redeemed online' : night.promoCode ? `Promo code ${night.promoCode}` : 'Promo code',
+        });
+      }
     }
     return charge;
   }
@@ -611,7 +615,7 @@ export class LedgerService {
   }
 
   /** Tax lines for a discount mirror the target's rates, or current settings; always computed on the net. */
-  private async discountComponents(tx: Tx, tenantId: string, folio: FolioForDoc, targetEntryId?: string): Promise<TaxComponent[]> {
+  async discountComponents(tx: Tx, tenantId: string, folio: FolioForDoc, targetEntryId?: string): Promise<TaxComponent[]> {
     if (targetEntryId) {
       return folio.entries
         .filter((e) => e.parentEntryId === targetEntryId && (e.type === 'TAX' || e.type === 'SERVICE_CHARGE') && e.taxCode)
@@ -724,6 +728,7 @@ export class LedgerService {
           createdById: user.userId,
         });
       }
+      await runVoidHooksTx(tx, user.tenantId, targets.map((t) => t.id));
       const features = await this.guard.features(tx, user.tenantId);
       if (entry.type === 'PAYMENT') {
         const amount = -k(entry.amountKobo);

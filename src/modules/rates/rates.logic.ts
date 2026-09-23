@@ -60,8 +60,10 @@ export interface NightlyRate {
   source: RateSource;
   ruleId: string | null;
   ruleName: string | null;
-  /** Promo discount for this night, net of tax, >= 0. */
+  /** Promo discount for this night, net of tax, >= 0 (M5: plus loyalty points, below). */
   discountKobo: number;
+  /** M5: the part of discountKobo paid with loyalty points (online redemption). */
+  loyaltyDiscountKobo?: number;
 }
 
 export interface RestrictionLike {

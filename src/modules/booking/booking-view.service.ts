@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { Prisma } from '../../generated/prisma/client.js';
 import { AppException } from '../../common/errors/app-exception.js';
 import { billableHours, lagosDate, nightsBetween } from '../../common/time/lagos.js';
+import { earnPoints } from '../loyalty/loyalty.logic.js';
 import type { Tx } from '../../prisma/db.service.js';
 import { componentsFrom } from '../folios/tax.logic.js';
 import { toImages } from '../public/hotel.mapper.js';
@@ -202,7 +203,25 @@ export class BookingViewService {
       whatsappShareUrl: `https://wa.me/?text=${encodeURIComponent(shareText)}`,
       documents: docs,
       review: this.reviewState(r, now),
+      loyalty: await this.loyaltyBlock(tx, r, breakdown),
       createdAt: r.createdAt.toISOString(),
+    };
+  }
+
+  /** M5: points redeemed on the booking, to earn, and earned after check-out. */
+  private async loyaltyBlock(tx: Tx, r: StayRow, breakdown: PriceBreakdown) {
+    const p = await tx.loyaltyProgramme.findFirst({ where: { tenantId: r.tenantId } });
+    if (!p?.enabled && !r.loyaltyPoints) return null;
+    const member = await tx.loyaltyMember.findFirst({ where: { tenantId: r.tenantId, guestId: r.guestId }, include: { tier: { select: { bonusBps: true } } } });
+    if (!member && !r.loyaltyPoints) return null;
+    const earned = await tx.loyaltyTransaction.findFirst({ where: { tenantId: r.tenantId, reservationId: r.id, type: 'EARN' }, select: { points: true } });
+    const redeemValue = breakdown.loyaltyDiscountKobo ?? 0;
+    return {
+      programme: p?.name ?? '',
+      pointsRedeemed: r.loyaltyPoints,
+      redeemValueKobo: redeemValue,
+      pointsToEarn: p ? earnPoints(breakdown.roomSubtotalKobo - breakdown.discountKobo, p.earnPointsPer1000, member?.tier?.bonusBps ?? 0) : 0,
+      pointsEarned: earned?.points ?? null,
     };
   }
 
