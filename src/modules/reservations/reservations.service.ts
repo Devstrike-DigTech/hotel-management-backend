@@ -944,7 +944,7 @@ export class ReservationsService {
       });
       if (r.roomId) {
         await tx.room.update({ where: { id: r.roomId }, data: { status: 'VACANT_DIRTY' } });
-        await this.housekeeping.createTask(tx, user.tenantId, features, { roomId: r.roomId, reason: 'CHECKOUT', reservationId: r.id });
+        await this.housekeeping.createTaskSafe(tx, user.tenantId, features, { roomId: r.roomId, reason: 'CHECKOUT', reservationId: r.id });
       }
       await tx.folio.update({ where: { id: folio.id }, data: { status: 'CLOSED', closedAt: now } });
       const invoice = await this.docs.issueInvoice(tx, user.tenantId, folio.id, 'FINAL', { id: user.userId, fullName: user.fullName });
@@ -1001,7 +1001,7 @@ export class ReservationsService {
         const features = await this.guard.features(tx, user.tenantId);
         if (r.roomId) {
           await tx.room.update({ where: { id: r.roomId }, data: { status: 'VACANT_DIRTY' } });
-          await this.housekeeping.createTask(tx, user.tenantId, features, { roomId: r.roomId, reason: 'ROOM_MOVE', reservationId: r.id });
+          await this.housekeeping.createTaskSafe(tx, user.tenantId, features, { roomId: r.roomId, reason: 'ROOM_MOVE', reservationId: r.id });
         }
         await tx.room.update({ where: { id: roomId }, data: { status: 'OCCUPIED' } });
         await this.audit.record(tx, {

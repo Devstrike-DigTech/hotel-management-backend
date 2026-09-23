@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { HousekeepingTask, Prisma, Room, RoomType } from '../../generated/prisma/client.js';
 import type { HousekeepingTaskReason, HousekeepingTaskStatus, HousekeepingTaskType, TaskPriority } from '../../generated/prisma/enums.js';
 import type { AuthUser } from '../../common/auth-types.js';
@@ -67,6 +67,8 @@ function legacyReason(r: HousekeepingTaskReason): 'CHECKOUT' | 'ROOM_MOVE' | 'MA
  */
 @Injectable()
 export class HousekeepingService {
+  private readonly logger = new Logger(HousekeepingService.name);
+
   constructor(
     private readonly db: DbService,
     private readonly audit: AuditService,
@@ -160,7 +162,9 @@ export class HousekeepingService {
   private async checklistFor(tx: Tx, tenantId: string, roomTypeId: string, type: HousekeepingTaskType): Promise<ChecklistEntry[]> {
     const rows = await tx.housekeepingChecklist.findMany({ where: { tenantId, taskType: type, OR: [{ roomTypeId }, { roomTypeId: null }] } });
     const pick = rows.find((r) => r.roomTypeId === roomTypeId) ?? rows.find((r) => r.roomTypeId === null);
-    const items = pick && Array.isArray(pick.items) ? (pick.items as { id: string; label: string }[]) : checklistItems(DEFAULT_CHECKLISTS[type as TaskType]);
+    // A damaged template (not a list of { id, label }) falls back to the built-in list.
+    const stored = pick && Array.isArray(pick.items) ? (pick.items as unknown[]).filter((i): i is { id: string; label: string } => !!i && typeof i === 'object' && typeof (i as { id?: unknown }).id === 'string' && typeof (i as { label?: unknown }).label === 'string') : [];
+    const items = stored.length ? stored : checklistItems(DEFAULT_CHECKLISTS[type as TaskType] ?? DEFAULT_CHECKLISTS.CUSTOM);
     return items.map((i) => ({ id: i.id, label: i.label, done: false }));
   }
 
@@ -267,6 +271,30 @@ export class HousekeepingService {
     });
   }
 
+  /**
+   * createTask for side effects of other actions (check-out, room move, block
+   * release): runs under a savepoint so a housekeeping problem is logged and
+   * never fails the check-out itself.
+   */
+  async createTaskSafe(
+    tx: Tx,
+    tenantId: string,
+    features: readonly string[],
+    input: Parameters<HousekeepingService['createTask']>[3],
+  ): Promise<HousekeepingTask | null> {
+    if (!features.includes('housekeeping')) return null;
+    await tx.$executeRawUnsafe('SAVEPOINT housekeeping_task');
+    try {
+      const t = await this.createTask(tx, tenantId, features, input);
+      await tx.$executeRawUnsafe('RELEASE SAVEPOINT housekeeping_task');
+      return t;
+    } catch (e) {
+      await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT housekeeping_task');
+      this.logger.error(`Housekeeping task for room ${input.roomId} (${input.reason}) not created: ${(e as Error).message}`);
+      return null;
+    }
+  }
+
   create(user: AuthUser, dto: { roomId: string; type: HousekeepingTaskType; priority?: TaskPriority; assigneeId?: string; dueAt?: string; notes?: string }, ip?: string) {
     return this.db.tenant(user.tenantId, async (tx) => {
       const room = await tx.room.findFirst({ where: { id: dto.roomId, tenantId: user.tenantId } });
@@ -340,9 +368,18 @@ export class HousekeepingService {
       .filter((x): x is HousekeepingTaskStatus => (ALL as string[]).includes(x));
     const types = q.type?.split(',').filter((x) => x in TASK_MINUTES) as HousekeepingTaskType[] | undefined;
     return this.db.tenant(user.tenantId, async (tx) => {
+      // Default list: DONE tasks only while they still wait for inspection.
+      let statusWhere: Prisma.HousekeepingTaskWhereInput = { status: { in: statuses } };
+      if (!q.status) {
+        const property = await primaryProperty(tx, user.tenantId);
+        const active = statuses.filter((x) => x !== 'DONE');
+        statusWhere = property.requireInspection
+          ? { OR: [{ status: { in: active } }, { status: 'DONE', inspectedAt: null, type: { in: TURN_TYPES } }] }
+          : { status: { in: active } };
+      }
       const where: Prisma.HousekeepingTaskWhereInput = {
         tenantId: user.tenantId,
-        status: { in: statuses },
+        ...statusWhere,
         ...(types?.length && { type: { in: types } }),
         ...(q.assigneeId && { assigneeId: q.assigneeId }),
         ...(q.floor !== undefined && { room: { floor: q.floor } }),

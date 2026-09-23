@@ -542,7 +542,7 @@ export class MaintenanceService {
     if (!stillBlocked && b.room.status === 'OUT_OF_ORDER') {
       await tx.room.update({ where: { id: b.roomId }, data: { status: 'VACANT_DIRTY' } });
       const features = (await this.entitlements.getEntitlements(tenantId, tx)).features;
-      await this.housekeeping.createTask(tx, tenantId, features, { roomId: b.roomId, reason: 'MAINTENANCE', notes: `Back in service after: ${b.reason}` });
+      await this.housekeeping.createTaskSafe(tx, tenantId, features, { roomId: b.roomId, reason: 'MAINTENANCE', notes: `Back in service after: ${b.reason}` });
     }
     if (b.ticketId) await this.event(tx, tenantId, b.ticketId, 'BLOCK', by, { note: `Room ${b.room.number} back in service` });
   }

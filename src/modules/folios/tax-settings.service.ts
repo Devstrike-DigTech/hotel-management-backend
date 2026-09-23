@@ -33,11 +33,13 @@ export class TaxSettingsService {
   async forProperty(tx: Tx, tenantId: string, propertyId: string): Promise<TaxSetting> {
     const existing = await tx.taxSetting.findUnique({ where: { propertyId } });
     if (existing) return existing;
-    return tx.taxSetting.upsert({
-      where: { propertyId },
-      create: { tenantId, propertyId },
-      update: {},
-    });
+    // Created lazily with the defaults. ON CONFLICT keeps two concurrent first
+    // requests (e.g. two public quotes) from failing on the unique property_id.
+    await tx.$executeRaw`
+      INSERT INTO tax_settings (id, tenant_id, property_id, updated_at)
+      VALUES (gen_random_uuid(), ${tenantId}::uuid, ${propertyId}::uuid, now())
+      ON CONFLICT (property_id) DO NOTHING`;
+    return tx.taxSetting.findUniqueOrThrow({ where: { propertyId } });
   }
 
   async forTenant(tx: Tx, tenantId: string): Promise<TaxSetting> {
