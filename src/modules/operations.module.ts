@@ -13,7 +13,7 @@ import { GuardController } from './guard/guard.controller.js';
 import { GuardService } from './guard/guard.service.js';
 import { FilesController, GuestRegisterController, GuestsController } from './guests/guests.controller.js';
 import { GuestsService } from './guests/guests.service.js';
-import { HousekeepingController } from './housekeeping/housekeeping.controller.js';
+import { HousekeepingController, LostFoundController } from './housekeeping/housekeeping.controller.js';
 import { HousekeepingService } from './housekeeping/housekeeping.service.js';
 import { IdempotencyInterceptor } from './idempotency/idempotency.interceptor.js';
 import { DocumentsService } from './invoices/documents.service.js';
@@ -56,6 +56,7 @@ import { objectStorageProvider } from './storage/storage.provider.js';
     ReportsController,
     FrontDeskController,
     HousekeepingController,
+    LostFoundController,
     ApprovalPinController,
   ],
   providers: [
@@ -98,6 +99,8 @@ import { objectStorageProvider } from './storage/storage.provider.js';
     AvailabilityService,
     GuestsService,
     TaxSettingsService,
+    HousekeepingService,
+    objectStorageProvider,
   ],
 })
 export class OperationsModule {}

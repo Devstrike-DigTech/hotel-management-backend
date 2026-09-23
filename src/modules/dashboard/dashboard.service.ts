@@ -37,6 +37,23 @@ export class DashboardService {
       const usage = await this.entitlements.getUsage(user.tenantId, tx);
       const recentActivity = await this.audit.recent(tx, user.tenantId, 5);
       const ops = await this.frontDesk.summaryTx(tx, user);
+      const tenantId = user.tenantId;
+      const now = new Date();
+      const housekeeping = ent.features.includes('housekeeping')
+        ? {
+            open: await tx.housekeepingTask.count({ where: { tenantId, status: { in: ['OPEN', 'ASSIGNED', 'REJECTED'] } } }),
+            inProgress: await tx.housekeepingTask.count({ where: { tenantId, status: 'IN_PROGRESS' } }),
+            awaitingInspection: await tx.housekeepingTask.count({ where: { tenantId, status: 'DONE', inspectedAt: null, type: { in: ['CHECKOUT_CLEAN', 'DEEP_CLEAN', 'INSPECTION', 'CUSTOM'] } } }),
+            urgent: await tx.housekeepingTask.count({ where: { tenantId, priority: 'URGENT', status: { in: ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'REJECTED'] } } }),
+          }
+        : null;
+      const maintenance = ent.features.includes('maintenance')
+        ? {
+            open: await tx.maintenanceTicket.count({ where: { tenantId, status: { notIn: ['RESOLVED', 'CLOSED'] } } }),
+            overdue: await tx.maintenanceTicket.count({ where: { tenantId, status: { notIn: ['RESOLVED', 'CLOSED'] }, slaDueAt: { lt: now } } }),
+            blockedRooms: (await tx.roomBlock.findMany({ where: { tenantId, startsAt: { lte: now }, endsAt: { gt: now }, releasedAt: null }, select: { roomId: true }, distinct: ['roomId'] })).length,
+          }
+        : null;
 
       return {
         rooms: { total, byStatus },
@@ -47,6 +64,8 @@ export class DashboardService {
         limits: ent.limits,
         recentActivity,
         ...ops,
+        housekeeping,
+        maintenance,
       };
     });
   }

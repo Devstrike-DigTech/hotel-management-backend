@@ -21,6 +21,7 @@ export function toRoomTypeView(rt: RoomType, roomCount: number) {
     sizeSqm: rt.sizeSqm,
     amenities: rt.amenities,
     images: toImages(rt.images),
+    deepCleanEveryStays: rt.deepCleanEveryStays,
     roomCount,
   };
 }
@@ -72,6 +73,7 @@ export class RoomTypesService {
           amenities: dto.amenities ?? [],
           images: (dto.images ?? []) as unknown as Prisma.InputJsonValue,
           sortOrder: count,
+          deepCleanEveryStays: dto.deepCleanEveryStays ?? null,
         },
       });
       await this.audit.record(tx, {
@@ -108,6 +110,7 @@ export class RoomTypesService {
         ...(dto.images !== undefined && {
           images: dto.images as unknown as Prisma.InputJsonValue,
         }),
+        ...(dto.deepCleanEveryStays !== undefined && { deepCleanEveryStays: dto.deepCleanEveryStays }),
       };
       const rt = await tx.roomType.update({
         where: { id },

@@ -71,6 +71,13 @@ export class CreateRoomTypeDto {
   @ValidateNested({ each: true })
   @Type(() => ImageDto)
   images?: ImageDto[];
+
+  /** Every N check-outs of a room of this type, the checkout clean becomes a DEEP_CLEAN (null = never). */
+  @IsOptional()
+  @IsInt()
+  @Min(2)
+  @Max(100)
+  deepCleanEveryStays?: number | null;
 }
 
 export class UpdateRoomTypeDto extends PartialType(CreateRoomTypeDto) {}

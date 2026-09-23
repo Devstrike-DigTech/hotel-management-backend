@@ -43,6 +43,16 @@ export class FrontDeskService {
       orderBy: { arrivalAt: 'asc' },
     });
     const balances = await this.ledger.balances(tx, rows.map((r) => r.folio?.id).filter((x): x is string => !!x));
+    const roomIds = [...new Set(rows.map((r) => r.roomId).filter((x): x is string => !!x))];
+    const openTasks = roomIds.length
+      ? await tx.housekeepingTask.findMany({
+          where: { tenantId: user.tenantId, roomId: { in: roomIds }, status: { in: ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'DONE', 'REJECTED'] } },
+          orderBy: { createdAt: 'desc' },
+          select: { roomId: true, status: true },
+        })
+      : [];
+    const taskStatus = new Map<string, string>();
+    for (const t of openTasks) if (!taskStatus.has(t.roomId)) taskStatus.set(t.roomId, t.status);
     const view = (r: Row) => ({
       id: r.id,
       code: r.code,
@@ -61,6 +71,8 @@ export class FrontDeskService {
       overdue: r.status === 'CHECKED_IN' && r.departureAt < now,
       paymentMode: r.paymentMode,
       holdExpiresAt: r.status === 'PENDING' && r.paymentMode === 'ONLINE' ? (r.holdExpiresAt?.toISOString() ?? null) : null,
+      roomReady: !!r.room && (r.room.status === 'VACANT_CLEAN' || r.room.status === 'RESERVED'),
+      housekeepingStatus: r.room ? (taskStatus.get(r.room.id) ?? null) : null,
     });
     const arrivalDay = (r: Row) => lagosDate(r.arrivalAt) === today || (r.checkedInAt && lagosDate(r.checkedInAt) === today);
     const arrivals = rows.filter((r) => ['PENDING', 'CONFIRMED', 'CHECKED_IN'].includes(r.status) && arrivalDay(r));
