@@ -10,10 +10,18 @@ export interface DailyFlash {
   roomsTotal: number;
   roomsOutOfOrder: number;
   roomsAvailable: number;
+  /** Room nights occupied by NIGHTLY stays (checked in or checked out) for the night of `date`. */
   roomsSold: number;
   occupancyRate: number;
+  /** Room nights for which a ROOM charge has been posted (by check-in or the night audit), net of voids. */
+  roomNightsPosted: number;
+  /** roomRevenuePostedKobo / roomNightsPosted. */
   adrKobo: number;
+  /** roomRevenuePostedKobo / roomsAvailable. */
   revparKobo: number;
+  /** Net ROOM charges posted for the night, after voids, before discounts. */
+  roomRevenuePostedKobo: number;
+  /** Same value as roomRevenuePostedKobo (kept for compatibility). */
   roomRevenueKobo: number;
   dayUseRevenueKobo: number;
   otherRevenueKobo: number;
@@ -54,15 +62,18 @@ export async function computeDailyFlashes(tx: Tx, tenantId: string, from: string
       AND e.type <> 'VOID'
       AND NOT EXISTS (SELECT 1 FROM folio_entries v WHERE v.ref_entry_id = e.id)
     GROUP BY 1, 2, 3`;
-  const guests = await tx.$queryRaw<{ d: Date; g: number }[]>`
-    SELECT e.business_date AS d, COALESCE(sum(r.adults + r.children), 0)::int AS g
-    FROM folio_entries e
-    JOIN folios f ON f.id = e.folio_id
-    JOIN reservations r ON r.id = f.reservation_id
-    WHERE e.tenant_id = ${tenantId}::uuid AND e.type = 'ROOM'
-      AND e.business_date BETWEEN ${dbDate(from)}::date AND ${dbDate(to)}::date
-      AND NOT EXISTS (SELECT 1 FROM folio_entries v WHERE v.ref_entry_id = e.id)
-    GROUP BY 1`;
+  // Nightly stays that were (or are) in house: occupancy counts these, whether
+  // or not tonight's room charge has been posted yet.
+  const stays = await tx.reservation.findMany({
+    where: {
+      tenantId,
+      stayType: 'NIGHTLY',
+      status: { in: ['CHECKED_IN', 'CHECKED_OUT'] },
+      arrivalAt: { lt: lagosStartOfDay(addDays(to, 1)) },
+      departureAt: { gt: lagosStartOfDay(from) },
+    },
+    select: { arrivalAt: true, departureAt: true, adults: true, children: true },
+  });
   const start = lagosStartOfDay(from);
   const end = lagosStartOfDay(addDays(to, 1));
   const res = await tx.reservation.findMany({
@@ -93,8 +104,10 @@ export async function computeDailyFlashes(tx: Tx, tenantId: string, from: string
       roomsAvailable: Math.max(0, roomsTotal - roomsOutOfOrder),
       roomsSold: 0,
       occupancyRate: 0,
+      roomNightsPosted: 0,
       adrKobo: 0,
       revparKobo: 0,
+      roomRevenuePostedKobo: 0,
       roomRevenueKobo: 0,
       dayUseRevenueKobo: 0,
       otherRevenueKobo: 0,
@@ -120,8 +133,8 @@ export async function computeDailyFlashes(tx: Tx, tenantId: string, from: string
     const amt = Number(r.amt);
     switch (r.type) {
       case 'ROOM':
-        f.roomsSold += r.n;
-        f.roomRevenueKobo += amt;
+        f.roomNightsPosted += r.n;
+        f.roomRevenuePostedKobo += amt;
         break;
       case 'DAY_USE':
         f.dayUseRevenueKobo += amt;
@@ -147,9 +160,15 @@ export async function computeDailyFlashes(tx: Tx, tenantId: string, from: string
         break;
     }
   }
-  for (const g of guests) {
-    const f = byDate.get(fromDbDate(g.d));
-    if (f) f.guestsInHouse = g.g;
+  for (const st of stays) {
+    // Night D is occupied when arrival date <= D < departure date (Lagos).
+    const last = addDays(lagosDate(st.departureAt), -1);
+    for (let d = lagosDate(st.arrivalAt); d <= last; d = addDays(d, 1)) {
+      const f = byDate.get(d);
+      if (!f) continue;
+      f.roomsSold += 1;
+      f.guestsInHouse += st.adults + st.children;
+    }
   }
   for (const r of res) {
     const bump = (at: Date | null, key: 'arrivals' | 'departures' | 'cancellations' | 'noShows' | 'dayUseCount') => {
@@ -167,11 +186,18 @@ export async function computeDailyFlashes(tx: Tx, tenantId: string, from: string
   return dates.map((d) => byDate.get(d)!);
 }
 
-export function finalise(f: Pick<DailyFlash, 'roomsSold' | 'roomsAvailable' | 'roomRevenueKobo' | 'dayUseRevenueKobo' | 'otherRevenueKobo' | 'discountKobo' | 'occupancyRate' | 'adrKobo' | 'revparKobo' | 'totalRevenueKobo'>) {
+export function finalise(
+  f: Pick<
+    DailyFlash,
+    | 'roomsSold' | 'roomsAvailable' | 'roomNightsPosted' | 'roomRevenuePostedKobo' | 'roomRevenueKobo' | 'dayUseRevenueKobo'
+    | 'otherRevenueKobo' | 'discountKobo' | 'occupancyRate' | 'adrKobo' | 'revparKobo' | 'totalRevenueKobo'
+  >,
+) {
+  f.roomRevenueKobo = f.roomRevenuePostedKobo;
   f.occupancyRate = f.roomsAvailable > 0 ? round4(Math.min(1, f.roomsSold / f.roomsAvailable)) : 0;
-  f.adrKobo = f.roomsSold > 0 ? Math.round(f.roomRevenueKobo / f.roomsSold) : 0;
-  f.revparKobo = f.roomsAvailable > 0 ? Math.round(f.roomRevenueKobo / f.roomsAvailable) : 0;
-  f.totalRevenueKobo = f.roomRevenueKobo + f.dayUseRevenueKobo + f.otherRevenueKobo - f.discountKobo;
+  f.adrKobo = f.roomNightsPosted > 0 ? Math.round(f.roomRevenuePostedKobo / f.roomNightsPosted) : 0;
+  f.revparKobo = f.roomsAvailable > 0 ? Math.round(f.roomRevenuePostedKobo / f.roomsAvailable) : 0;
+  f.totalRevenueKobo = f.roomRevenuePostedKobo + f.dayUseRevenueKobo + f.otherRevenueKobo - f.discountKobo;
 }
 
 /** Sums a list of daily flashes; ratios are recomputed from the sums. */
@@ -180,8 +206,10 @@ export function sumFlashes(days: DailyFlash[]) {
     roomsAvailable: 0,
     roomsSold: 0,
     occupancyRate: 0,
+    roomNightsPosted: 0,
     adrKobo: 0,
     revparKobo: 0,
+    roomRevenuePostedKobo: 0,
     roomRevenueKobo: 0,
     dayUseRevenueKobo: 0,
     otherRevenueKobo: 0,
@@ -201,7 +229,8 @@ export function sumFlashes(days: DailyFlash[]) {
   for (const d of days) {
     t.roomsAvailable += d.roomsAvailable;
     t.roomsSold += d.roomsSold;
-    t.roomRevenueKobo += d.roomRevenueKobo;
+    t.roomNightsPosted += d.roomNightsPosted ?? d.roomsSold;
+    t.roomRevenuePostedKobo += d.roomRevenuePostedKobo ?? d.roomRevenueKobo;
     t.dayUseRevenueKobo += d.dayUseRevenueKobo;
     t.otherRevenueKobo += d.otherRevenueKobo;
     t.discountKobo += d.discountKobo;
