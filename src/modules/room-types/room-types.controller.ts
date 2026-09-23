@@ -10,11 +10,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { AuthUser } from '../../common/auth-types.js';
-import {
-  ClientIp,
-  CurrentUser,
-  Roles,
-} from '../../common/decorators/index.js';
+import { ClientIp, CurrentUser, RequirePermission } from '../../common/decorators/index.js';
 import { CreateRoomTypeDto, UpdateRoomTypeDto } from './room-types.dto.js';
 import { RoomTypesService } from './room-types.service.js';
 
@@ -30,7 +26,7 @@ export class RoomTypesController {
   }
 
   @Post()
-  @Roles('OWNER', 'MANAGER')
+  @RequirePermission('rooms.manage')
   create(
     @CurrentUser() user: AuthUser,
     @Body() dto: CreateRoomTypeDto,
@@ -40,7 +36,7 @@ export class RoomTypesController {
   }
 
   @Patch(':id')
-  @Roles('OWNER', 'MANAGER')
+  @RequirePermission('rooms.manage')
   update(
     @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
@@ -51,7 +47,7 @@ export class RoomTypesController {
   }
 
   @Delete(':id')
-  @Roles('OWNER', 'MANAGER')
+  @RequirePermission('rooms.manage')
   remove(
     @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,

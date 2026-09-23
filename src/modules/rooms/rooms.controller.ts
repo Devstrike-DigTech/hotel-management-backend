@@ -11,11 +11,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { AuthUser } from '../../common/auth-types.js';
-import {
-  ClientIp,
-  CurrentUser,
-  Roles,
-} from '../../common/decorators/index.js';
+import { AnyPermission, ClientIp, CurrentUser, RequirePermission } from '../../common/decorators/index.js';
 import { CheckLimit } from '../entitlements/entitlements.decorators.js';
 import {
   BulkCreateRoomsDto,
@@ -38,7 +34,7 @@ export class RoomsController {
   }
 
   @Post()
-  @Roles('OWNER', 'MANAGER')
+  @RequirePermission('rooms.manage')
   @CheckLimit('max_rooms')
   create(
     @CurrentUser() user: AuthUser,
@@ -49,7 +45,7 @@ export class RoomsController {
   }
 
   @Post('bulk')
-  @Roles('OWNER', 'MANAGER')
+  @RequirePermission('rooms.manage')
   @CheckLimit('max_rooms')
   @ApiOperation({
     summary: 'Create a numbered range of rooms, e.g. 101-110 on floor 1',
@@ -63,7 +59,7 @@ export class RoomsController {
   }
 
   @Patch(':id')
-  @Roles('OWNER', 'MANAGER')
+  @RequirePermission('rooms.manage')
   update(
     @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
@@ -74,7 +70,7 @@ export class RoomsController {
   }
 
   @Patch(':id/status')
-  @Roles('OWNER', 'MANAGER', 'FRONT_DESK', 'HOUSEKEEPING')
+  @AnyPermission('rooms.status', 'housekeeping.work')
   setStatus(
     @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
@@ -85,7 +81,7 @@ export class RoomsController {
   }
 
   @Delete(':id')
-  @Roles('OWNER', 'MANAGER')
+  @RequirePermission('rooms.manage')
   remove(
     @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,

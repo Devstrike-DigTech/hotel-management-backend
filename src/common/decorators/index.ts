@@ -3,7 +3,6 @@ import {
   ExecutionContext,
   SetMetadata,
 } from '@nestjs/common';
-import type { StaffRole } from '../../generated/prisma/enums.js';
 import type {
   AppRequest,
   AuthUser,
@@ -11,10 +10,12 @@ import type {
   PlatformPrincipal,
 } from '../auth-types.js';
 import { AppException } from '../errors/app-exception.js';
+import { rateLimitIp } from '../trusted-ip.js';
 
 export const IS_PUBLIC_KEY = 'auth:isPublic';
 export const IS_PLATFORM_KEY = 'auth:isPlatform';
-export const ROLES_KEY = 'auth:roles';
+export const PERMISSIONS_KEY = 'auth:permissions';
+export const ANY_PERMISSION_KEY = 'auth:anyPermission';
 export const IS_GUEST_KEY = 'auth:isGuest';
 export const OPTIONAL_GUEST_KEY = 'auth:optionalGuest';
 export const ALLOW_READ_ONLY_KEY = 'billing:allowReadOnly';
@@ -35,8 +36,15 @@ export const GuestOnly = () => SetMetadata(IS_GUEST_KEY, true);
  */
 export const OptionalGuest = () => SetMetadata(OPTIONAL_GUEST_KEY, true);
 
-/** Restrict a hotel route to the given staff roles. */
-export const Roles = (...roles: StaffRole[]) => SetMetadata(ROLES_KEY, roles);
+/**
+ * Restrict a hotel route to staff holding EVERY listed permission (see the
+ * catalogue in common/permissions). Enforced by PermissionGuard; a missing
+ * permission is 403 FORBIDDEN { permission }.
+ */
+export const RequirePermission = (...permissions: string[]) => SetMetadata(PERMISSIONS_KEY, permissions);
+
+/** Restrict a hotel route to staff holding AT LEAST ONE of the permissions. */
+export const AnyPermission = (...permissions: string[]) => SetMetadata(ANY_PERMISSION_KEY, permissions);
 
 /**
  * Allow a mutating route even when the tenant's subscription is READ_ONLY or
@@ -67,6 +75,16 @@ export const ClientIp = createParamDecorator(
     return req.ip;
   },
 );
+
+/**
+ * Client IP for rate limiting: the X-Client-IP of a trusted web server (see
+ * common/trusted-ip.ts), else the socket IP.
+ */
+export const RateLimitIp = createParamDecorator((_data: unknown, ctx: ExecutionContext): string => {
+  const req = ctx.switchToHttp().getRequest<AppRequest>();
+  const secret = process.env.TRUSTED_PROXY_SECRET?.trim();
+  return rateLimitIp(req, secret && secret.length >= 16 ? secret : undefined);
+});
 
 export const CurrentGuest = createParamDecorator(
   (_data: unknown, ctx: ExecutionContext): GuestPrincipal => {

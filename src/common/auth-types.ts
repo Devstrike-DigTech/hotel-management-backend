@@ -39,6 +39,13 @@ export interface AuthUser {
   role: StaffRole;
   email: string;
   fullName: string;
+  /**
+   * Effective permissions, loaded from the database by PermissionGuard on
+   * every staff request (so custom-role edits apply at once). When absent
+   * (jobs, internal calls) the system role's set is used.
+   */
+  permissions?: ReadonlySet<string>;
+  customRoleId?: string | null;
 }
 
 export interface PlatformPrincipal {

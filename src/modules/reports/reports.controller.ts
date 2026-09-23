@@ -2,7 +2,7 @@ import { Controller, Get, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { IsOptional, Matches } from 'class-validator';
 import type { AuthUser } from '../../common/auth-types.js';
-import { CurrentUser, Roles } from '../../common/decorators/index.js';
+import { CurrentUser, RequirePermission } from '../../common/decorators/index.js';
 import { ReportsService } from './reports.service.js';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -18,7 +18,7 @@ export class RangeQueryDto {
 
 @ApiTags('Reports')
 @ApiBearerAuth()
-@Roles('OWNER', 'MANAGER', 'ACCOUNTANT')
+@RequirePermission('reports.view')
 @Controller('reports')
 export class ReportsController {
   constructor(private readonly reports: ReportsService) {}

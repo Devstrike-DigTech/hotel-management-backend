@@ -3,6 +3,8 @@ import type { AuthUser } from '../../common/auth-types.js';
 import { AppException } from '../../common/errors/app-exception.js';
 import { DbService } from '../../prisma/db.service.js';
 import { EntitlementsService } from '../entitlements/entitlements.service.js';
+import { permissionsFor } from '../../common/permissions/catalogue.js';
+import { roleLabel } from '../staff/roles.service.js';
 
 @Injectable()
 export class MeService {
@@ -13,7 +15,7 @@ export class MeService {
 
   async get(auth: AuthUser) {
     return this.db.tenant(auth.tenantId, async (tx) => {
-      const user = await tx.user.findUnique({ where: { id: auth.userId } });
+      const user = await tx.user.findUnique({ where: { id: auth.userId }, include: { customRole: { select: { name: true, permissions: true } } } });
       const tenant = await tx.tenant.findUnique({ where: { id: auth.tenantId } });
       if (!user || !tenant || !user.isActive) {
         throw AppException.unauthorized('This account is no longer active');
@@ -27,8 +29,10 @@ export class MeService {
           email: user.email,
           phone: user.phone,
           role: user.role,
+          ...(({ roleId, roleName }) => ({ roleId, roleName }))(roleLabel(user)),
           hasApprovalPin: !!user.approvalPinHash,
         },
+        permissions: [...permissionsFor(user.role, user.customRole?.permissions)].sort(),
         tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug },
         subscription: ent.subscription,
         entitlements: {

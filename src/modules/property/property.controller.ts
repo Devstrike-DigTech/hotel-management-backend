@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Patch } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { AuthUser } from '../../common/auth-types.js';
-import { ClientIp, CurrentUser, Roles } from '../../common/decorators/index.js';
+import { ClientIp, CurrentUser, RequirePermission } from '../../common/decorators/index.js';
 import { UpdatePropertyDto } from './property.dto.js';
 import { PropertyService } from './property.service.js';
 
@@ -17,7 +17,7 @@ export class PropertyController {
   }
 
   @Patch()
-  @Roles('OWNER', 'MANAGER')
+  @RequirePermission('settings.manage')
   @ApiOperation({
     summary: 'Update the hotel profile (accentColor/logoUrl need booking_site_branding)',
   })

@@ -1,14 +1,6 @@
 import { HttpStatus } from '@nestjs/common';
-import type { StaffRole } from '../../generated/prisma/enums.js';
 import { AppException, ErrorCode } from '../../common/errors/app-exception.js';
 import type { Tx } from '../../prisma/db.service.js';
-
-export const MANAGERS: StaffRole[] = ['OWNER', 'MANAGER'];
-export const DESK: StaffRole[] = ['OWNER', 'MANAGER', 'FRONT_DESK'];
-export const DESK_READ: StaffRole[] = ['OWNER', 'MANAGER', 'FRONT_DESK', 'ACCOUNTANT'];
-export const BACK_OFFICE: StaffRole[] = ['OWNER', 'MANAGER', 'ACCOUNTANT'];
-
-export const isManager = (role: StaffRole) => role === 'OWNER' || role === 'MANAGER';
 
 /** Largest single amount accepted anywhere (₦1bn), well inside safe integers. */
 export const MAX_AMOUNT_KOBO = 100_000_000_000;

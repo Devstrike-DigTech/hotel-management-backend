@@ -1,7 +1,7 @@
 import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Put, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { AuthUser, PlatformPrincipal } from '../../common/auth-types.js';
-import { ClientIp, CurrentPlatformUser, CurrentUser, PlatformOnly, Public, Roles } from '../../common/decorators/index.js';
+import { ClientIp, CurrentPlatformUser, CurrentUser, PlatformOnly, Public, RequirePermission } from '../../common/decorators/index.js';
 import { RateLimit } from '../infra/rate-limit.js';
 import {
   FlagReviewDto,
@@ -47,26 +47,26 @@ export class HotelReviewsController {
   constructor(private readonly svc: ReviewsService) {}
 
   @Get()
-  @Roles('OWNER', 'MANAGER', 'FRONT_DESK', 'ACCOUNTANT')
+  @RequirePermission('reviews.view')
   list(@CurrentUser() user: AuthUser, @Query() q: HotelReviewsQueryDto) {
     return this.svc.list(user, q);
   }
 
   @Get('summary')
-  @Roles('OWNER', 'MANAGER', 'FRONT_DESK', 'ACCOUNTANT')
+  @RequirePermission('reviews.view')
   summary(@CurrentUser() user: AuthUser, @Query() q: ReviewSummaryQueryDto) {
     return this.svc.summary(user, q.months ?? 12);
   }
 
   @Put(':id/reply')
-  @Roles('OWNER', 'MANAGER')
+  @RequirePermission('reviews.reply')
   reply(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ReplyDto, @ClientIp() ip?: string) {
     return this.svc.reply(user, id, dto.body, ip);
   }
 
   @Post(':id/flag')
   @HttpCode(200)
-  @Roles('OWNER', 'MANAGER')
+  @RequirePermission('reviews.reply')
   flag(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: FlagReviewDto, @ClientIp() ip?: string) {
     return this.svc.flag(user, id, dto.reason, ip);
   }

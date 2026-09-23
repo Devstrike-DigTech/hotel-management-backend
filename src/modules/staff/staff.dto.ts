@@ -31,8 +31,13 @@ export class CreateStaffDto {
   @IsString() @Matches(PHONE_RULE, { message: 'phone must be a valid phone number' }) @Transform(trim)
   phone!: string;
 
-  @IsEnum(StaffRole)
-  role!: StaffRole;
+  /** Legacy: a system role key. Use `roleId` for custom roles. */
+  @IsOptional() @IsEnum(StaffRole)
+  role?: StaffRole;
+
+  /** System role key ("FRONT_DESK") or custom role id. */
+  @IsOptional() @IsString() @MaxLength(60)
+  roleId?: string;
 
   @IsString() @Matches(PASSWORD_RULE, { message: PASSWORD_MESSAGE })
   password!: string;
@@ -47,6 +52,9 @@ export class UpdateStaffDto {
 
   @IsOptional() @IsEnum(StaffRole)
   role?: StaffRole;
+
+  @IsOptional() @IsString() @MaxLength(60)
+  roleId?: string;
 
   @IsOptional() @IsBoolean()
   isActive?: boolean;

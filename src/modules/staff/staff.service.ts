@@ -6,15 +6,21 @@ import { DbService, type Tx } from '../../prisma/db.service.js';
 import { AuditService, userActor } from '../audit/audit.service.js';
 import { AuthService, isUniqueViolation } from '../auth/auth.service.js';
 import { EntitlementsService } from '../entitlements/entitlements.service.js';
+import { permissionsFor } from '../../common/permissions/catalogue.js';
+import { RolesService, roleLabel, type ResolvedRole } from './roles.service.js';
 import type { CreateStaffDto, UpdateStaffDto } from './staff.dto.js';
 
-export function toStaffView(u: User) {
+type StaffRow = User & { customRole?: { name: string; permissions: string[] } | null };
+const withRole = { customRole: { select: { name: true, permissions: true } } } as const;
+
+export function toStaffView(u: StaffRow) {
   return {
     id: u.id,
     fullName: u.fullName,
     email: u.email,
     phone: u.phone,
     role: u.role,
+    ...roleLabel(u),
     isActive: u.isActive,
     lastLoginAt: u.lastLoginAt?.toISOString() ?? null,
     hasApprovalPin: !!u.approvalPinHash,
@@ -36,13 +42,33 @@ export class StaffService {
     private readonly audit: AuditService,
     private readonly entitlements: EntitlementsService,
     private readonly auth: AuthService,
+    private readonly roles: RolesService,
   ) {}
+
+  private lastOwner() {
+    return new AppException(HttpStatus.CONFLICT, 'LAST_OWNER', 'A hotel must keep at least one active owner');
+  }
+
+  /** Role from `roleId` (system key or custom uuid) or the legacy `role` field. */
+  private async roleFrom(tx: Tx, user: AuthUser, dto: { role?: string; roleId?: string }): Promise<ResolvedRole | null> {
+    const ref = dto.roleId ?? dto.role;
+    if (!ref) return null;
+    if (ref === 'CUSTOM') {
+      throw new AppException(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR, 'Choose a custom role by its id (roleId)', { fields: { roleId: ['Choose a custom role by its id'] } });
+    }
+    const resolved = await this.roles.resolve(tx, user.tenantId, ref);
+    if (resolved.role === 'CUSTOM') {
+      await this.entitlements.assertFeature(await this.entitlements.getEntitlements(user.tenantId, tx), 'custom_roles');
+    }
+    return resolved;
+  }
 
   list(user: AuthUser) {
     return this.db.tenant(user.tenantId, async (tx) => {
       const rows = await tx.user.findMany({
         where: { tenantId: user.tenantId },
         orderBy: [{ isActive: 'desc' }, { createdAt: 'asc' }],
+        include: withRole,
       });
       return rows.map(toStaffView);
     });
@@ -52,21 +78,28 @@ export class StaffService {
   approvers(user: AuthUser) {
     return this.db.tenant(user.tenantId, async (tx) => {
       const rows = await tx.user.findMany({
-        where: { tenantId: user.tenantId, isActive: true, role: { in: ['OWNER', 'MANAGER'] }, approvalPinHash: { not: null } },
+        where: { tenantId: user.tenantId, isActive: true, approvalPinHash: { not: null } },
         orderBy: { fullName: 'asc' },
-        select: { id: true, fullName: true, role: true },
+        select: { id: true, fullName: true, role: true, customRole: { select: { permissions: true } } },
       });
-      return rows;
+      return rows
+        .filter((r) => permissionsFor(r.role, r.customRole?.permissions).has('folio.approve'))
+        .map((r) => ({ id: r.id, fullName: r.fullName, role: r.role }));
     });
   }
 
   async create(user: AuthUser, dto: CreateStaffDto, ip?: string) {
-    if (dto.role === 'OWNER' && user.role !== 'OWNER') {
+    if (!dto.role && !dto.roleId) {
+      throw new AppException(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR, 'Choose a role', { fields: { roleId: ['Choose a role'] } });
+    }
+    if ((dto.roleId ?? dto.role) === 'OWNER' && user.role !== 'OWNER') {
       throw AppException.forbidden('Only an owner can add another owner');
     }
     const passwordHash = await this.auth.hashPassword(dto.password);
     try {
       return await this.db.tenant(user.tenantId, async (tx) => {
+        const role = (await this.roleFrom(tx, user, dto))!;
+        this.roles.assertNoEscalation(user, role.permissions);
         const ent = await this.entitlements.getEntitlements(user.tenantId, tx);
         await this.entitlements.assertWithinLimit(ent, 'max_staff', 1, tx);
         const created = await tx.user.create({
@@ -75,9 +108,11 @@ export class StaffService {
             email: dto.email,
             fullName: dto.fullName,
             phone: dto.phone,
-            role: dto.role,
+            role: role.role,
+            customRoleId: role.customRoleId,
             passwordHash,
           },
+          include: withRole,
         });
         await this.audit.record(tx, {
           tenantId: user.tenantId,
@@ -85,7 +120,7 @@ export class StaffService {
           action: 'staff.created',
           entityType: 'user',
           entityId: created.id,
-          metadata: { fullName: created.fullName, role: created.role },
+          metadata: { fullName: created.fullName, role: role.role, roleName: role.name, ...(role.customRoleId && { customRoleId: role.customRoleId }) },
           ip,
         });
         return toStaffView(created);
@@ -96,8 +131,8 @@ export class StaffService {
     }
   }
 
-  private async load(tx: Tx, tenantId: string, id: string): Promise<User> {
-    const u = await tx.user.findFirst({ where: { id, tenantId } });
+  private async load(tx: Tx, tenantId: string, id: string): Promise<StaffRow> {
+    const u = await tx.user.findFirst({ where: { id, tenantId }, include: withRole });
     if (!u) throw AppException.notFound('Staff member');
     return u;
   }
@@ -106,9 +141,7 @@ export class StaffService {
     const owners = await tx.user.count({
       where: { tenantId, role: 'OWNER', isActive: true, id: { not: exceptId } },
     });
-    if (owners === 0) {
-      throw AppException.conflict('A hotel must keep at least one active owner');
-    }
+    if (owners === 0) throw this.lastOwner();
   }
 
   async update(user: AuthUser, id: string, dto: UpdateStaffDto, ip?: string) {
@@ -117,12 +150,18 @@ export class StaffService {
       : undefined;
     return this.db.tenant(user.tenantId, async (tx) => {
       const target = await this.load(tx, user.tenantId, id);
-      const touchesOwner = target.role === 'OWNER' || dto.role === 'OWNER';
+      const next = await this.roleFrom(tx, user, dto);
+      const roleChanges = !!next && (next.role !== target.role || next.customRoleId !== target.customRoleId);
+      const touchesOwner = target.role === 'OWNER' || next?.role === 'OWNER';
       if (touchesOwner && user.role !== 'OWNER') {
         throw AppException.forbidden('Only an owner can change an owner account');
       }
+      // No escalation: you cannot change someone who holds more than you,
+      // nor give them a role with more than you hold.
+      this.roles.assertNoEscalation(user, permissionsFor(target.role, target.customRole?.permissions));
+      if (next) this.roles.assertNoEscalation(user, next.permissions);
       const self = target.id === user.userId;
-      if (self && (dto.isActive === false || (dto.role && dto.role !== target.role))) {
+      if (self && (dto.isActive === false || roleChanges)) {
         throw AppException.badRequest(
           'You cannot deactivate yourself or change your own role',
         );
@@ -130,7 +169,7 @@ export class StaffService {
       const losingOwner =
         target.role === 'OWNER' &&
         target.isActive &&
-        ((dto.role !== undefined && dto.role !== 'OWNER') || dto.isActive === false);
+        ((roleChanges && next?.role !== 'OWNER') || dto.isActive === false);
       if (losingOwner) await this.assertAnotherOwner(tx, user.tenantId, id);
 
       if (dto.isActive === true && !target.isActive) {
@@ -138,17 +177,17 @@ export class StaffService {
         await this.entitlements.assertWithinLimit(ent, 'max_staff', 1, tx);
       }
 
-      const data: Prisma.UserUpdateInput = {
+      const data: Prisma.UserUncheckedUpdateInput = {
         ...(dto.fullName !== undefined && { fullName: dto.fullName }),
         ...(dto.phone !== undefined && { phone: dto.phone }),
-        ...(dto.role !== undefined && { role: dto.role }),
+        ...(roleChanges && { role: next!.role, customRoleId: next!.customRoleId }),
         ...(dto.isActive !== undefined && { isActive: dto.isActive }),
         ...(passwordHash && { passwordHash }),
       };
-      const updated = await tx.user.update({ where: { id }, data });
+      const updated = await tx.user.update({ where: { id }, data, include: withRole });
 
       // Sign the user out everywhere when access is reduced or reset.
-      if (passwordHash || dto.isActive === false || (dto.role && dto.role !== target.role)) {
+      if (passwordHash || dto.isActive === false || roleChanges) {
         await tx.refreshToken.updateMany({
           where: { userId: id, revokedAt: null },
           data: { revokedAt: new Date(), revokeReason: 'staff_updated' },
@@ -164,7 +203,7 @@ export class StaffService {
         metadata: {
           fullName: updated.fullName,
           changes: Object.keys(dto).map((k) => (k === 'password' ? 'password' : k)),
-          ...(dto.role && dto.role !== target.role && { from: target.role, to: dto.role }),
+          ...(roleChanges && { from: roleLabel(target).roleName, to: next!.name, fromRole: target.role, toRole: next!.role }),
         },
         ip,
       });
@@ -184,6 +223,7 @@ export class StaffService {
         }
         await this.assertAnotherOwner(tx, user.tenantId, id);
       }
+      this.roles.assertNoEscalation(user, permissionsFor(target.role, target.customRole?.permissions));
       // Audit rows keep the actor's id and name snapshot, so hard delete is
       // safe; refresh tokens cascade.
       await tx.user.delete({ where: { id } });

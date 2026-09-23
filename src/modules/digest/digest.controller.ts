@@ -2,7 +2,7 @@ import { Body, Controller, Get, HttpCode, Post, Put, Query } from '@nestjs/commo
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ArrayMaxSize, IsArray, IsBoolean, IsOptional, IsString, Matches } from 'class-validator';
 import type { AuthUser } from '../../common/auth-types.js';
-import { ClientIp, CurrentUser, Roles } from '../../common/decorators/index.js';
+import { ClientIp, CurrentUser, RequirePermission } from '../../common/decorators/index.js';
 import { PaginationQueryDto } from '../../common/utils/pagination.dto.js';
 import { RequireFeature } from '../entitlements/entitlements.decorators.js';
 import { DigestService } from './digest.service.js';
@@ -24,32 +24,32 @@ export class DigestController {
   constructor(private readonly digests: DigestService) {}
 
   @Get()
-  @Roles('OWNER', 'MANAGER', 'ACCOUNTANT')
+  @RequirePermission('reports.view')
   list(@CurrentUser() user: AuthUser, @Query() q: PaginationQueryDto) {
     return this.digests.list(user, q.page, q.pageSize);
   }
 
   @Get('settings')
-  @Roles('OWNER', 'MANAGER', 'ACCOUNTANT')
+  @RequirePermission('reports.view')
   settings(@CurrentUser() user: AuthUser) {
     return this.digests.getSettings(user);
   }
 
   @Put('settings')
-  @Roles('OWNER', 'MANAGER')
+  @RequirePermission('settings.manage')
   putSettings(@CurrentUser() user: AuthUser, @Body() dto: DigestSettingsDto, @ClientIp() ip?: string) {
     return this.digests.putSettings(user, dto, ip);
   }
 
   @Post('preview')
   @HttpCode(200)
-  @Roles('OWNER', 'MANAGER', 'ACCOUNTANT')
+  @RequirePermission('reports.view')
   preview(@CurrentUser() user: AuthUser, @Body() dto: DigestDateDto) {
     return this.digests.preview(user, dto.businessDate);
   }
 
   @Post('send')
-  @Roles('OWNER', 'MANAGER')
+  @RequirePermission('settings.manage')
   send(@CurrentUser() user: AuthUser, @Body() dto: DigestDateDto) {
     return this.digests.sendNow(user, dto.businessDate);
   }

@@ -9,13 +9,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { AppRequest, AuthUser } from '../../common/auth-types.js';
-import {
-  AllowWhenReadOnly,
-  ClientIp,
-  CurrentUser,
-  Public,
-  Roles,
-} from '../../common/decorators/index.js';
+import { AllowWhenReadOnly, ClientIp, CurrentUser, Public, RequirePermission } from '../../common/decorators/index.js';
 import { CheckoutDto, ConfirmDto } from './billing.dto.js';
 import { BillingService } from './billing.service.js';
 import { PaystackWebhookService } from './paystack-webhook.service.js';
@@ -35,7 +29,7 @@ export class BillingController {
   }
 
   @Get('invoices')
-  @Roles('OWNER', 'MANAGER', 'ACCOUNTANT')
+  @RequirePermission('billing.manage')
   invoices(@CurrentUser() user: AuthUser) {
     return this.billing.invoices(user);
   }
@@ -43,7 +37,7 @@ export class BillingController {
   @Post('checkout')
   @HttpCode(200)
   @AllowWhenReadOnly()
-  @Roles('OWNER', 'MANAGER', 'ACCOUNTANT')
+  @RequirePermission('billing.manage')
   @ApiOperation({
     summary: 'Start a payment for a plan; returns the URL to send the user to',
   })
@@ -58,7 +52,7 @@ export class BillingController {
   @Post('dev/confirm')
   @HttpCode(200)
   @AllowWhenReadOnly()
-  @Roles('OWNER', 'MANAGER', 'ACCOUNTANT')
+  @RequirePermission('billing.manage')
   @ApiOperation({
     summary: 'Development only: complete a mock checkout (404 in production)',
   })

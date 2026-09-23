@@ -1,4 +1,5 @@
 import { HttpStatus, Inject, Injectable } from '@nestjs/common';
+import { assertCan } from '../../common/permissions/can.js';
 import { randomUUID } from 'node:crypto';
 import type { Guest, Prisma } from '../../generated/prisma/client.js';
 import type { AuthUser } from '../../common/auth-types.js';
@@ -10,7 +11,7 @@ import { normalisePhone } from '../../common/utils/phone.js';
 import { AppConfigService } from '../../config/app-config.service.js';
 import { DbService, type Tx } from '../../prisma/db.service.js';
 import { AuditService, userActor } from '../audit/audit.service.js';
-import { appError, Err, isManager, paginate } from '../ops/ops.helpers.js';
+import { appError, Err, paginate } from '../ops/ops.helpers.js';
 import { OBJECT_STORAGE, type ObjectStorage } from '../storage/object-storage.js';
 import type { GuestInputDto, GuestQueryDto, GuestUpdateDto, RegisterQueryDto } from './guests.dto.js';
 
@@ -467,7 +468,7 @@ export class GuestsService {
     if (!isIsoDate(q.from) || !isIsoDate(q.to) || q.to < q.from) throw Err.validation('to', 'Give a valid date range');
     if (diffDays(q.from, q.to) > 92) throw Err.validation('to', 'The range can be at most 92 days');
     const full = q.includeIdNumbers === 'true';
-    if (full && !isManager(user.role)) throw AppException.forbidden('Only a manager can export full ID numbers');
+    if (full) assertCan(user, 'guests.export', 'Only staff with the guests.export permission can export full ID numbers');
     return this.db.tenant(user.tenantId, async (tx) => {
       const rows = await tx.reservation.findMany({
         where: {
@@ -535,7 +536,7 @@ export class GuestsService {
 }
 
 /** Minimal magic-number check so a renamed file cannot pose as an image. */
-function sniff(buf: Buffer, mime: string): boolean {
+export function sniff(buf: Buffer, mime: string): boolean {
   if (buf.length < 4) return false;
   switch (mime) {
     case 'image/jpeg':

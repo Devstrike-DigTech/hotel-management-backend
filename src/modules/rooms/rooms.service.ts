@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable } from '@nestjs/common';
+import { can, forbidden } from '../../common/permissions/can.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import type { AuthUser } from '../../common/auth-types.js';
 import { AppException } from '../../common/errors/app-exception.js';
@@ -236,13 +237,15 @@ export class RoomsService {
         where: { id, tenantId: user.tenantId },
       });
       if (!existing) throw AppException.notFound('Room');
-      if (
-        user.role === 'HOUSEKEEPING' &&
-        !(existing.status === 'VACANT_DIRTY' && dto.status === 'VACANT_CLEAN')
-      ) {
-        throw AppException.forbidden(
-          'Housekeeping can only mark a dirty room as clean',
-        );
+      if (!can(user, 'rooms.status')) {
+        // Housekeeping staff (housekeeping.work) may only turn a dirty room clean.
+        if (!(existing.status === 'VACANT_DIRTY' && dto.status === 'VACANT_CLEAN')) {
+          throw forbidden('rooms.status', 'Housekeeping can only mark a dirty room as clean');
+        }
+        const property = await tx.property.findFirst({ where: { id: existing.propertyId }, select: { requireInspection: true } });
+        if (property?.requireInspection && !can(user, 'housekeeping.inspect')) {
+          throw new AppException(HttpStatus.CONFLICT, 'INSPECTION_REQUIRED', 'A supervisor must inspect the room before it is marked clean', { roomId: existing.id });
+        }
       }
       const room = await tx.room.update({
         where: { id },

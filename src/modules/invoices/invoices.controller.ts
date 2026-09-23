@@ -1,7 +1,7 @@
 import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { AuthUser } from '../../common/auth-types.js';
-import { ClientIp, CurrentUser, Public, Roles } from '../../common/decorators/index.js';
+import { ClientIp, CurrentUser, Public, RequirePermission } from '../../common/decorators/index.js';
 import { RequireFeature } from '../entitlements/entitlements.decorators.js';
 import { InvoiceQueryDto, ReceiptQueryDto, ShareDto } from '../folios/folios.dto.js';
 import { DocumentsService } from './documents.service.js';
@@ -9,7 +9,7 @@ import { DocumentsService } from './documents.service.js';
 @ApiTags('Invoices')
 @ApiBearerAuth()
 @RequireFeature('invoicing')
-@Roles('OWNER', 'MANAGER', 'FRONT_DESK', 'ACCOUNTANT')
+@RequirePermission('folio.view')
 @Controller()
 export class InvoicesController {
   constructor(private readonly docs: DocumentsService) {}

@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import * as argon2 from 'argon2';
 import { IsString, Matches, MaxLength } from 'class-validator';
 import type { AuthUser } from '../../common/auth-types.js';
-import { AllowWhenReadOnly, ClientIp, CurrentUser, Roles } from '../../common/decorators/index.js';
+import { AllowWhenReadOnly, ClientIp, CurrentUser, RequirePermission } from '../../common/decorators/index.js';
 import { AppException, ErrorCode } from '../../common/errors/app-exception.js';
 import { DbService } from '../../prisma/db.service.js';
 import { AuditService, userActor } from '../audit/audit.service.js';
@@ -16,7 +16,7 @@ export class SetPinDto {
 
 @ApiTags('Me')
 @ApiBearerAuth()
-@Roles('OWNER', 'MANAGER')
+@RequirePermission('folio.approve')
 @Controller('me/approval-pin')
 export class ApprovalPinController {
   constructor(

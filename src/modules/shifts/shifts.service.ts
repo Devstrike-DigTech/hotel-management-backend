@@ -1,4 +1,5 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
+import { can } from '../../common/permissions/can.js';
 import type { CashierShift, Prisma } from '../../generated/prisma/client.js';
 import type { AuthUser } from '../../common/auth-types.js';
 import { AppException } from '../../common/errors/app-exception.js';
@@ -7,7 +8,7 @@ import { DbService, type Tx } from '../../prisma/db.service.js';
 import { AuditService, userActor } from '../audit/audit.service.js';
 import { GuardService } from '../guard/guard.service.js';
 import { shiftVarianceSeverity } from '../guard/guard.logic.js';
-import { appError, Err, isManager, k, kOrNull, paginate, isUniqueViolation } from '../ops/ops.helpers.js';
+import { appError, Err, k, kOrNull, paginate, isUniqueViolation } from '../ops/ops.helpers.js';
 import { expectedTotals, variance, type ShiftMovement } from './shift.logic.js';
 import type { CloseShiftDto, OpenShiftDto, ShiftQueryDto } from './shifts.dto.js';
 
@@ -37,7 +38,7 @@ export class ShiftsService {
 
   private canSeeExpected(viewer: AuthUser, s: CashierShift): boolean {
     if (s.status !== 'OPEN') return true;
-    return viewer.role === 'OWNER' || viewer.role === 'MANAGER' || viewer.role === 'ACCOUNTANT';
+    return can(viewer, 'shifts.view_all');
   }
 
   async view(tx: Tx, viewer: AuthUser | null, s: CashierShift, withPayments: boolean) {
@@ -183,7 +184,7 @@ export class ShiftsService {
     return this.db.tenant(user.tenantId, async (tx) => {
       const s = await tx.cashierShift.findFirst({ where: { id, tenantId: user.tenantId } });
       if (!s) throw AppException.notFound('Shift');
-      if (s.userId !== user.userId && !isManager(user.role)) throw AppException.forbidden('You can only close your own shift');
+      if (s.userId !== user.userId && !can(user, 'shifts.approve')) throw AppException.forbidden('You can only close your own shift');
       if (s.status !== 'OPEN') throw Err.invalidState(s.status, ['OPEN'], 'This shift');
       // Lock the shift row so no payment slips in between computing and closing.
       await tx.$executeRaw`SELECT id FROM cashier_shifts WHERE id = ${id}::uuid FOR UPDATE`;
@@ -268,7 +269,7 @@ export class ShiftsService {
       const where: Prisma.CashierShiftWhereInput = {
         tenantId: user.tenantId,
         ...(q.status && { status: q.status }),
-        ...(user.role === 'FRONT_DESK' ? { userId: user.userId } : q.userId ? { userId: q.userId } : {}),
+        ...(!can(user, 'shifts.view_all') ? { userId: user.userId } : q.userId ? { userId: q.userId } : {}),
         ...((q.from || q.to) && {
           openedAt: {
             ...(q.from && { gte: lagosStartOfDay(q.from) }),
@@ -288,7 +289,7 @@ export class ShiftsService {
     return this.db.tenant(user.tenantId, async (tx) => {
       const s = await tx.cashierShift.findFirst({ where: { id, tenantId: user.tenantId } });
       if (!s) throw AppException.notFound('Shift');
-      if (user.role === 'FRONT_DESK' && s.userId !== user.userId) throw AppException.notFound('Shift');
+      if (!can(user, 'shifts.view_all') && s.userId !== user.userId) throw AppException.notFound('Shift');
       return this.view(tx, user, s, true);
     });
   }

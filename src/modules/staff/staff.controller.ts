@@ -10,20 +10,20 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { AuthUser } from '../../common/auth-types.js';
-import { ClientIp, CurrentUser, Roles } from '../../common/decorators/index.js';
+import { ClientIp, CurrentUser, RequirePermission } from '../../common/decorators/index.js';
 import { CheckLimit } from '../entitlements/entitlements.decorators.js';
 import { CreateStaffDto, UpdateStaffDto } from './staff.dto.js';
 import { StaffService } from './staff.service.js';
 
 @ApiTags('Staff')
 @ApiBearerAuth()
-@Roles('OWNER', 'MANAGER')
+@RequirePermission('staff.manage')
 @Controller('staff')
 export class StaffController {
   constructor(private readonly svc: StaffService) {}
 
   @Get('approvers')
-  @Roles('OWNER', 'MANAGER', 'FRONT_DESK')
+  @RequirePermission('folio.discount')
   approvers(@CurrentUser() user: AuthUser) {
     return this.svc.approvers(user);
   }

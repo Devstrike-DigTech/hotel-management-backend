@@ -4,7 +4,7 @@ import { IsIn, IsOptional, IsString, Length, Matches, MaxLength } from 'class-va
 import type { GuardFlag, Prisma, Reservation, Room } from '../../generated/prisma/client.js';
 import type { GuardRule, GuardSeverity, GuardStatus } from '../../generated/prisma/enums.js';
 import type { AuthUser } from '../../common/auth-types.js';
-import { ClientIp, CurrentUser, Roles } from '../../common/decorators/index.js';
+import { ClientIp, CurrentUser, RequirePermission } from '../../common/decorators/index.js';
 import { AppException } from '../../common/errors/app-exception.js';
 import { addDays, lagosStartOfDay } from '../../common/time/lagos.js';
 import { PaginationQueryDto } from '../../common/utils/pagination.dto.js';
@@ -60,7 +60,7 @@ const STATUSES: GuardStatus[] = ['OPEN', 'ACKNOWLEDGED', 'RESOLVED', 'DISMISSED'
 @ApiTags('Revenue Guard')
 @ApiBearerAuth()
 @RequireFeature('revenue_guard_basic')
-@Roles('OWNER', 'MANAGER', 'ACCOUNTANT')
+@RequirePermission('guard.view')
 @Controller('guard')
 export class GuardController {
   constructor(
@@ -103,7 +103,7 @@ export class GuardController {
   }
 
   @Patch('flags/:id')
-  @Roles('OWNER', 'MANAGER')
+  @RequirePermission('guard.resolve')
   update(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateFlagDto, @ClientIp() ip?: string) {
     if (dto.status !== 'ACKNOWLEDGED' && !dto.resolution) throw Err.validation('resolution', 'Say how the flag was resolved or why it is dismissed');
     return this.db.tenant(user.tenantId, async (tx) => {
@@ -163,7 +163,7 @@ export class GuardController {
 
   @Post('sweep')
   @HttpCode(200)
-  @Roles('OWNER', 'MANAGER')
+  @RequirePermission('guard.resolve')
   async sweep(@CurrentUser() user: AuthUser) {
     return { created: await this.guard.sweep(user.tenantId) };
   }
