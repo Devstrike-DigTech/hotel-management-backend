@@ -5,6 +5,8 @@ import { AppException, ErrorCode } from '../../common/errors/app-exception.js';
 import { DbService, type Tx } from '../../prisma/db.service.js';
 import { AuditService, type AuditActor } from '../audit/audit.service.js';
 import { isUniqueViolation } from '../auth/auth.service.js';
+import { BookingPaymentsService, runAfter, type After } from '../booking/booking-payments.service.js';
+import { RefundsService } from '../booking/refunds.service.js';
 import { BillingService } from './billing.service.js';
 import { PaystackClient } from './paystack.client.js';
 
@@ -18,10 +20,14 @@ interface PaystackEvent {
     amount?: number;
     currency?: string;
     status?: string;
+    paid_at?: string | null;
+    channel?: string | null;
     subscription_code?: string;
     customer?: { customer_code?: string; email?: string };
     subscription?: { subscription_code?: string };
-    metadata?: { tenantId?: string } | string | null;
+    metadata?: { tenantId?: string; kind?: string } | string | null;
+    transaction_reference?: string;
+    transaction?: { reference?: string };
   };
 }
 
@@ -51,6 +57,8 @@ export class PaystackWebhookService {
     private readonly paystack: PaystackClient,
     private readonly billing: BillingService,
     private readonly audit: AuditService,
+    private readonly bookings: BookingPaymentsService,
+    private readonly refunds: RefundsService,
   ) {}
 
   async handle(
@@ -73,8 +81,9 @@ export class PaystackWebhookService {
     const type = event.event ?? 'unknown';
     const key = eventKey(event, rawBody!);
 
+    const after: After[] = [];
     try {
-      return await this.db.system(async (tx) => {
+      const result = await this.db.system(async (tx) => {
         const ledger = await tx.paymentEvent.create({
           data: {
             provider: 'paystack',
@@ -83,13 +92,16 @@ export class PaystackWebhookService {
             payload: event as unknown as Prisma.InputJsonValue,
           },
         });
-        const tenantId = await this.dispatch(tx, type, event);
+        const tenantId = await this.dispatch(tx, type, event, after);
         await tx.paymentEvent.update({
           where: { id: ledger.id },
           data: { processedAt: new Date(), tenantId },
         });
         return { received: true as const, handled: tenantId !== null };
       });
+      // Notifications, refunds and jobs run only after the state change committed.
+      for (const fn of after) await runAfter(fn, this.logger);
+      return result;
     } catch (err) {
       if (isUniqueViolation(err, 'event_key') || isUniqueViolation(err, 'eventKey')) {
         this.logger.log(`Duplicate Paystack event ${key} ignored`);
@@ -104,11 +116,35 @@ export class PaystackWebhookService {
     tx: Tx,
     type: string,
     event: PaystackEvent,
+    after: After[],
   ): Promise<string | null> {
     const d = event.data ?? {};
+    const meta = typeof d.metadata === 'object' && d.metadata ? d.metadata : null;
+    const isBooking = meta?.kind === 'booking' || (d.reference ?? '').startsWith('BKG_');
     switch (type) {
       case 'charge.success':
+        if (isBooking) {
+          const res = await this.bookings.applyChargeTx(tx, {
+            reference: d.reference ?? '',
+            amountKobo: Number(d.amount ?? 0),
+            currency: d.currency ?? 'NGN',
+            paidAt: d.paid_at ? new Date(d.paid_at) : new Date(),
+            channel: d.channel ?? null,
+            providerTransactionId: d.id !== undefined ? String(d.id) : null,
+            source: 'webhook',
+          });
+          if (!res) return null;
+          after.push(res.after);
+          return res.tenantId;
+        }
         return this.onChargeSuccess(tx, d);
+      case 'charge.failed':
+        return isBooking && d.reference ? this.bookings.onChargeFailedTx(tx, d.reference) : null;
+      case 'refund.processed':
+      case 'refund.pending':
+      case 'refund.processing':
+      case 'refund.failed':
+        return this.refunds.onRefundEventTx(tx, type === 'refund.processing' ? 'refund.pending' : type, d as Record<string, unknown>);
       case 'subscription.create':
         return this.onSubscriptionCreate(tx, d);
       case 'subscription.disable':

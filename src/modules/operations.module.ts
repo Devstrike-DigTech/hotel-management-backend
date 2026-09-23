@@ -86,6 +86,18 @@ import { objectStorageProvider } from './storage/storage.provider.js';
     FrontDeskService,
     OpsJobsService,
   ],
-  exports: [GuardService, FrontDeskService, NightAuditService, DigestService, OpsJobsService, LedgerService, ReservationsService],
+  exports: [
+    GuardService,
+    FrontDeskService,
+    NightAuditService,
+    DigestService,
+    OpsJobsService,
+    LedgerService,
+    ReservationsService,
+    DocumentsService,
+    AvailabilityService,
+    GuestsService,
+    TaxSettingsService,
+  ],
 })
 export class OperationsModule {}

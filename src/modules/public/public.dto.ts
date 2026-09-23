@@ -1,7 +1,9 @@
 import { Transform, Type } from 'class-transformer';
 import {
+  IsIn,
   IsInt,
   IsOptional,
+  Matches,
   IsString,
   Max,
   MaxLength,
@@ -42,6 +44,18 @@ export class HotelSearchQueryDto {
   @IsInt()
   @Min(0)
   maxPriceKobo?: number;
+
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'checkIn must be YYYY-MM-DD' })
+  checkIn?: string;
+
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'checkOut must be YYYY-MM-DD' })
+  checkOut?: string;
+
+  @IsOptional()
+  @IsIn(['recommended', 'price_asc', 'price_desc', 'rating'])
+  sort?: 'recommended' | 'price_asc' | 'price_desc' | 'rating';
 
   @IsOptional()
   @Type(() => Number)

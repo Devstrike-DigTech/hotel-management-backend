@@ -224,6 +224,33 @@ export class LedgerService {
     return { entry, receipt };
   }
 
+  /**
+   * Money returned to a guest through the payment provider (online refunds of
+   * card / transfer / USSD payments). No cashier shift is involved. Allowed on
+   * open folios only, like every posting.
+   */
+  async postOnlineRefund(
+    tx: Tx,
+    tenantId: string,
+    folio: { id: string; status: string },
+    input: { amountKobo: number; reference: string | null; reason: string },
+    actor: Actor,
+  ): Promise<FolioEntry> {
+    this.assertOpen(folio);
+    return this.insert(tx, {
+      tenantId,
+      folioId: folio.id,
+      type: 'REFUND',
+      amountKobo: input.amountKobo,
+      description: 'Refund (online payment)',
+      businessDate: dbDate(lagosDate()),
+      paymentMethod: 'CARD_ONLINE',
+      paymentRef: input.reference,
+      reason: input.reason,
+      createdById: actor.userId,
+    });
+  }
+
   // ---------------------------------------------------------------------------
   // API operations
   // ---------------------------------------------------------------------------

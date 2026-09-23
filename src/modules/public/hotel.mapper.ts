@@ -18,6 +18,51 @@ export interface HotelCard {
   reviewCount: number;
   amenities: string[];
   featured: boolean;
+  onlinePayment: boolean;
+  payAtHotel: boolean;
+  onlineBookingEnabled: boolean;
+  freeCancellationHours: number;
+  searchAvailability: {
+    checkIn: string;
+    checkOut: string;
+    nights: number;
+    availableRoomTypes: number;
+    cheapestRateKobo: number;
+    cheapestTotalKobo: number;
+  } | null;
+}
+
+export interface ReviewSummary {
+  rating: number | null;
+  count: number;
+  subscores: { cleanliness: number | null; service: number | null; location: number | null; value: number | null };
+  distribution: { '1': number; '2': number; '3': number; '4': number; '5': number };
+  byTravellerType: Record<'BUSINESS' | 'COUPLE' | 'FAMILY' | 'SOLO' | 'FRIENDS', number>;
+}
+
+/** Review aggregates kept on the property row (see ReviewsService.recompute). */
+export function reviewSummaryOf(p: Property): ReviewSummary {
+  const d = (p.ratingDistribution ?? {}) as { stars?: Record<string, number>; byTravellerType?: Record<string, number> };
+  const stars = d.stars ?? {};
+  const tt = d.byTravellerType ?? {};
+  return {
+    rating: p.reviewCount > 0 ? p.rating : null,
+    count: p.reviewCount,
+    subscores: {
+      cleanliness: p.ratingCleanliness,
+      service: p.ratingService,
+      location: p.ratingLocation,
+      value: p.ratingValue,
+    },
+    distribution: { '1': stars['1'] ?? 0, '2': stars['2'] ?? 0, '3': stars['3'] ?? 0, '4': stars['4'] ?? 0, '5': stars['5'] ?? 0 },
+    byTravellerType: {
+      BUSINESS: tt.BUSINESS ?? 0,
+      COUPLE: tt.COUPLE ?? 0,
+      FAMILY: tt.FAMILY ?? 0,
+      SOLO: tt.SOLO ?? 0,
+      FRIENDS: tt.FRIENDS ?? 0,
+    },
+  };
 }
 
 export interface RoomTypePublic {
@@ -45,6 +90,18 @@ export interface HotelDetail extends HotelCard {
   roomTypes: RoomTypePublic[];
   policies: string[];
   branding: { accentColor: string | null; logoUrl: string | null };
+  mapUrl: string;
+  booking: {
+    onlineBookingEnabled: boolean;
+    payOnlineAvailable: boolean;
+    payAtHotelAvailable: boolean;
+    holdMinutes: number;
+    marketplaceListed: boolean;
+    dayUseAvailable: boolean;
+    cancellationPolicy: { freeCancellationHours: number; lateCancellationFeePct: number; noShowFeePct: number; summary: string };
+    taxes: { code: 'VAT' | 'CONSUMPTION' | 'SERVICE_CHARGE'; label: string; rateBps: number; inclusive: boolean }[];
+  };
+  reviewSummary: ReviewSummary;
 }
 
 /** Coerces the JSON `images` column into `{ url, alt }[]`. */
@@ -63,6 +120,7 @@ export function toImages(raw: unknown): ImageRef[] {
 export function toHotelCard(
   p: Property,
   roomTypePrices: readonly number[],
+  searchAvailability: HotelCard['searchAvailability'] = null,
 ): HotelCard {
   return {
     slug: p.slug,
@@ -73,10 +131,15 @@ export function toHotelCard(
     area: p.area,
     coverImageUrl: p.coverImageUrl,
     startingRateKobo: roomTypePrices.length ? Math.min(...roomTypePrices) : null,
-    rating: p.rating,
+    rating: p.reviewCount > 0 ? p.rating : null,
     reviewCount: p.reviewCount,
     amenities: p.amenities,
     featured: p.featured,
+    onlinePayment: p.payoutReady,
+    payAtHotel: p.allowPayAtHotel,
+    onlineBookingEnabled: p.onlineBookingEnabled,
+    freeCancellationHours: p.freeCancellationHours,
+    searchAvailability,
   };
 }
 

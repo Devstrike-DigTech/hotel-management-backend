@@ -1,6 +1,7 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from '../../common/decorators/index.js';
+import { RateLimit } from '../infra/rate-limit.js';
 import { HotelSearchQueryDto, ResolveHostQueryDto } from './public.dto.js';
 import { PublicService } from './public.service.js';
 
@@ -35,6 +36,7 @@ export class PublicController {
   }
 
   @Get('hotels')
+  @RateLimit({ name: 'search', limit: 120, windowSec: 60 })
   @ApiOperation({ summary: 'Search marketplace hotels' })
   hotels(@Query() q: HotelSearchQueryDto) {
     return this.svc.hotels(q);

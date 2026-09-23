@@ -6,6 +6,7 @@ export const DUNNING_CRON = '0 2 * * *';
 export const DUNNING_TZ = 'Africa/Lagos';
 
 export const OPERATIONS_QUEUE = 'operations';
+export const GUEST_QUEUE = 'guest';
 export const OPS_JOBS = {
   nightAudit: { name: 'night-audit', scheduler: 'night-audit-daily', cron: '0 2 * * *' },
   ownerDigest: { name: 'owner-digest', scheduler: 'owner-digest-daily', cron: '0 23 * * *' },

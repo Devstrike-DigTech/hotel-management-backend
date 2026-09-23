@@ -5,7 +5,8 @@ import { AppConfigService } from '../../config/app-config.service.js';
 import { BillingModule } from '../billing/billing.module.js';
 import { BillingProcessor } from './dunning.processor.js';
 import { DunningScheduler } from './dunning.scheduler.js';
-import { BILLING_QUEUE, OPERATIONS_QUEUE, redisConnection } from './jobs.constants.js';
+import { GuestProcessor, GuestScheduler } from './guest.processor.js';
+import { BILLING_QUEUE, GUEST_QUEUE, OPERATIONS_QUEUE, redisConnection } from './jobs.constants.js';
 import { OperationsProcessor, OperationsScheduler } from './operations.processor.js';
 
 /**
@@ -25,8 +26,9 @@ import { OperationsProcessor, OperationsScheduler } from './operations.processor
     }),
     BullModule.registerQueue({ name: BILLING_QUEUE }),
     BullModule.registerQueue({ name: OPERATIONS_QUEUE }),
+    BullModule.registerQueue({ name: GUEST_QUEUE }),
     BillingModule,
   ],
-  providers: [BillingProcessor, DunningScheduler, OperationsProcessor, OperationsScheduler],
+  providers: [BillingProcessor, DunningScheduler, OperationsProcessor, OperationsScheduler, GuestProcessor, GuestScheduler],
 })
 export class JobsModule {}

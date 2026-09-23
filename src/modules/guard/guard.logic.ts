@@ -21,6 +21,7 @@ export const RULES: RuleInfo[] = [
   { rule: 'DAY_USE_OVERSTAY', tier: 'full', defaultSeverity: 'MEDIUM', title: 'Day-use overstay', description: 'A day-use guest is still in the room 30 minutes after the booked end time.' },
   { rule: 'LATE_REGISTRATION', tier: 'full', defaultSeverity: 'LOW', title: 'Late registration', description: 'A guest was checked in without the register completed within one hour.' },
   { rule: 'REPEATED_VOIDS_BY_USER', tier: 'full', defaultSeverity: 'HIGH', title: 'Repeated voids', description: 'One staff member posted three or more voids within 24 hours.' },
+  { rule: 'PAYMENT_ORPHANED', tier: 'basic', defaultSeverity: 'HIGH', title: 'Orphaned online payment', description: 'A guest paid online but the payment could not be applied to a booking (late after the hold, amount mismatch or duplicate); it is refunded automatically.' },
   { rule: 'ROOM_STATUS_FLIP', tier: 'full', defaultSeverity: 'HIGH', title: 'Occupied room flipped to dirty', description: 'An occupied room was set to dirty by hand, without a check-out.' },
 ];
 

@@ -9,7 +9,13 @@ import {
   type PublicFeature,
   type PublicPlan,
 } from '../plans/plan.mapper.js';
+import { checkStayDates, HOLD_MINUTES, mapUrl, policyView } from '../booking/booking.logic.js';
+import { PublicBookingService } from '../booking/public-booking.service.js';
+import { EntitlementsService } from '../entitlements/entitlements.service.js';
+import { componentsFrom } from '../folios/tax.logic.js';
+import { Err } from '../ops/ops.helpers.js';
 import {
+  reviewSummaryOf,
   toHotelCard,
   toImages,
   toRoomTypePublic,
@@ -43,6 +49,8 @@ export class PublicService {
   constructor(
     private readonly db: DbService,
     private readonly config: AppConfigService,
+    private readonly booking: PublicBookingService,
+    private readonly entitlements: EntitlementsService,
   ) {}
 
   app() {
@@ -101,6 +109,12 @@ export class PublicService {
   }> {
     const page = q.page ?? 1;
     const pageSize = q.pageSize ?? 12;
+    const dated = Boolean(q.checkIn || q.checkOut);
+    if (dated) {
+      if (!q.checkIn || !q.checkOut) throw Err.validation('checkIn', 'Give both checkIn and checkOut');
+      const problem = checkStayDates(q.checkIn, q.checkOut);
+      if (problem) throw Err.validation('checkIn', problem);
+    }
     const and: Prisma.PropertyWhereInput[] = [this.marketplaceWhere()];
 
     if (q.city) {
@@ -118,11 +132,7 @@ export class PublicService {
         ],
       });
     }
-    if (
-      q.guests !== undefined ||
-      q.minPriceKobo !== undefined ||
-      q.maxPriceKobo !== undefined
-    ) {
+    if (!dated && (q.guests !== undefined || q.minPriceKobo !== undefined || q.maxPriceKobo !== undefined)) {
       and.push({
         roomTypes: {
           some: {
@@ -137,30 +147,42 @@ export class PublicService {
     }
 
     const where: Prisma.PropertyWhereInput = { AND: and };
-    const { rows, total } = await this.db.public(async (tx) => {
+    const { rows, avail } = await this.db.public(async (tx) => {
       const rows = await tx.property.findMany({
         where,
-        include: { roomTypes: { select: { basePriceKobo: true } } },
-        orderBy: [
-          { featured: 'desc' },
-          { rating: { sort: 'desc', nulls: 'last' } },
-          { name: 'asc' },
-        ],
-        skip: (page - 1) * pageSize,
-        take: pageSize,
+        include: {
+          roomTypes: { include: { rooms: { select: { status: true } } } },
+          taxSetting: true,
+        },
       });
-      const total = await tx.property.count({ where });
-      return { rows, total };
+      const avail = dated ? await this.booking.searchAvailability(tx, rows, q.checkIn!, q.checkOut!, q.guests) : null;
+      return { rows, avail };
     });
 
+    const inRange = (price: number) =>
+      (q.minPriceKobo === undefined || price >= q.minPriceKobo) && (q.maxPriceKobo === undefined || price <= q.maxPriceKobo);
+    const cards: HotelCard[] = [];
+    for (const p of rows) {
+      if (avail) {
+        const a = avail.get(p.id);
+        if (!a || !inRange(a.cheapestRateKobo)) continue;
+        cards.push(toHotelCard(p, [a.cheapestRateKobo], { checkIn: q.checkIn!, checkOut: q.checkOut!, ...a }));
+      } else {
+        cards.push(toHotelCard(p, p.roomTypes.map((r) => r.basePriceKobo)));
+      }
+    }
+    const byName = (a: HotelCard, b: HotelCard) => a.name.localeCompare(b.name);
+    const price = (c: HotelCard) => c.startingRateKobo ?? Number.MAX_SAFE_INTEGER;
+    const sorters: Record<string, (a: HotelCard, b: HotelCard) => number> = {
+      recommended: (a, b) => Number(b.featured) - Number(a.featured) || (b.rating ?? -1) - (a.rating ?? -1) || byName(a, b),
+      price_asc: (a, b) => price(a) - price(b) || byName(a, b),
+      price_desc: (a, b) => price(b) - price(a) || byName(a, b),
+      rating: (a, b) => (b.rating ?? -1) - (a.rating ?? -1) || b.reviewCount - a.reviewCount || byName(a, b),
+    };
+    cards.sort(sorters[q.sort ?? 'recommended']);
     return {
-      items: rows.map((p) =>
-        toHotelCard(
-          p,
-          p.roomTypes.map((r) => r.basePriceKobo),
-        ),
-      ),
-      total,
+      items: cards.slice((page - 1) * pageSize, page * pageSize),
+      total: cards.length,
       page,
       pageSize,
     };
@@ -188,10 +210,13 @@ export class PublicService {
               },
             },
           },
+          taxSetting: true,
         },
       }),
     );
     if (!p) throw AppException.notFound('Hotel');
+    const ent = await this.entitlements.getEntitlements(p.tenantId).catch(() => null);
+    const dayUse = !!ent?.features.includes('hourly_bookings') && p.roomTypes.some((r) => r.hourlyPriceKobo !== null);
 
     return {
       ...toHotelCard(
@@ -208,6 +233,20 @@ export class PublicService {
       roomTypes: p.roomTypes.map((rt) => toRoomTypePublic(rt, rt._count.rooms)),
       policies: p.policies,
       branding: { accentColor: p.accentColor, logoUrl: p.logoUrl },
+      mapUrl: mapUrl(p),
+      booking: {
+        onlineBookingEnabled: p.onlineBookingEnabled,
+        payOnlineAvailable: p.onlineBookingEnabled && p.payoutReady,
+        payAtHotelAvailable: p.onlineBookingEnabled && p.allowPayAtHotel,
+        holdMinutes: HOLD_MINUTES,
+        marketplaceListed: p.listedOnMarketplace,
+        dayUseAvailable: dayUse,
+        cancellationPolicy: policyView(p),
+        taxes: p.taxSetting
+          ? componentsFrom(p.taxSetting).map((c) => ({ code: c.code, label: c.label, rateBps: c.rateBps, inclusive: c.inclusive }))
+          : [{ code: 'VAT' as const, label: 'VAT', rateBps: 750, inclusive: false }],
+      },
+      reviewSummary: reviewSummaryOf(p),
     };
   }
 
