@@ -11,6 +11,7 @@ import * as argon2 from 'argon2';
 import { PrismaClient, type Prisma } from '../src/generated/prisma/client.js';
 import { FEATURES, PLANS } from './seed-data/catalogue.js';
 import { ALL_HOTELS, DEMO_HOTEL, type HotelSeed } from './seed-data/hotels.js';
+import { DEMO_GUEST, seedGuestSide } from './seed-data/guest-side.js';
 import { DEMO_PINS, seedOperations } from './seed-data/operations.js';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -323,6 +324,10 @@ async function main() {
   const ops = await seedOperations(prisma, DEMO_HOTEL.slug, process.env.APP_NAME ?? 'HotelOS');
   console.log('  %s', Object.entries(ops).map(([k, v]) => `${k}=${v}`).join(' '));
   console.log('  approval PINs: %s', Object.entries(DEMO_PINS).map(([e, p]) => `${e} ${p}`).join(', '));
+  console.log('Seeding guest side (payouts, policies, reviews, online bookings)...');
+  const guest = await seedGuestSide(prisma, DEMO_HOTEL.slug, process.env.APP_NAME ?? 'HotelOS');
+  console.log('  %s', Object.entries(guest).map(([k, v]) => `${k}=${v}`).join(' '));
+  console.log('  demo guest account: %s (%s); sign in with a phone OTP', DEMO_GUEST.phone, DEMO_GUEST.fullName);
   console.log('Done. Hotel logins use password "%s"; demo owner: %s', HOTEL_PASSWORD, DEMO_HOTEL.owner.email);
 }
 

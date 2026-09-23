@@ -158,6 +158,8 @@ async function resetTenant(prisma: PrismaClient, tenantId: string) {
     // Seed-only: replica mode skips the append-only triggers for this transaction.
     await tx.$executeRawUnsafe(`SET LOCAL session_replication_role = replica`);
     for (const table of [
+      // M3 rows hang off reservations; the guest-side seed rebuilds them after this.
+      'notification_logs', 'reviews', 'commission_entries', 'booking_refunds', 'booking_payments',
       'idempotency_keys', 'guard_flags', 'owner_digests', 'daily_stats', 'night_audit_runs',
       'housekeeping_tasks', 'receipts', 'guest_invoices', 'folio_entries', 'folios', 'cashier_shifts',
       'reservations', 'guests', 'document_counters', 'tax_settings', 'digest_settings',
