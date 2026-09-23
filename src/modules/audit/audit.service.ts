@@ -2,7 +2,8 @@ import { Injectable } from '@nestjs/common';
 import type { AuditLog, Prisma } from '../../generated/prisma/client.js';
 import type { AuthUser, PlatformPrincipal } from '../../common/auth-types.js';
 import { DbService, type Tx } from '../../prisma/db.service.js';
-import { addDays, diffDays, isIsoDate, lagosStartOfDay } from '../../common/time/lagos.js';
+import { addDays, diffDays, isIsoDate, lagosDate, lagosStartOfDay } from '../../common/time/lagos.js';
+import { markAriDirty } from '../channels/ari-signal.js';
 import { Err } from '../ops/ops.helpers.js';
 import { currentPropertyId } from '../../common/property-scope.js';
 
@@ -47,6 +48,9 @@ export const platformActor = (p: PlatformPrincipal): AuditActor => ({
   id: p.platformUserId,
   name: p.fullName,
 });
+
+/** Audit entity types whose changes can move availability, rates or restrictions. */
+const ARI_ENTITIES = new Set(['reservation', 'room_block', 'rate_override', 'rate_rule', 'rate_restriction', 'rate_plan', 'room', 'room_type', 'price_change']);
 
 export const SYSTEM_ACTOR: AuditActor = { kind: 'system', name: 'System' };
 
@@ -96,6 +100,12 @@ export class AuditService {
 
   async record(tx: Tx, entry: AuditEntry): Promise<void> {
     const a = entry.actor;
+    // M5: anything that changes availability, rates or restrictions queues a
+    // (debounced, diffed) push to the property's channel manager connection.
+    const propertyId = entry.propertyId ?? (entry.tenantId ? currentPropertyId(entry.tenantId) : null);
+    if (entry.tenantId && propertyId && ARI_ENTITIES.has(entry.entityType)) {
+      await markAriDirty(tx, entry.tenantId, propertyId, lagosDate(), addDays(lagosDate(), 365));
+    }
     await tx.auditLog.create({
       data: {
         tenantId: entry.tenantId,

@@ -4,6 +4,7 @@ import type { Job, Queue } from 'bullmq';
 import { DigestService } from '../digest/digest.service.js';
 import { NightAuditService } from '../night-audit/night-audit.service.js';
 import { OpsJobsService } from '../ops/ops-jobs.service.js';
+import { ProJobsService } from './pro-jobs.service.js';
 import { DUNNING_TZ, OPERATIONS_QUEUE, OPS_JOBS } from './jobs.constants.js';
 
 @Processor(OPERATIONS_QUEUE)
@@ -14,6 +15,7 @@ export class OperationsProcessor extends WorkerHost {
     private readonly nightAudit: NightAuditService,
     private readonly digest: DigestService,
     private readonly ops: OpsJobsService,
+    private readonly pro: ProJobsService,
   ) {
     super();
   }
@@ -40,6 +42,13 @@ export class OperationsProcessor extends WorkerHost {
         return this.ops.cityLedgerRemindersAll();
       case OPS_JOBS.guardAlerts.name:
         return this.ops.guardAlertsDue();
+      case OPS_JOBS.channelAriFlush.name:
+      case OPS_JOBS.channelAriSweep.name:
+      case OPS_JOBS.icalImport.name:
+      case OPS_JOBS.pricingNightly.name:
+      case OPS_JOBS.loyaltyExpiry.name:
+      case OPS_JOBS.domainChecks.name:
+        return this.pro.run(job.name);
       default:
         this.logger.warn(`Unknown job ${job.name}`);
         return undefined;
@@ -62,6 +71,6 @@ export class OperationsScheduler implements OnApplicationBootstrap {
         { name: j.name, opts: { removeOnComplete: 50, removeOnFail: 100, attempts: 2, backoff: { type: 'exponential', delay: 60_000 } } },
       );
     }
-    this.logger.log('Scheduled night audit 02:00, owner digest 23:00, guard sweep hourly, stayover 07:00, maintenance 06:00, room blocks hourly, guard alerts every minute, city ledger statements (1st) and reminders 09:00 (Africa/Lagos)');
+    this.logger.log('Scheduled night audit 02:00, owner digest 23:00, guard sweep hourly, stayover 07:00, maintenance 06:00, room blocks hourly, guard alerts every minute, city ledger statements (1st) and reminders 09:00; M5: channel pushes every minute (debounced) and sweep / iCal import every 15 min, dynamic pricing 03:00, loyalty expiry 04:00, domain checks every 10 min (Africa/Lagos)');
   }
 }

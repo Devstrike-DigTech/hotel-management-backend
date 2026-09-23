@@ -8,6 +8,7 @@ import { DunningScheduler } from './dunning.scheduler.js';
 import { GuestProcessor, GuestScheduler } from './guest.processor.js';
 import { BILLING_QUEUE, GUEST_QUEUE, OPERATIONS_QUEUE, redisConnection } from './jobs.constants.js';
 import { OperationsProcessor, OperationsScheduler } from './operations.processor.js';
+import { ProJobsService } from './pro-jobs.service.js';
 
 /**
  * BullMQ wiring. Imported only when JOBS_ENABLED is true (see AppModule), so
@@ -29,6 +30,6 @@ import { OperationsProcessor, OperationsScheduler } from './operations.processor
     BullModule.registerQueue({ name: GUEST_QUEUE }),
     BillingModule,
   ],
-  providers: [BillingProcessor, DunningScheduler, OperationsProcessor, OperationsScheduler, GuestProcessor, GuestScheduler],
+  providers: [ProJobsService, BillingProcessor, DunningScheduler, OperationsProcessor, OperationsScheduler, GuestProcessor, GuestScheduler],
 })
 export class JobsModule {}

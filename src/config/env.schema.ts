@@ -88,6 +88,19 @@ export const envSchema = z.object({
     .transform((v) => (v && v.trim().length > 0 ? v.trim() : undefined)),
   PAYSTACK_BASE_URL: z.url().default('https://api.paystack.co'),
 
+  // M5: channel manager (Channex). Empty key = in-process mock (not allowed in production).
+  CHANNEX_API_KEY: z.string().optional().transform((v) => v || undefined),
+  CHANNEX_BASE_URL: z.url().default('https://staging.channex.io/api/v1'),
+  /** Verifies X-Channex-Signature on POST /webhooks/channex; empty = every delivery rejected. */
+  CHANNEX_WEBHOOK_SECRET: z.string().optional().transform((v) => v || undefined),
+  /** Minutes between iCal imports (default 15). */
+  ICAL_POLL_MINUTES: z.coerce.number().int().min(5).max(1440).default(15),
+  // M5: custom domains.
+  /** DNS lookups for custom domains: system (node:dns) or mock (in-memory; dev and tests). */
+  DNS_PROVIDER: z.enum(['system', 'mock']).optional(),
+  /** CNAME target hotels point their domain at (default sites.<APP_DOMAIN>). */
+  CUSTOM_DOMAIN_TARGET: z.string().optional().transform((v) => v || undefined),
+
   ADMIN_URL: z.url(),
   WEB_URL: z.url(),
   CORS_ORIGINS: z

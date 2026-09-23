@@ -18,6 +18,13 @@ export const OPS_JOBS = {
   cityLedgerStatements: { name: 'city-ledger-statements', scheduler: 'city-ledger-statements-monthly', cron: '0 6 1 * *' },
   cityLedgerReminders: { name: 'city-ledger-reminders', scheduler: 'city-ledger-reminders-daily', cron: '0 9 * * *' },
   guardAlerts: { name: 'guard-alerts', scheduler: 'guard-alerts-minutely', cron: '* * * * *' },
+  // M5 (Pro)
+  channelAriFlush: { name: 'channel-ari-flush', scheduler: 'channel-ari-flush-minutely', cron: '* * * * *' },
+  channelAriSweep: { name: 'channel-ari-sweep', scheduler: 'channel-ari-sweep-15m', cron: '*/15 * * * *' },
+  icalImport: { name: 'ical-import', scheduler: 'ical-import-15m', cron: '*/15 * * * *' },
+  pricingNightly: { name: 'pricing-nightly', scheduler: 'pricing-nightly', cron: '0 3 * * *' },
+  loyaltyExpiry: { name: 'loyalty-expiry', scheduler: 'loyalty-expiry-daily', cron: '0 4 * * *' },
+  domainChecks: { name: 'domain-checks', scheduler: 'domain-checks-10m', cron: '*/10 * * * *' },
 } as const;
 
 /** ioredis connection options from a redis:// URL. */
