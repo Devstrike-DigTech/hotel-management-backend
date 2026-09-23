@@ -7,6 +7,7 @@ function e(type: FolioEntry['type'], amount: number, extra: Partial<FolioEntry> 
   return {
     id: `e${seq}`,
     tenantId: 't',
+    propertyId: 'p',
     folioId: 'f',
     type,
     amountKobo: BigInt(amount),

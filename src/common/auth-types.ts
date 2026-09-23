@@ -46,6 +46,13 @@ export interface AuthUser {
    */
   permissions?: ReadonlySet<string>;
   customRoleId?: string | null;
+  /**
+   * M5: the property this request runs in (X-Property-Id or the user's
+   * default) and every property the user may access, set by PermissionGuard.
+   */
+  propertyId?: string;
+  propertyIds?: string[];
+  allProperties?: boolean;
 }
 
 export interface PlatformPrincipal {

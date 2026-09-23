@@ -4,7 +4,7 @@ import type { GuardRule, GuardSeverity } from '../../generated/prisma/enums.js';
 import { DbService, type Tx } from '../../prisma/db.service.js';
 import { humanDateTime, lagosDate } from '../../common/time/lagos.js';
 import { EntitlementsService } from '../entitlements/entitlements.service.js';
-import { k } from '../ops/ops.helpers.js';
+import { k, primaryProperty } from '../ops/ops.helpers.js';
 import { HousekeepingService } from '../housekeeping/housekeeping.service.js';
 import { AlertsService } from '../whatsapp/alerts.service.js';
 import {
@@ -31,6 +31,8 @@ export interface RaiseFlag {
   userName?: string | null;
   evidence?: Record<string, unknown>;
   suggestion?: string | null;
+  /** M5: defaults to the reservation's, room's or shift's property, else the current one. */
+  propertyId?: string | null;
 }
 
 /**
@@ -57,10 +59,12 @@ export class GuardService {
     if (!ruleEnabled(f.rule, features)) return 0;
     if (f.roomId && (f.rule === 'ROOM_STATUS_FLIP' || f.rule === 'OCCUPIED_WITHOUT_STAY')) f = await this.withHousekeeping(tx, tenantId, f);
     const severity = f.severity ?? RULE_INFO.get(f.rule)!.defaultSeverity;
+    const propertyId = await this.flagProperty(tx, tenantId, f);
     const res = await tx.guardFlag.createMany({
       data: [
         {
           tenantId,
+          propertyId,
           rule: f.rule,
           severity,
           title: f.title,
@@ -91,6 +95,24 @@ export class GuardService {
       }
     }
     return res.count;
+  }
+
+  /** The property a flag belongs to: its subject's, else the current property. */
+  private async flagProperty(tx: Tx, tenantId: string, f: RaiseFlag): Promise<string> {
+    if (f.propertyId) return f.propertyId;
+    if (f.reservationId) {
+      const r = await tx.reservation.findFirst({ where: { id: f.reservationId, tenantId }, select: { propertyId: true } });
+      if (r) return r.propertyId;
+    }
+    if (f.roomId) {
+      const r = await tx.room.findFirst({ where: { id: f.roomId, tenantId }, select: { propertyId: true } });
+      if (r) return r.propertyId;
+    }
+    if (f.shiftId) {
+      const r = await tx.cashierShift.findFirst({ where: { id: f.shiftId, tenantId }, select: { propertyId: true } });
+      if (r) return r.propertyId;
+    }
+    return (await primaryProperty(tx, tenantId)).id;
   }
 
   /** Adds the room's housekeeping timeline (last 24 hours) to the evidence and one sentence to the detail. */

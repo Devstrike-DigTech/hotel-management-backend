@@ -1,3 +1,4 @@
+import { runInProperty } from '../../common/property-scope.js';
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import type { Prisma, Property, RoomType } from '../../generated/prisma/client.js';
 import type { GuestPrincipal } from '../../common/auth-types.js';
@@ -212,7 +213,7 @@ export class PublicBookingService {
 
   async hotelAvailability(slug: string, q: AvailabilityQueryDto) {
     const ref = await this.hotelRef(slug);
-    return this.db.tenant(ref.tenantId, async (tx) => {
+    return runInProperty(ref.tenantId, ref.id, () => this.db.tenant(ref.tenantId, async (tx) => {
       const p = await this.loadHotel(tx, ref);
       const w = this.resolveStay(p, q);
       const adults = q.adults ?? q.guests ?? 1;
@@ -224,7 +225,7 @@ export class PublicBookingService {
       const avail = await this.availableByType(tx, ref.tenantId, p, w);
       const payOnline = p.payoutReady;
       const channel: BookingChannel = q.channel ?? (p.listedOnMarketplace ? 'MARKETPLACE' : 'BOOKING_SITE');
-      const ctx = w.stayType === 'NIGHTLY' ? await this.rates.context(tx, ref.tenantId, w.checkIn!, w.checkOut!) : null;
+      const ctx = w.stayType === 'NIGHTLY' ? await this.rates.context(tx, ref.tenantId, w.checkIn!, w.checkOut!, undefined, p.id) : null;
       let promo: { code: string; valid: boolean; reason: string | null; message: string | null } | null = null;
       const roomTypes = [];
       for (const rt of p.roomTypes) {
@@ -307,7 +308,7 @@ export class PublicBookingService {
         roomTypes,
         promo,
       };
-    });
+    }));
   }
 
   /**
@@ -321,11 +322,11 @@ export class PublicBookingService {
     if (q.to < q.from) throw Err.validation('to', '"to" must not be before "from"');
     if (diffDays(q.from, q.to) + 1 > 62) throw Err.validation('to', 'The range can be at most 62 days');
     const ref = await this.hotelRef(slug);
-    return this.db.tenant(ref.tenantId, async (tx) => {
+    return runInProperty(ref.tenantId, ref.id, () => this.db.tenant(ref.tenantId, async (tx) => {
       const p = await this.loadHotel(tx, ref);
       const guests = (q.adults ?? 1) + (q.children ?? 0);
       const channel: BookingChannel = q.channel ?? (p.listedOnMarketplace ? 'MARKETPLACE' : 'BOOKING_SITE');
-      const ctx = await this.rates.context(tx, ref.tenantId, q.from, addDays(q.to, 1));
+      const ctx = await this.rates.context(tx, ref.tenantId, q.from, addDays(q.to, 1), undefined, p.id);
       const plans = this.publicPlans(ctx, channel).filter((pl) => !q.ratePlanId || pl.id === q.ratePlanId);
       const types = p.roomTypes.filter((rt) => rt.capacity >= guests && (!q.roomTypeId || rt.id === q.roomTypeId));
       const dates = dateRange(q.from, q.to);
@@ -381,7 +382,7 @@ export class PublicBookingService {
           };
         }),
       };
-    });
+    }));
   }
 
   /**
@@ -423,7 +424,7 @@ export class PublicBookingService {
           continue;
         }
         const features = (await this.entitlements.getEntitlements(p.tenantId).catch(() => null))?.features ?? [];
-        const ctx = await this.rates.context(tx, p.tenantId, checkIn, checkOut, features);
+        const ctx = await this.rates.context(tx, p.tenantId, checkIn, checkOut, features, p.id);
         const comps = p.taxSetting ? componentsFrom(p.taxSetting) : DEFAULT_TAX;
         let best: { rate: number; total: number } | null = null;
         let bookableTypes = 0;
@@ -456,7 +457,7 @@ export class PublicBookingService {
 
   async quote(dto: QuoteDto) {
     const ref = await this.hotelRef(dto.hotelSlug);
-    return this.db.tenant(ref.tenantId, async (tx) => {
+    return runInProperty(ref.tenantId, ref.id, () => this.db.tenant(ref.tenantId, async (tx) => {
       const p = await this.loadHotel(tx, ref);
       this.assertChannel(p, dto.channel);
       const rt = p.roomTypes.find((x) => x.id === dto.roomTypeId);
@@ -572,7 +573,7 @@ export class PublicBookingService {
         quoteTtlMinutes: QUOTE_TTL_MINUTES,
         available,
       };
-    });
+    }));
   }
 
   // ---------------------------------------------------------------------------
@@ -623,7 +624,7 @@ export class PublicBookingService {
 
     let created;
     try {
-      created = await this.db.tenant(q.tid, async (tx) => {
+      created = await runInProperty(q.tid, q.pid, () => this.db.tenant(q.tid, async (tx) => {
         const replay = await tx.reservation.findFirst({ where: { tenantId: q.tid, quoteRef: q.n }, include: stayInclude });
         if (replay) {
           const active = replay.status === 'CONFIRMED' || (replay.status === 'PENDING' && (!replay.holdExpiresAt || replay.holdExpiresAt > new Date()));
@@ -639,7 +640,7 @@ export class PublicBookingService {
         if (!rt) throw AppException.notFound('Room type');
         let payout: { subaccountCode: string } | null = null;
         if (dto.paymentMode === 'ONLINE') {
-          payout = p.payoutReady ? await tx.payoutAccount.findUnique({ where: { tenantId: q.tid }, select: { subaccountCode: true } }) : null;
+          payout = p.payoutReady ? await tx.payoutAccount.findUnique({ where: { propertyId: p.id }, select: { subaccountCode: true } }) : null;
           if (!payout) throw appError(HttpStatus.CONFLICT, 'ONLINE_PAYMENT_UNAVAILABLE', `${p.name} does not take online payments yet. Choose pay at hotel.`);
         } else if (!p.allowPayAtHotel) {
           throw appError(HttpStatus.CONFLICT, 'PAY_AT_HOTEL_UNAVAILABLE', `${p.name} asks for payment when you book.`);
@@ -745,6 +746,7 @@ export class PublicBookingService {
           const pay = await tx.bookingPayment.create({
             data: {
               tenantId: q.tid,
+              propertyId: p.id,
               reservationId: r.id,
               reference: BookingPaymentsService.newReference(),
               provider: this.paystack.providerName,
@@ -787,7 +789,7 @@ export class PublicBookingService {
           ]);
         }
         return { replay: false as const, r: row, paymentId, ids };
-      });
+      }));
     } catch (e) {
       if (isExclusionViolation(e)) throw appError(HttpStatus.CONFLICT, 'ROOM_UNAVAILABLE', 'That room was just booked. Please choose another.', { scope: 'ROOM_TYPE', roomTypeId: q.rt });
       throw e;

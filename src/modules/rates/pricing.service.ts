@@ -106,7 +106,7 @@ export class PricingService {
   async price(tx: Tx, tenantId: string, input: StayPricingInput, preloaded?: { ctx?: RateContext; components?: TaxComponent[] }): Promise<StayPricing> {
     const nightsCount = diffDays(input.arrivalDate, input.departureDate);
     if (nightsCount < 1) throw Err.validation('departureDate', 'A nightly stay needs at least one night');
-    const ctx = preloaded?.ctx ?? (await this.rates.context(tx, tenantId, input.arrivalDate, input.departureDate));
+    const ctx = preloaded?.ctx ?? (await this.rates.context(tx, tenantId, input.arrivalDate, input.departureDate, undefined, input.roomType.propertyId));
     const plan = this.rates.planFrom(ctx, input.ratePlanId);
     if (!input.skipPlanChecks) {
       const why = planUnavailable(plan, input.roomType.id, nightsCount, input.channel);

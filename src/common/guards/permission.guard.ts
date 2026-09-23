@@ -1,4 +1,4 @@
-import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
+import { CanActivate, ExecutionContext, HttpStatus, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { StaffRole } from '../../generated/prisma/enums.js';
 import { DbService } from '../../prisma/db.service.js';
@@ -13,6 +13,43 @@ export interface StaffAccess {
   isActive: boolean;
   customRoleId: string | null;
   customPermissions: string[] | null;
+  /** M5: property access. Optional so unit-test loaders can omit it. */
+  allProperties?: boolean;
+  grantedPropertyIds?: string[];
+  defaultPropertyId?: string | null;
+  /** Every property of the tenant, oldest first. */
+  tenantPropertyIds?: string[];
+}
+
+export const PROPERTY_HEADER = 'x-property-id';
+
+/** Properties a staff member may access (OWNER: all), oldest first. */
+export function accessibleProperties(a: Pick<StaffAccess, 'role' | 'allProperties' | 'grantedPropertyIds' | 'tenantPropertyIds'>): string[] {
+  const all = a.tenantPropertyIds ?? [];
+  if (a.role === 'OWNER' || a.allProperties !== false) return all;
+  const granted = new Set(a.grantedPropertyIds ?? []);
+  return all.filter((id) => granted.has(id));
+}
+
+/**
+ * The property a request runs in: the header if accessible (403 otherwise),
+ * else the saved default if still accessible, else the first accessible.
+ */
+export function resolveRequestProperty(accessible: string[], header: string | undefined, defaultId: string | null | undefined): string {
+  if (header !== undefined && header !== '') {
+    const id = header.trim().toLowerCase();
+    if (!accessible.includes(id)) throw propertyAccessDenied(header);
+    return id;
+  }
+  if (defaultId && accessible.includes(defaultId)) return defaultId;
+  if (!accessible.length) throw propertyAccessDenied(null);
+  return accessible[0];
+}
+
+export function propertyAccessDenied(propertyId: string | null) {
+  return new AppException(HttpStatus.FORBIDDEN, 'PROPERTY_ACCESS_DENIED', 'You do not have access to this property', {
+    propertyId,
+  });
 }
 
 /** Loads a staff member's current role and custom-role permissions. */
@@ -41,9 +78,19 @@ export class PermissionGuard implements CanActivate {
       db.tenant(tenantId, async (tx) => {
         const u = await tx.user.findFirst({
           where: { id: userId, tenantId },
-          select: { role: true, isActive: true, customRoleId: true, customRole: { select: { permissions: true } } },
+          select: {
+            role: true, isActive: true, customRoleId: true, customRole: { select: { permissions: true } },
+            allProperties: true, defaultPropertyId: true, propertyAccess: { select: { propertyId: true } },
+          },
         });
-        return u ? { role: u.role, isActive: u.isActive, customRoleId: u.customRoleId, customPermissions: u.customRole?.permissions ?? null } : null;
+        if (!u) return null;
+        const props = await tx.property.findMany({ where: { tenantId }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], select: { id: true } });
+        return {
+          role: u.role, isActive: u.isActive, customRoleId: u.customRoleId, customPermissions: u.customRole?.permissions ?? null,
+          allProperties: u.allProperties, defaultPropertyId: u.defaultPropertyId,
+          grantedPropertyIds: u.propertyAccess.map((x) => x.propertyId),
+          tenantPropertyIds: props.map((x) => x.id),
+        };
       });
   }
 
@@ -71,6 +118,16 @@ export class PermissionGuard implements CanActivate {
       if (!perms.has(code)) throw forbidden(code);
     }
     if (any?.length && !any.some((c) => perms.has(c))) throw forbidden(any.join(' or '));
+
+    // M5: property scope (after the permission check, as documented).
+    if (access.tenantPropertyIds) {
+      const accessible = accessibleProperties(access);
+      const raw = req.headers[PROPERTY_HEADER];
+      const header = Array.isArray(raw) ? raw[0] : raw;
+      req.user.propertyIds = accessible;
+      req.user.allProperties = access.role === 'OWNER' || access.allProperties !== false;
+      req.user.propertyId = resolveRequestProperty(accessible, header, access.defaultPropertyId);
+    }
     return true;
   }
 }

@@ -185,7 +185,7 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
   const cipher = new FieldCipher(key);
 
   const tenant = await prisma.tenant.findUniqueOrThrow({ where: { slug: tenantSlug } });
-  const property = await prisma.property.findFirstOrThrow({ where: { tenantId: tenant.id } });
+  const property = await prisma.property.findFirstOrThrow({ where: { tenantId: tenant.id }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
   await resetTenant(prisma, tenant.id);
 
   const now = new Date();
@@ -469,6 +469,7 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
     data: shifts.map((s) => ({
       id: s.id,
       tenantId: tenant.id,
+      propertyId: property.id,
       userId: s.user.id,
       userName: s.user.fullName,
       // Past shifts are finalised (count, expected, approval) further down.
@@ -506,6 +507,7 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
     const row: FolioEntry = {
       id: randomUUID(),
       tenantId: tenant.id,
+      propertyId: property.id,
       folioId,
       type: e.type,
       amountKobo: BigInt(e.amount),
@@ -728,6 +730,7 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
       pay(folioId, resId, rest, new Date(checkedOutAt!.getTime() - 2 * MIN), 'CITY_LEDGER', 'Zenith Oil Services Ltd to settle by invoice');
       flagRows.push({
         tenantId: tenant.id,
+        propertyId: property.id,
         rule: 'CHECKOUT_WITH_BALANCE',
         severity: 'HIGH',
         status: 'ACKNOWLEDGED',
@@ -769,6 +772,7 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
           const recent = lagosDate(when) === addDays(T, -1);
           flagRows.push({
             tenantId: tenant.id,
+            propertyId: property.id,
             rule: 'VOIDED_PAYMENT',
             severity: 'MEDIUM',
             status: recent ? 'OPEN' : 'RESOLVED',
@@ -803,6 +807,7 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
       if (p.kind === 'outToday') {
         taskRows.push({
           tenantId: tenant.id,
+          propertyId: property.id,
           roomId: room!.id,
           reservationId: resId,
           status: p.room === '305' ? 'IN_PROGRESS' : 'OPEN',
@@ -815,6 +820,7 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
     if (p.lateRegistration) {
       flagRows.push({
         tenantId: tenant.id,
+        propertyId: property.id,
         rule: 'LATE_REGISTRATION',
         severity: 'LOW',
         status: 'OPEN',
@@ -837,6 +843,7 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
   if (overrideStay) {
     flagRows.push({
       tenantId: tenant.id,
+      propertyId: property.id,
       rule: 'DIRTY_OVERRIDE_CHECKIN',
       severity: 'LOW',
       status: 'DISMISSED',
@@ -886,7 +893,8 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
     const k = `${kind}:${year}`;
     const v = (counters.get(k) ?? 0) + 1;
     counters.set(k, v);
-    return { year, seq: v, number: `${kind === 'INVOICE' ? 'INV' : 'RCT'}-${year}-${String(v).padStart(6, '0')}` };
+    const pre = `${kind === 'INVOICE' ? 'INV' : 'RCT'}${property.invoicePrefix ? `-${property.invoicePrefix}` : ''}`;
+    return { year, seq: v, number: `${pre}-${year}-${String(v).padStart(6, '0')}` };
   };
   payments.sort((a, b) => a.at.getTime() - b.at.getTime());
   const receiptNumbers = new Map<string, string>();
@@ -900,6 +908,7 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
     receiptRows.push({
       id,
       tenantId: tenant.id,
+      propertyId: property.id,
       folioId: p.folioId,
       entryId: p.entry.id,
       number: n.number,
@@ -924,6 +933,7 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
     invoiceRows.push({
       id,
       tenantId: tenant.id,
+      propertyId: property.id,
       folioId: c.folioId,
       kind: 'FINAL',
       number: n.number,
@@ -942,7 +952,7 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
   await prisma.guestInvoice.createMany({ data: invoiceRows });
   for (const [k, v] of counters) {
     const [kind, year] = k.split(':');
-    await prisma.documentCounter.create({ data: { tenantId: tenant.id, kind: kind as 'INVOICE' | 'RECEIPT', year: Number(year), lastValue: v } });
+    await prisma.documentCounter.create({ data: { tenantId: tenant.id, kind: kind as 'INVOICE' | 'RECEIPT', year: Number(year), scope: property.id, lastValue: v } });
   }
 
   // ---------------------------------------------------------------------------
@@ -981,6 +991,7 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
       const short = Math.abs(s.varianceCashKobo);
       flagRows.push({
         tenantId: tenant.id,
+        propertyId: property.id,
         rule: 'SHIFT_VARIANCE',
         severity: (short > 500_000 ? 'HIGH' : 'MEDIUM') as GuardSeverity,
         status: (recent ? 'OPEN' : 'RESOLVED') as GuardStatus,
@@ -1032,6 +1043,7 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
     await prisma.dailyStat.create({
       data: {
         tenantId: tenant.id,
+        propertyId: property.id,
         date: dbDate(f.date),
         roomsAvailable: snap.roomsAvailable,
         roomsSold: snap.roomsSold,
@@ -1049,6 +1061,7 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
     await prisma.nightAuditRun.create({
       data: {
         tenantId: tenant.id,
+        propertyId: property.id,
         businessDate: dbDate(f.date),
         status: 'COMPLETED',
         trigger: 'SCHEDULED',
@@ -1076,6 +1089,7 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
       };
       digestRows.push({
         tenantId: tenant.id,
+        propertyId: property.id,
         businessDate: dbDate(f.date),
         trigger: 'SCHEDULED',
         channel: 'LOG',

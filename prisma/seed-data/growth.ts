@@ -69,7 +69,7 @@ export async function seedRatePlansEverywhere(prisma: PrismaClient): Promise<num
   const properties = await prisma.property.findMany({ select: { id: true, tenantId: true } });
   for (const p of properties) {
     await prisma.ratePlan.upsert({
-      where: { tenantId_code: { tenantId: p.tenantId, code: 'BAR' } },
+      where: { propertyId_code: { propertyId: p.id, code: 'BAR' } },
       create: {
         tenantId: p.tenantId,
         propertyId: p.id,
@@ -128,7 +128,7 @@ interface NightSnap {
 
 export async function seedGrowth(prisma: PrismaClient, tenantSlug: string): Promise<Record<string, number>> {
   const tenant = await prisma.tenant.findUniqueOrThrow({ where: { slug: tenantSlug } });
-  const property = await prisma.property.findFirstOrThrow({ where: { tenantId: tenant.id } });
+  const property = await prisma.property.findFirstOrThrow({ where: { tenantId: tenant.id }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
   const tenantId = tenant.id;
   const now = new Date();
   const T = lagosDate(now);
@@ -200,12 +200,12 @@ export async function seedGrowth(prisma: PrismaClient, tenantSlug: string): Prom
   ];
   const deluxeClean = [...DEFAULT_CHECKLISTS.CHECKOUT_CLEAN, 'Balcony swept and door track cleaned', 'Minibar counted and restocked'];
   const checklistRows: Prisma.HousekeepingChecklistCreateManyInput[] = [
-    { tenantId, roomTypeId: standard.id, taskType: 'CHECKOUT_CLEAN', items: checklistItems(DEFAULT_CHECKLISTS.CHECKOUT_CLEAN) },
-    { tenantId, roomTypeId: deluxe.id, taskType: 'CHECKOUT_CLEAN', items: checklistItems(deluxeClean) },
-    { tenantId, roomTypeId: suite.id, taskType: 'CHECKOUT_CLEAN', items: checklistItems(suiteClean) },
-    { tenantId, roomTypeId: null, taskType: 'STAYOVER', items: checklistItems(DEFAULT_CHECKLISTS.STAYOVER) },
-    { tenantId, roomTypeId: null, taskType: 'DEEP_CLEAN', items: checklistItems(DEFAULT_CHECKLISTS.DEEP_CLEAN) },
-    { tenantId, roomTypeId: suite.id, taskType: 'TURNDOWN', items: checklistItems([...DEFAULT_CHECKLISTS.TURNDOWN, 'Chocolates and tomorrow\'s weather card on the pillow', 'Bathrobe and slippers laid out']) },
+    { tenantId, propertyId: property.id, roomTypeId: standard.id, taskType: 'CHECKOUT_CLEAN', items: checklistItems(DEFAULT_CHECKLISTS.CHECKOUT_CLEAN) },
+    { tenantId, propertyId: property.id, roomTypeId: deluxe.id, taskType: 'CHECKOUT_CLEAN', items: checklistItems(deluxeClean) },
+    { tenantId, propertyId: property.id, roomTypeId: suite.id, taskType: 'CHECKOUT_CLEAN', items: checklistItems(suiteClean) },
+    { tenantId, propertyId: property.id, roomTypeId: null, taskType: 'STAYOVER', items: checklistItems(DEFAULT_CHECKLISTS.STAYOVER) },
+    { tenantId, propertyId: property.id, roomTypeId: null, taskType: 'DEEP_CLEAN', items: checklistItems(DEFAULT_CHECKLISTS.DEEP_CLEAN) },
+    { tenantId, propertyId: property.id, roomTypeId: suite.id, taskType: 'TURNDOWN', items: checklistItems([...DEFAULT_CHECKLISTS.TURNDOWN, 'Chocolates and tomorrow\'s weather card on the pillow', 'Bathrobe and slippers laid out']) },
   ];
   await prisma.housekeepingChecklist.createMany({ data: checklistRows });
   const listFor = (typeId: string, taskType: string): string[] => {
@@ -235,8 +235,8 @@ export async function seedGrowth(prisma: PrismaClient, tenantSlug: string): Prom
 
   type TaskInput = Prisma.HousekeepingTaskCreateManyInput;
   const tasks: TaskInput[] = [];
-  const task = (t: Omit<TaskInput, 'tenantId' | 'businessDate'> & { businessDate?: string }) =>
-    tasks.push({ ...t, tenantId, businessDate: dbDate(t.businessDate ?? T) });
+  const task = (t: Omit<TaskInput, 'tenantId' | 'propertyId' | 'businessDate'> & { businessDate?: string }) =>
+    tasks.push({ ...t, tenantId, propertyId: property.id, businessDate: dbDate(t.businessDate ?? T) });
 
   // Checkout cleans.
   const out208 = stayIn('208', 'CHECKED_OUT');
@@ -344,33 +344,33 @@ export async function seedGrowth(prisma: PrismaClient, tenantSlug: string): Prom
   await prisma.lostFoundItem.createMany({
     data: [
       {
-        tenantId, description: 'Black Ankara print jacket, size L', category: 'Clothing', roomId: R('305').id, location: 'Wardrobe',
+        tenantId, propertyId: property.id, description: 'Black Ankara print jacket, size L', category: 'Clothing', roomId: R('305').id, location: 'Wardrobe',
         foundById: blessing.id, foundByName: blessing.fullName, foundAt: todayAt('10:25', 10), status: 'HELD', storageLocation: 'Housekeeping store, shelf B',
         guestId: out305?.guestId ?? null, reservationId: out305?.id ?? null, notes: 'Guest checked out this morning; front desk to call.',
       },
       {
-        tenantId, description: 'Samsung phone charger with USB-C cable', category: 'Electronics', roomId: R('204').id, location: 'Bedside socket',
+        tenantId, propertyId: property.id, description: 'Samsung phone charger with USB-C cable', category: 'Electronics', roomId: R('204').id, location: 'Bedside socket',
         foundById: musa.id, foundByName: musa.fullName, foundAt: ago(26 * HOUR), status: 'HELD', storageLocation: 'Front office cabinet, drawer 2',
         guestId: out204?.guestId ?? null, reservationId: out204?.id ?? null,
       },
       {
-        tenantId, description: 'Brown leather wallet with a staff ID card (no cash)', category: 'Documents', roomId: null, location: 'Poolside lounger',
+        tenantId, propertyId: property.id, description: 'Brown leather wallet with a staff ID card (no cash)', category: 'Documents', roomId: null, location: 'Poolside lounger',
         foundById: blessing.id, foundByName: blessing.fullName, foundAt: ago(3 * DAY), status: 'HELD', storageLocation: 'Duty manager safe',
         notes: 'ID card belongs to a Lagos State Ministry of Health employee; left a message on the number on the card.',
       },
       {
-        tenantId, description: 'Reading glasses in a blue case', category: 'Accessories', roomId: R('301').id, location: 'Desk drawer',
+        tenantId, propertyId: property.id, description: 'Reading glasses in a blue case', category: 'Accessories', roomId: R('301').id, location: 'Desk drawer',
         foundById: musa.id, foundByName: musa.fullName, foundAt: ago(6 * DAY), status: 'RETURNED', storageLocation: 'Front office cabinet, drawer 2',
         guestId: out301?.guestId ?? null, reservationId: out301?.id ?? null, returnedTo: out301?.guest.fullName ?? 'Guest in person', returnedAt: ago(5 * DAY),
         notes: 'Collected in person; ID checked.',
       },
       {
-        tenantId, description: 'Gold-plated wristwatch', category: 'Jewellery', roomId: R('207').id, location: 'Bathroom shelf',
+        tenantId, propertyId: property.id, description: 'Gold-plated wristwatch', category: 'Jewellery', roomId: R('207').id, location: 'Bathroom shelf',
         foundById: blessing.id, foundByName: blessing.fullName, foundAt: ago(12 * DAY), status: 'RETURNED', storageLocation: 'Duty manager safe',
         returnedTo: 'Sent by GIG Logistics to the guest in Abuja (waybill GIG-58213377)', returnedAt: ago(10 * DAY),
       },
       {
-        tenantId, description: 'Half-used toiletries and a travel umbrella', category: 'Other', roomId: R('102').id, location: 'Bathroom',
+        tenantId, propertyId: property.id, description: 'Half-used toiletries and a travel umbrella', category: 'Other', roomId: R('102').id, location: 'Bathroom',
         foundById: musa.id, foundByName: musa.fullName, foundAt: ago(75 * DAY), status: 'DISPOSED', storageLocation: 'Housekeeping store, shelf C',
         disposedAt: ago(15 * DAY), notes: 'Unclaimed after 60 days; umbrella given to the staff room.',
       },
@@ -383,21 +383,21 @@ export async function seedGrowth(prisma: PrismaClient, tenantSlug: string): Prom
   const allRoomIds = [...rooms.values()].map((r) => r.id);
   await prisma.maintenanceSchedule.create({
     data: {
-      tenantId, title: 'AC servicing (all guest rooms)', category: 'AC_HVAC', priority: 'NORMAL', roomIds: allRoomIds, area: null, everyDays: 90,
+      tenantId, propertyId: property.id, title: 'AC servicing (all guest rooms)', category: 'AC_HVAC', priority: 'NORMAL', roomIds: allRoomIds, area: null, everyDays: 90,
       nextDueAt: at(addDays(T, 12), '06:00'), lastRunAt: at(addDays(T, -78), '06:00'),
       checklist: ['Clean filters', 'Check gas pressure', 'Clear the drain line', 'Check remote and thermostat'],
     },
   });
   const schedGen = await prisma.maintenanceSchedule.create({
     data: {
-      tenantId, title: 'Generator servicing', category: 'GENERATOR', priority: 'HIGH', area: 'Generator house', everyDays: 10,
+      tenantId, propertyId: property.id, title: 'Generator servicing', category: 'GENERATOR', priority: 'HIGH', area: 'Generator house', everyDays: 10,
       nextDueAt: at(addDays(T, 1), '06:00'), lastRunAt: at(addDays(T, -9), '06:00'),
       checklist: ['Change engine oil and oil filter', 'Check coolant level', 'Clean air filter', 'Check battery terminals', 'Test automatic changeover'],
     },
   });
   const schedPool = await prisma.maintenanceSchedule.create({
     data: {
-      tenantId, title: 'Pool pump and filter service', category: 'OTHER', priority: 'NORMAL', area: 'Swimming pool plant room', everyDays: 30,
+      tenantId, propertyId: property.id, title: 'Pool pump and filter service', category: 'OTHER', priority: 'NORMAL', area: 'Swimming pool plant room', everyDays: 30,
       nextDueAt: at(addDays(T, 10), '06:00'), lastRunAt: at(addDays(T, -20), '06:00'),
       checklist: ['Backwash the sand filter', 'Clean the pump strainer basket', 'Check chlorine dosing', 'Inspect seals for leaks'],
     },
@@ -482,6 +482,7 @@ export async function seedGrowth(prisma: PrismaClient, tenantSlug: string): Prom
     const t = await prisma.maintenanceTicket.create({
       data: {
         tenantId,
+        propertyId: property.id,
         number: ticketNumber(ticketSeq),
         roomId: room?.id ?? null,
         area: s.area ?? null,
@@ -533,7 +534,7 @@ export async function seedGrowth(prisma: PrismaClient, tenantSlug: string): Prom
       const startsAt = todayAt('08:00', 60);
       await prisma.roomBlock.create({
         data: {
-          tenantId, roomId: room.id, roomTypeId: room.roomTypeId, startsAt, endsAt: new Date(startsAt.getTime() + 2 * DAY),
+          tenantId, propertyId: property.id, roomId: room.id, roomTypeId: room.roomTypeId, startsAt, endsAt: new Date(startsAt.getTime() + 2 * DAY),
           reason: `${ticketNumber(ticketSeq)}: ${s.title}`, ticketId: t.id, createdById: emeka.id, createdByName: emeka.fullName, createdAt: ago(28 * HOUR),
         },
       });
@@ -553,6 +554,7 @@ export async function seedGrowth(prisma: PrismaClient, tenantSlug: string): Prom
     const pricePerLitre = 1_180 + Math.floor(rand() * 90);
     fuelRows.push({
       tenantId,
+      propertyId: property.id,
       date: dbDate(date),
       litres,
       costKobo: BigInt(Math.round(litres * pricePerLitre) * NAIRA),
@@ -572,7 +574,7 @@ export async function seedGrowth(prisma: PrismaClient, tenantSlug: string): Prom
   // ---------------------------------------------------------------------------
   const plan = async (code: string, data: Omit<Prisma.RatePlanUncheckedCreateInput, 'tenantId' | 'propertyId' | 'code'>) =>
     prisma.ratePlan.upsert({
-      where: { tenantId_code: { tenantId, code } },
+      where: { propertyId_code: { propertyId: property.id, code } },
       create: { tenantId, propertyId: property.id, code, ...data },
       update: data,
     });
@@ -627,17 +629,17 @@ export async function seedGrowth(prisma: PrismaClient, tenantSlug: string): Prom
   const xmasEve = nextOn(T, '12-24');
   await prisma.rateOverride.createMany({
     data: [
-      { tenantId, roomTypeId: suite.id, date: dbDate(nye), rateKobo: 250_000 * NAIRA, note: 'New Year\'s Eve rooftop party package', updatedById: owner.id, updatedByName: owner.fullName },
-      { tenantId, roomTypeId: deluxe.id, date: dbDate(nye), rateKobo: 135_000 * NAIRA, note: 'New Year\'s Eve', updatedById: owner.id, updatedByName: owner.fullName },
-      { tenantId, roomTypeId: standard.id, date: dbDate(oct1), rateKobo: 65_000 * NAIRA, note: 'Independence Day weekend demand', updatedById: tunde.id, updatedByName: tunde.fullName },
-      { tenantId, roomTypeId: deluxe.id, date: dbDate(oct1), rateKobo: 98_000 * NAIRA, note: 'Independence Day weekend demand', updatedById: tunde.id, updatedByName: tunde.fullName },
+      { tenantId, propertyId: property.id, roomTypeId: suite.id, date: dbDate(nye), rateKobo: 250_000 * NAIRA, note: 'New Year\'s Eve rooftop party package', updatedById: owner.id, updatedByName: owner.fullName },
+      { tenantId, propertyId: property.id, roomTypeId: deluxe.id, date: dbDate(nye), rateKobo: 135_000 * NAIRA, note: 'New Year\'s Eve', updatedById: owner.id, updatedByName: owner.fullName },
+      { tenantId, propertyId: property.id, roomTypeId: standard.id, date: dbDate(oct1), rateKobo: 65_000 * NAIRA, note: 'Independence Day weekend demand', updatedById: tunde.id, updatedByName: tunde.fullName },
+      { tenantId, propertyId: property.id, roomTypeId: deluxe.id, date: dbDate(oct1), rateKobo: 98_000 * NAIRA, note: 'Independence Day weekend demand', updatedById: tunde.id, updatedByName: tunde.fullName },
     ],
   });
   await prisma.rateRestriction.createMany({
     data: [
-      { tenantId, roomTypeId: null, date: dbDate(addDays(nye, -1)), minNights: 3 },
-      { tenantId, roomTypeId: null, date: dbDate(nye), minNights: 3 },
-      { tenantId, roomTypeId: null, date: dbDate(xmasEve), closedToArrival: true },
+      { tenantId, propertyId: property.id, roomTypeId: null, date: dbDate(addDays(nye, -1)), minNights: 3 },
+      { tenantId, propertyId: property.id, roomTypeId: null, date: dbDate(nye), minNights: 3 },
+      { tenantId, propertyId: property.id, roomTypeId: null, date: dbDate(xmasEve), closedToArrival: true },
     ],
   });
 

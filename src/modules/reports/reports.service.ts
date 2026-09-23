@@ -1,3 +1,4 @@
+import { propertySql, scopeIds } from '../../common/property-scope.js';
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '../../generated/prisma/client.js';
 import type { PaymentMethod } from '../../generated/prisma/enums.js';
@@ -57,7 +58,7 @@ export class ReportsService {
         SELECT e.business_date AS d, e.type::text AS type, e.payment_method::text AS method, e.created_by_id AS uid,
                count(*)::int AS n, COALESCE(sum(e.amount_kobo), 0)::bigint AS amt
         FROM folio_entries e
-        WHERE e.tenant_id = ${user.tenantId}::uuid
+        WHERE e.tenant_id = ${user.tenantId}::uuid${propertySql(scopeIds(user.tenantId), 'e.property_id')}
           AND e.type IN ('PAYMENT', 'REFUND')
           AND e.business_date BETWEEN ${dbDate(r.from)}::date AND ${dbDate(r.to)}::date
           AND NOT EXISTS (SELECT 1 FROM folio_entries v WHERE v.ref_entry_id = e.id)

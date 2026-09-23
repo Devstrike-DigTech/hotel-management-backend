@@ -9,6 +9,7 @@ import { AuditService, userActor } from '../audit/audit.service.js';
 import { GuardService } from '../guard/guard.service.js';
 import { shiftVarianceSeverity } from '../guard/guard.logic.js';
 import { appError, Err, k, kOrNull, paginate, isUniqueViolation } from '../ops/ops.helpers.js';
+import { primaryProperty } from '../ops/ops.helpers.js';
 import { expectedTotals, variance, type ShiftMovement } from './shift.logic.js';
 import type { CloseShiftDto, OpenShiftDto, ShiftQueryDto } from './shifts.dto.js';
 
@@ -150,6 +151,7 @@ export class ShiftsService {
         const s = await tx.cashierShift.create({
           data: {
             tenantId: user.tenantId,
+            propertyId: (await primaryProperty(tx, user.tenantId)).id,
             userId: user.userId,
             userName: user.fullName,
             openingFloatKobo: dto.openingFloatKobo,

@@ -1,3 +1,4 @@
+import { runInProperty } from '../../common/property-scope.js';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { OwnerDigest, Prisma } from '../../generated/prisma/client.js';
 import type { GuardSeverity, JobTrigger } from '../../generated/prisma/enums.js';
@@ -148,15 +149,16 @@ export class DigestService {
 
   /** Composes, delivers through the provider and stores the digest. */
   async deliver(tenantId: string, businessDate: string, trigger: JobTrigger, recipientsOverride?: string[]) {
-    const { data, body, recipients } = await this.db.tenant(tenantId, async (tx) => {
+    const { data, body, recipients, propertyId } = await this.db.tenant(tenantId, async (tx) => {
       const s = await this.settingsRow(tx, tenantId);
-      return { ...(await this.compose(tx, tenantId, businessDate)), recipients: recipientsOverride ?? s.recipients };
+      return { ...(await this.compose(tx, tenantId, businessDate)), recipients: recipientsOverride ?? s.recipients, propertyId: s.propertyId };
     });
     const result = await this.provider.send(recipients, body, data).catch((e: Error) => ({ status: 'FAILED' as const, error: e.message }));
     const row = await this.db.tenant(tenantId, (tx) =>
       tx.ownerDigest.create({
         data: {
           tenantId,
+          propertyId,
           businessDate: dbDate(businessDate),
           trigger,
           channel: this.provider.channel,
@@ -175,22 +177,30 @@ export class DigestService {
   async runAll(now = new Date()) {
     const businessDate = lagosDate(now);
     const tenants = await this.db.system((tx) =>
-      tx.tenant.findMany({ where: { subscription: { status: { notIn: ['SUSPENDED', 'READ_ONLY'] } } }, select: { id: true } }),
+      tx.tenant.findMany({
+        where: { subscription: { status: { notIn: ['SUSPENDED', 'READ_ONLY'] } } },
+        select: { id: true, properties: { select: { id: true }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] } },
+      }),
     );
     let sent = 0;
     for (const t of tenants) {
       try {
         const ent = await this.entitlements.getEntitlements(t.id);
         if (!ent.features.includes('owner_whatsapp_alerts')) continue;
-        const skip = await this.db.tenant(t.id, async (tx) => {
-          const s = await this.settingsRow(tx, t.id);
-          if (!s.enabled) return true;
-          const already = await tx.ownerDigest.count({ where: { tenantId: t.id, businessDate: dbDate(businessDate), trigger: 'SCHEDULED' } });
-          return already > 0;
-        });
-        if (skip) continue;
-        await this.deliver(t.id, businessDate, 'SCHEDULED');
-        sent++;
+        // M5: one digest per property.
+        for (const p of t.properties) {
+          await runInProperty(t.id, p.id, async () => {
+            const skip = await this.db.tenant(t.id, async (tx) => {
+              const s = await this.settingsRow(tx, t.id);
+              if (!s.enabled) return true;
+              const already = await tx.ownerDigest.count({ where: { tenantId: t.id, businessDate: dbDate(businessDate), trigger: 'SCHEDULED' } });
+              return already > 0;
+            });
+            if (skip) return;
+            await this.deliver(t.id, businessDate, 'SCHEDULED');
+            sent++;
+          });
+        }
       } catch (e) {
         this.logger.error(`Digest failed for ${t.id}: ${(e as Error).message}`);
       }

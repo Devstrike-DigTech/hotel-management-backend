@@ -5,6 +5,7 @@ import { AppConfigService } from '../config/app-config.service.js';
 import { PlatformPrismaService } from './platform-prisma.service.js';
 import { PrismaService } from './prisma.service.js';
 import { idempotencyContext } from '../modules/idempotency/idempotency.context.js';
+import { activePropertyFilter, currentScope, propertyScopeExtension } from '../common/property-scope.js';
 
 /** The client handed to callbacks: a Prisma interactive transaction. */
 export type Tx = Prisma.TransactionClient;
@@ -39,6 +40,8 @@ export function signContext(secret: string, payload: string): string {
 @Injectable()
 export class DbService {
   private readonly secret: string;
+  /** hotel_app client with the property-scope query extension (M5). */
+  private readonly scoped: { $transaction: PrismaService['$transaction'] };
 
   constructor(
     readonly prisma: PrismaService,
@@ -46,6 +49,7 @@ export class DbService {
     config: AppConfigService,
   ) {
     this.secret = config.get('DB_CONTEXT_SECRET');
+    this.scoped = prisma.$extends(propertyScopeExtension) as unknown as { $transaction: PrismaService['$transaction'] };
   }
 
   tenant<T>(tenantId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
@@ -55,7 +59,10 @@ export class DbService {
     const id = tenantId.toLowerCase();
     const sig = signContext(this.secret, `tenant:${id}`);
     const idem = idempotencyContext.getStore();
-    return this.prisma.$transaction(async (tx) => {
+    // M5: the property filter of the current request / job for this tenant
+    // (null = none). See common/property-scope.ts.
+    const filter = currentScope(id)?.propertyIds ?? null;
+    return activePropertyFilter.run(filter, () => this.scoped.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.tenant_id', ${id}, true), set_config('app.context_sig', ${sig}, true)`;
       const result = await fn(tx);
       if (idem && idem.tenantId.toLowerCase() === id) {
@@ -67,18 +74,18 @@ export class DbService {
           WHERE tenant_id = ${id}::uuid AND key = ${idem.key} AND NOT applied AND txid_current_if_assigned() IS NOT NULL`;
       }
       return result;
-    }, TX_OPTIONS);
+    }, TX_OPTIONS));
   }
 
   public<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
     const sig = signContext(this.secret, 'public');
-    return this.prisma.$transaction(async (tx) => {
+    return activePropertyFilter.run(null, () => this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.context', 'public', true), set_config('app.context_sig', ${sig}, true)`;
       return fn(tx);
-    }, TX_OPTIONS);
+    }, TX_OPTIONS));
   }
 
   system<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
-    return this.platform.$transaction((tx) => fn(tx), TX_OPTIONS);
+    return activePropertyFilter.run(null, () => this.platform.$transaction((tx) => fn(tx), TX_OPTIONS));
   }
 }

@@ -225,7 +225,7 @@ export class PublicService {
     // Rate plans per room type with the cheapest night over the next 60 days.
     const today = lagosDate();
     const dates = dateRange(today, addDays(today, 59));
-    const ctx = await this.db.public((tx) => this.rates.context(tx, p.tenantId, today, addDays(today, 59), ent?.features ?? []));
+    const ctx = await this.db.public((tx) => this.rates.context(tx, p.tenantId, today, addDays(today, 59), ent?.features ?? [], p.id));
     const plans = ctx.plans.filter((pl) => pl.active && (pl.channels.includes('BOOKING_SITE') || pl.channels.includes('MARKETPLACE')));
     const planInfo = new Map(
       p.roomTypes.map((rt) => {

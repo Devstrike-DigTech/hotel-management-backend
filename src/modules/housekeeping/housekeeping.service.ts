@@ -202,7 +202,7 @@ export class HousekeepingService {
       const existing = await tx.housekeepingChecklist.findFirst({ where: { tenantId: user.tenantId, roomTypeId: dto.roomTypeId, taskType: dto.taskType } });
       const row = existing
         ? await tx.housekeepingChecklist.update({ where: { id: existing.id }, data: { items } })
-        : await tx.housekeepingChecklist.create({ data: { tenantId: user.tenantId, roomTypeId: dto.roomTypeId, taskType: dto.taskType, items } });
+        : await tx.housekeepingChecklist.create({ data: { tenantId: user.tenantId, propertyId: (await primaryProperty(tx, user.tenantId)).id, roomTypeId: dto.roomTypeId, taskType: dto.taskType, items } });
       await this.audit.record(tx, { tenantId: user.tenantId, actor: userActor(user), action: 'housekeeping.checklist_saved', entityType: 'housekeeping_checklist', entityId: row.id, metadata: { taskType: dto.taskType, roomTypeId: dto.roomTypeId, items: items.length }, ip });
       const rt = dto.roomTypeId ? await tx.roomType.findFirst({ where: { id: dto.roomTypeId }, select: { name: true } }) : null;
       return { id: row.id, roomTypeId: row.roomTypeId, roomTypeName: rt?.name ?? null, taskType: row.taskType, items, isDefault: false, updatedAt: row.updatedAt.toISOString() };
@@ -259,6 +259,7 @@ export class HousekeepingService {
     return tx.housekeepingTask.create({
       data: {
         tenantId,
+        propertyId: room.propertyId,
         roomId: room.id,
         reason,
         type,
@@ -303,6 +304,7 @@ export class HousekeepingService {
       const t = await tx.housekeepingTask.create({
         data: {
           tenantId: user.tenantId,
+          propertyId: room.propertyId,
           roomId: room.id,
           reason: 'MANUAL',
           type: dto.type,
@@ -340,6 +342,7 @@ export class HousekeepingService {
         await tx.housekeepingTask.create({
           data: {
             tenantId,
+            propertyId: property.id,
             roomId: r.roomId!,
             reservationId: r.id,
             reason: 'STAYOVER_JOB',
@@ -897,6 +900,7 @@ export class HousekeepingService {
       const item = await tx.lostFoundItem.create({
         data: {
           tenantId: user.tenantId,
+          propertyId: (await primaryProperty(tx, user.tenantId)).id,
           description: dto.description,
           category: dto.category ?? 'Other',
           roomId: dto.roomId ?? null,

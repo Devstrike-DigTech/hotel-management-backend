@@ -125,8 +125,22 @@ export class LedgerService {
     if (folio.status !== 'OPEN') throw Err.invalidState(folio.status, ['OPEN'], 'This folio');
   }
 
-  private async insert(tx: Tx, data: Prisma.FolioEntryUncheckedCreateInput): Promise<FolioEntry> {
-    return tx.folioEntry.create({ data });
+  /** folio id -> property id (a folio never changes property). */
+  private readonly folioProperty = new Map<string, string>();
+
+  private async propertyOfFolio(tx: Tx, folioId: string): Promise<string> {
+    const hit = this.folioProperty.get(folioId);
+    if (hit) return hit;
+    const f = await tx.folio.findUniqueOrThrow({ where: { id: folioId }, select: { propertyId: true } });
+    if (this.folioProperty.size > 20_000) this.folioProperty.clear();
+    this.folioProperty.set(folioId, f.propertyId);
+    return f.propertyId;
+  }
+
+  /** Inserts a ledger line; its property is the folio's (M5). */
+  private async insert(tx: Tx, data: Omit<Prisma.FolioEntryUncheckedCreateInput, 'propertyId'>): Promise<FolioEntry> {
+    const propertyId = await this.propertyOfFolio(tx, data.folioId);
+    return tx.folioEntry.create({ data: { ...data, propertyId } });
   }
 
   /** Posts a charge and its tax lines. Returns the charge entry. */
@@ -226,7 +240,7 @@ export class LedgerService {
     let shiftId: string | null = null;
     if (SHIFT_METHODS.includes(input.method)) {
       const shift = actor.userId
-        ? await tx.cashierShift.findFirst({ where: { tenantId, userId: actor.userId, status: 'OPEN' } })
+        ? await tx.cashierShift.findFirst({ where: { tenantId, propertyId: folio.propertyId, userId: actor.userId, status: 'OPEN' } })
         : null;
       if (!shift) {
         throw appError(HttpStatus.CONFLICT, 'SHIFT_REQUIRED', 'Open a cashier shift before taking cash, transfer or POS payments', {
@@ -602,7 +616,7 @@ export class LedgerService {
     return this.db.tenant(user.tenantId, async (tx) => {
       const folio = await this.docs.loadFolio(tx, user.tenantId, folioId);
       this.assertOpen(folio);
-      const shift = await tx.cashierShift.findFirst({ where: { tenantId: user.tenantId, userId: user.userId, status: 'OPEN' } });
+      const shift = await tx.cashierShift.findFirst({ where: { tenantId: user.tenantId, propertyId: folio.propertyId, userId: user.userId, status: 'OPEN' } });
       if (!shift) {
         throw appError(HttpStatus.CONFLICT, 'SHIFT_REQUIRED', 'Open a cashier shift before paying out a refund', { method: dto.method });
       }

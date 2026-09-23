@@ -21,10 +21,26 @@ export const folioDocInclude = {
 export type FolioForDoc = Prisma.FolioGetPayload<{ include: typeof folioDocInclude }>;
 
 
-const PREFIX: Record<DocumentCounterKind, string> = { INVOICE: 'INV', PROFORMA: 'PRO', RECEIPT: 'RCT', MAINTENANCE_TICKET: 'MT', CITY_LEDGER: 'CL' };
+const PREFIX: Record<DocumentCounterKind, string> = {
+  INVOICE: 'INV', PROFORMA: 'PRO', RECEIPT: 'RCT', MAINTENANCE_TICKET: 'MT', CITY_LEDGER: 'CL',
+  POS_ORDER: 'ORD', KDS_TICKET: 'K', LOYALTY_MEMBER: 'M',
+};
 
-export function formatDocNumber(kind: DocumentCounterKind, year: number, seq: number): string {
-  return `${PREFIX[kind]}-${year}-${String(seq).padStart(6, '0')}`;
+/** Series numbered per property (M5); the rest are per group. */
+export const PER_PROPERTY_KINDS: ReadonlySet<DocumentCounterKind> = new Set(['INVOICE', 'PROFORMA', 'RECEIPT', 'POS_ORDER', 'KDS_TICKET']);
+
+/**
+ * `INV-2026-000123`, or with a property prefix (M5) `INV-PWH-2026-000123`.
+ */
+export function formatDocNumber(kind: DocumentCounterKind, year: number, seq: number, propertyPrefix?: string | null): string {
+  const pre = propertyPrefix ? `${PREFIX[kind]}-${propertyPrefix}` : PREFIX[kind];
+  return `${pre}-${year}-${String(seq).padStart(6, '0')}`;
+}
+
+/** Scope of a numbering series: '' for the group, else the property id. */
+export interface NumberScope {
+  propertyId: string;
+  prefix: string | null;
 }
 
 interface SharePayload {
@@ -52,20 +68,32 @@ export class DocumentsService {
    * concurrent issuers queue up, and a rolled-back transaction gives its
    * number back.
    */
-  async nextNumber(tx: Tx, tenantId: string, kind: DocumentCounterKind, year: number) {
+  async nextNumber(tx: Tx, tenantId: string, kind: DocumentCounterKind, year: number, scope?: NumberScope) {
+    if (PER_PROPERTY_KINDS.has(kind) && !scope) throw new Error(`${kind} numbers are per property`);
+    const key = scope?.propertyId ?? '';
     const rows = await tx.$queryRaw<{ last_value: number }[]>`
-      INSERT INTO document_counters (tenant_id, kind, year, last_value)
-      VALUES (${tenantId}::uuid, ${kind}::"DocumentCounterKind", ${year}, 1)
-      ON CONFLICT (tenant_id, kind, year)
+      INSERT INTO document_counters (tenant_id, kind, year, scope, last_value)
+      VALUES (${tenantId}::uuid, ${kind}::"DocumentCounterKind", ${year}, ${key}, 1)
+      ON CONFLICT (tenant_id, kind, year, scope)
       DO UPDATE SET last_value = document_counters.last_value + 1
       RETURNING last_value`;
     const seq = Number(rows[0].last_value);
-    return { seq, number: formatDocNumber(kind, year, seq) };
+    return { seq, number: formatDocNumber(kind, year, seq, scope?.prefix) };
   }
 
-  private async hotelHeader(tx: Tx, tenantId: string) {
-    const p = await primaryProperty(tx, tenantId);
+  /** Numbering scope of a property (its id and invoice prefix). */
+  async propertyScope(tx: Tx, tenantId: string, propertyId: string): Promise<NumberScope> {
+    const p = await tx.property.findFirst({ where: { id: propertyId, tenantId }, select: { id: true, invoicePrefix: true } });
+    if (!p) throw AppException.notFound('Property');
+    return { propertyId: p.id, prefix: p.invoicePrefix };
+  }
+
+  private async hotelHeader(tx: Tx, tenantId: string, propertyId?: string) {
+    const p = propertyId
+      ? await tx.property.findFirstOrThrow({ where: { id: propertyId, tenantId } })
+      : await primaryProperty(tx, tenantId);
     return {
+      propertyId: p.id,
       name: p.name,
       address: p.address,
       area: p.area,
@@ -92,11 +120,11 @@ export class DocumentsService {
   async issueReceipt(tx: Tx, tenantId: string, folio: FolioForDoc, entry: FolioEntry, balanceAfterKobo: number, issuer: Issuer) {
     const now = new Date();
     const year = lagosYear(now);
-    const { seq, number } = await this.nextNumber(tx, tenantId, 'RECEIPT', year);
+    const { seq, number } = await this.nextNumber(tx, tenantId, 'RECEIPT', year, await this.propertyScope(tx, tenantId, folio.propertyId));
     const document = buildReceiptDocument({
       folio,
       entry,
-      hotel: await this.hotelHeader(tx, tenantId),
+      hotel: await this.hotelHeader(tx, tenantId, folio.propertyId),
       number,
       issuedAt: now,
       balanceAfterKobo,
@@ -106,6 +134,7 @@ export class DocumentsService {
     const receipt = await tx.receipt.create({
       data: {
         tenantId,
+        propertyId: folio.propertyId,
         folioId: folio.id,
         entryId: entry.id,
         number,
@@ -138,11 +167,12 @@ export class DocumentsService {
     const folio = await this.loadFolio(tx, tenantId, folioId);
     const now = new Date();
     const year = lagosYear(now);
-    const { seq, number } = await this.nextNumber(tx, tenantId, kind === 'FINAL' ? 'INVOICE' : 'PROFORMA', year);
+    const { seq, number } = await this.nextNumber(tx, tenantId, kind === 'FINAL' ? 'INVOICE' : 'PROFORMA', year, await this.propertyScope(tx, tenantId, folio.propertyId));
     const doc = await this.buildInvoiceDocument(tx, tenantId, folio, { number, kind, issuedAt: now, issuer });
     const inv = await tx.guestInvoice.create({
       data: {
         tenantId,
+        propertyId: folio.propertyId,
         folioId,
         kind,
         number,
@@ -171,7 +201,7 @@ export class DocumentsService {
     return buildInvoiceDocument({
       folio,
       receiptNumbers: new Map(receipts.map((r) => [r.entryId, r.number])),
-      hotel: await this.hotelHeader(tx, tenantId),
+      hotel: await this.hotelHeader(tx, tenantId, folio.propertyId),
       ...meta,
     });
   }

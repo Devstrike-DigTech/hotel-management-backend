@@ -6,7 +6,8 @@ import { addDays, dateRange, dbDate, diffDays, fromDbDate, isIsoDate, lagosDate,
 import { DbService, type Tx } from '../../prisma/db.service.js';
 import { AuditService, userActor } from '../audit/audit.service.js';
 import { EntitlementsService } from '../entitlements/entitlements.service.js';
-import { appError, Err, primaryProperty } from '../ops/ops.helpers.js';
+import { appError, Err, firstProperty, primaryProperty } from '../ops/ops.helpers.js';
+import { scopeIds } from '../../common/property-scope.js';
 import { ACTIVE_STATUSES, unsellableByNight } from './capacity.js';
 import {
   applyAdjustment,
@@ -158,10 +159,13 @@ export class RatesService {
   // ---------------------------------------------------------------------------
 
   /** Loads plans, rules, overrides and restrictions touching [from, to] (dates, inclusive). */
-  async context(tx: Tx, tenantId: string, from: string, to: string, features?: readonly string[]): Promise<RateContext> {
+  async context(tx: Tx, tenantId: string, from: string, to: string, features?: readonly string[], propertyId?: string | null): Promise<RateContext> {
     const feats = features ?? (await this.entitlements.getEntitlements(tenantId, tx)).features;
     const promotions = feats.includes('promotions');
-    const planRows = await tx.ratePlan.findMany({ where: { tenantId }, orderBy: [{ isBar: 'desc' }, { sortOrder: 'asc' }, { name: 'asc' }] });
+    // M5: rates are per property. The given property, else the scope's, else the primary.
+    const pids = propertyId ? [propertyId] : (scopeIds(tenantId) ?? [(await firstProperty(tx, tenantId)).id]);
+    const pw = { propertyId: { in: pids } };
+    const planRows = await tx.ratePlan.findMany({ where: { tenantId, ...pw }, orderBy: [{ isBar: 'desc' }, { sortOrder: 'asc' }, { name: 'asc' }] });
     const rows = planRows.map(toPlanLike);
     const barRow = rows.find((p) => p.isBar);
     const bar = barRow ?? VIRTUAL_BAR;
@@ -171,9 +175,9 @@ export class RatesService {
       return { promotions, plans: [bar], bar, rules: [], overrides: new Map(), restrictions: [] };
     }
     const [rules, overrides, restrictions] = await Promise.all([
-      tx.rateRule.findMany({ where: { tenantId, active: true, dateFrom: { lte: dbDate(to) }, dateTo: { gte: dbDate(from) } } }),
-      tx.rateOverride.findMany({ where: { tenantId, date: { gte: dbDate(from), lte: dbDate(to) } } }),
-      tx.rateRestriction.findMany({ where: { tenantId, date: { gte: dbDate(from), lte: dbDate(to) } } }),
+      tx.rateRule.findMany({ where: { tenantId, ...pw, active: true, dateFrom: { lte: dbDate(to) }, dateTo: { gte: dbDate(from) } } }),
+      tx.rateOverride.findMany({ where: { tenantId, ...pw, date: { gte: dbDate(from), lte: dbDate(to) } } }),
+      tx.rateRestriction.findMany({ where: { tenantId, ...pw, date: { gte: dbDate(from), lte: dbDate(to) } } }),
     ]);
     return {
       promotions,
@@ -207,10 +211,10 @@ export class RatesService {
   async resolveNightlyRates(
     tx: Tx,
     tenantId: string,
-    input: { roomType: { id: string; basePriceKobo: number }; ratePlanId?: string | null; arrivalDate: string; departureDate: string; ctx?: RateContext },
+    input: { roomType: { id: string; basePriceKobo: number; propertyId?: string }; ratePlanId?: string | null; arrivalDate: string; departureDate: string; ctx?: RateContext },
   ): Promise<{ plan: PlanLike; nights: NightlyRate[]; ctx: RateContext }> {
     const dates = stayDates(input.arrivalDate, input.departureDate);
-    const ctx = input.ctx ?? (await this.context(tx, tenantId, input.arrivalDate, input.departureDate));
+    const ctx = input.ctx ?? (await this.context(tx, tenantId, input.arrivalDate, input.departureDate, undefined, input.roomType.propertyId));
     const plan = this.planFrom(ctx, input.ratePlanId);
     const nights = resolveNights({ roomType: input.roomType, plan, dates, rules: ctx.rules, overrides: ctx.overrides });
     if (!nights) {
@@ -220,8 +224,8 @@ export class RatesService {
   }
 
   /** One night's price for a reservation whose snapshot lacks that night (extensions). */
-  async priceForNight(tx: Tx, tenantId: string, roomType: { id: string; basePriceKobo: number }, ratePlanId: string | null, date: string): Promise<NightlyRate> {
-    const ctx = await this.context(tx, tenantId, date, date);
+  async priceForNight(tx: Tx, tenantId: string, roomType: { id: string; basePriceKobo: number; propertyId?: string }, ratePlanId: string | null, date: string): Promise<NightlyRate> {
+    const ctx = await this.context(tx, tenantId, date, date, undefined, roomType.propertyId);
     const plan = ctx.plans.find((p) => p.id === ratePlanId) ?? ctx.bar;
     const nights = resolveNights({ roomType, plan, dates: [date], rules: ctx.rules, overrides: ctx.overrides })
       ?? resolveNights({ roomType, plan: ctx.bar, dates: [date], rules: ctx.rules, overrides: ctx.overrides })!;
@@ -229,10 +233,10 @@ export class RatesService {
   }
 
   /** Makes sure the hotel has its BAR plan row (new hotels, lazily). */
-  async ensureBar(tx: Tx, tenantId: string): Promise<RatePlan> {
-    const existing = await tx.ratePlan.findFirst({ where: { tenantId, isBar: true } });
+  async ensureBar(tx: Tx, tenantId: string, propertyId?: string): Promise<RatePlan> {
+    const property = propertyId ? { id: propertyId } : await primaryProperty(tx, tenantId);
+    const existing = await tx.ratePlan.findFirst({ where: { tenantId, propertyId: property.id, isBar: true } });
     if (existing) return existing;
-    const property = await primaryProperty(tx, tenantId);
     return tx.ratePlan.create({
       data: {
         tenantId,
@@ -535,7 +539,7 @@ export class RatesService {
   putOverrides(user: AuthUser, dto: PutOverridesDto, ip?: string) {
     const dates = this.bulkDates(dto.from, dto.to, dto.daysOfWeek);
     return this.db.tenant(user.tenantId, async (tx) => {
-      const types = await tx.roomType.findMany({ where: { tenantId: user.tenantId, id: { in: dto.roomTypeIds } }, select: { id: true } });
+      const types = await tx.roomType.findMany({ where: { tenantId: user.tenantId, id: { in: dto.roomTypeIds } }, select: { id: true, propertyId: true } });
       if (types.length !== new Set(dto.roomTypeIds).size) throw Err.validation('roomTypeIds', 'Unknown room type');
       let updated = 0;
       for (const rt of types) {
@@ -547,8 +551,8 @@ export class RatesService {
         for (const d of dates) {
           await tx.rateOverride.upsert({
             where: { roomTypeId_date: { roomTypeId: rt.id, date: dbDate(d) } },
-            create: { tenantId: user.tenantId, roomTypeId: rt.id, date: dbDate(d), rateKobo: dto.rateKobo!, note: dto.note ?? null, updatedById: user.userId, updatedByName: user.fullName },
-            update: { rateKobo: dto.rateKobo!, note: dto.note ?? null, updatedById: user.userId, updatedByName: user.fullName },
+            create: { tenantId: user.tenantId, propertyId: rt.propertyId, roomTypeId: rt.id, date: dbDate(d), rateKobo: dto.rateKobo!, note: dto.note ?? null, source: 'MANUAL', updatedById: user.userId, updatedByName: user.fullName },
+            update: { rateKobo: dto.rateKobo!, note: dto.note ?? null, source: 'MANUAL', updatedById: user.userId, updatedByName: user.fullName },
           });
           updated++;
         }
@@ -602,7 +606,7 @@ export class RatesService {
           const empty = !next.closedToArrival && !next.closedToDeparture && !next.stopSell && !next.minNights;
           if (existing && empty) await tx.rateRestriction.delete({ where: { id: existing.id } });
           else if (existing) await tx.rateRestriction.update({ where: { id: existing.id }, data: next });
-          else if (!empty) await tx.rateRestriction.create({ data: { tenantId: user.tenantId, roomTypeId: rt, date: dbDate(d), ...next } });
+          else if (!empty) await tx.rateRestriction.create({ data: { tenantId: user.tenantId, propertyId: (await primaryProperty(tx, user.tenantId)).id, roomTypeId: rt, date: dbDate(d), ...next } });
           updated++;
         }
       }

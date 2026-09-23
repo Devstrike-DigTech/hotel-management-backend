@@ -41,11 +41,16 @@ export class CommissionService {
     };
   }
 
+  private async propertyOf(tx: Tx, reservationId: string): Promise<string> {
+    return (await tx.reservation.findUniqueOrThrow({ where: { id: reservationId }, select: { propertyId: true } })).propertyId;
+  }
+
   async accrue(tx: Tx, e: { tenantId: string; reservationId: string; amountKobo: number; baseKobo: number; bps: number; channel: ReservationSource }) {
     if (e.amountKobo <= 0) return;
     await tx.commissionEntry.create({
       data: {
         tenantId: e.tenantId,
+        propertyId: await this.propertyOf(tx, e.reservationId),
         reservationId: e.reservationId,
         kind: 'ACCRUED',
         amountKobo: e.amountKobo,
@@ -62,6 +67,7 @@ export class CommissionService {
     await tx.commissionEntry.create({
       data: {
         tenantId: e.tenantId,
+        propertyId: await this.propertyOf(tx, e.reservationId),
         reservationId: e.reservationId,
         paymentId: e.paymentId,
         kind: 'COLLECTED',
@@ -88,6 +94,7 @@ export class CommissionService {
     await tx.commissionEntry.create({
       data: {
         tenantId: e.tenantId,
+        propertyId: await this.propertyOf(tx, e.reservationId),
         reservationId: e.reservationId,
         paymentId: e.paymentId,
         kind: 'REVERSED',
@@ -111,6 +118,7 @@ export class CommissionService {
     await tx.commissionEntry.create({
       data: {
         tenantId,
+        propertyId: await this.propertyOf(tx, reservationId),
         reservationId,
         kind: 'REVERSED',
         accrual: true,

@@ -1,6 +1,7 @@
 import { HttpStatus } from '@nestjs/common';
 import { AppException, ErrorCode } from '../../common/errors/app-exception.js';
 import type { Tx } from '../../prisma/db.service.js';
+import { currentPropertyId } from '../../common/property-scope.js';
 
 /** Largest single amount accepted anywhere (₦1bn), well inside safe integers. */
 export const MAX_AMOUNT_KOBO = 100_000_000_000;
@@ -64,8 +65,23 @@ function errorText(err: unknown): string {
   }
 }
 
+/**
+ * The property the current request / job runs in (M5 property scope), or
+ * the tenant's primary (oldest) property outside a scope. The name is kept
+ * from M1-M4, when every hotel had a single property.
+ */
 export async function primaryProperty(tx: Tx, tenantId: string) {
-  const p = await tx.property.findFirst({ where: { tenantId }, orderBy: { createdAt: 'asc' } });
+  const current = currentPropertyId(tenantId);
+  const p = current
+    ? await tx.property.findFirst({ where: { id: current, tenantId } })
+    : await tx.property.findFirst({ where: { tenantId }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
+  if (!p) throw AppException.notFound('Property');
+  return p;
+}
+
+/** The tenant's oldest property, regardless of scope. */
+export async function firstProperty(tx: Tx, tenantId: string) {
+  const p = await tx.property.findFirst({ where: { tenantId }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
   if (!p) throw AppException.notFound('Property');
   return p;
 }

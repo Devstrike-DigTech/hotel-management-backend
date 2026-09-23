@@ -1,5 +1,6 @@
 import type { PaymentMethod } from '../../generated/prisma/enums.js';
 import type { Tx } from '../../prisma/db.service.js';
+import { propertySql, propertyWhere, scopeIds } from '../../common/property-scope.js';
 import { addDays, dateRange, dbDate, fromDbDate, lagosDate, lagosStartOfDay } from '../../common/time/lagos.js';
 
 export const PAYMENT_METHODS: PaymentMethod[] = ['CASH', 'TRANSFER', 'POS', 'CARD_ONLINE', 'COMPLIMENTARY', 'CITY_LEDGER'];
@@ -51,13 +52,16 @@ export const round4 = (x: number) => Math.round(x * 10_000) / 10_000;
  * (voided entries excluded). Works with any client that can read the
  * tenant's rows (a tenant transaction, or the owner connection in the seed).
  */
-export async function computeDailyFlashes(tx: Tx, tenantId: string, from: string, to: string): Promise<DailyFlash[]> {
+export async function computeDailyFlashes(tx: Tx, tenantId: string, from: string, to: string, propertyIds?: string[] | null): Promise<DailyFlash[]> {
   const dates = dateRange(from, to);
+  // M5: one property (the current scope) unless ids are given (group reports, seed).
+  const ids = scopeIds(tenantId, propertyIds);
+  const pw = propertyWhere(ids);
   const rows = await tx.$queryRaw<{ d: Date; type: string; method: string | null; n: number; amt: bigint }[]>`
     SELECT e.business_date AS d, e.type::text AS type, e.payment_method::text AS method,
            count(*)::int AS n, COALESCE(sum(e.amount_kobo), 0)::bigint AS amt
     FROM folio_entries e
-    WHERE e.tenant_id = ${tenantId}::uuid
+    WHERE e.tenant_id = ${tenantId}::uuid${propertySql(ids, 'e.property_id')}
       AND e.business_date BETWEEN ${dbDate(from)}::date AND ${dbDate(to)}::date
       AND e.type <> 'VOID'
       AND NOT EXISTS (SELECT 1 FROM folio_entries v WHERE v.ref_entry_id = e.id)
@@ -67,6 +71,7 @@ export async function computeDailyFlashes(tx: Tx, tenantId: string, from: string
   const stays = await tx.reservation.findMany({
     where: {
       tenantId,
+      ...pw,
       stayType: 'NIGHTLY',
       status: { in: ['CHECKED_IN', 'CHECKED_OUT'] },
       arrivalAt: { lt: lagosStartOfDay(addDays(to, 1)) },
@@ -79,6 +84,7 @@ export async function computeDailyFlashes(tx: Tx, tenantId: string, from: string
   const res = await tx.reservation.findMany({
     where: {
       tenantId,
+      ...pw,
       OR: [
         { checkedInAt: { gte: start, lt: end } },
         { checkedOutAt: { gte: start, lt: end } },
@@ -89,10 +95,10 @@ export async function computeDailyFlashes(tx: Tx, tenantId: string, from: string
     },
     select: { status: true, stayType: true, arrivalAt: true, checkedInAt: true, checkedOutAt: true, cancelledAt: true },
   });
-  const rooms = await tx.room.findMany({ where: { tenantId }, select: { status: true } });
+  const rooms = await tx.room.findMany({ where: { tenantId, ...pw }, select: { status: true } });
   const roomsTotal = rooms.length;
   const roomsOutOfOrder = rooms.filter((r) => r.status === 'OUT_OF_ORDER').length;
-  const openFlags = await tx.guardFlag.count({ where: { tenantId, status: { in: ['OPEN', 'ACKNOWLEDGED'] } } });
+  const openFlags = await tx.guardFlag.count({ where: { tenantId, ...pw, status: { in: ['OPEN', 'ACKNOWLEDGED'] } } });
 
   const byDate = new Map<string, DailyFlash>();
   for (const d of dates) {

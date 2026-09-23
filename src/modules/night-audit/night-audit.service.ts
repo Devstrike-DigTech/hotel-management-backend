@@ -1,3 +1,4 @@
+import { currentPropertyId, runInProperty } from '../../common/property-scope.js';
 import { CommissionService } from '../booking/commission.service.js';
 import { Injectable, Logger } from '@nestjs/common';
 import type { NightAuditRun, Prisma } from '../../generated/prisma/client.js';
@@ -74,12 +75,28 @@ export class NightAuditService {
     return this.run(user.tenantId, date, 'MANUAL', user);
   }
 
-  async run(tenantId: string, businessDate: string, trigger: JobTrigger, user?: AuthUser) {
+  async run(tenantId: string, businessDate: string, trigger: JobTrigger, user?: AuthUser): Promise<ReturnType<typeof toView> & { alreadyRun: boolean }> {
+    // M5: the audit runs per property. Without a property scope (the nightly
+    // job), run it for every property of the group and return the first.
+    const propertyId = currentPropertyId(tenantId);
+    if (!propertyId) {
+      const ids = await this.db.tenant(tenantId, (tx) =>
+        tx.property.findMany({ where: { tenantId }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], select: { id: true } }),
+      );
+      let first: (ReturnType<typeof toView> & { alreadyRun: boolean }) | null = null;
+      for (const p of ids) {
+        const r = await runInProperty(tenantId, p.id, () => this.run(tenantId, businessDate, trigger, user));
+        first ??= r;
+      }
+      if (!first) throw new Error('Tenant has no property');
+      return first;
+    }
     const now = new Date();
+    const lockKey = `night-audit:${tenantId}:${propertyId}`;
     // Claim the run (or find that it is already done).
     const claim = await this.db.tenant(tenantId, async (tx) => {
-      await advisoryLock(tx, `night-audit:${tenantId}`);
-      const existing = await tx.nightAuditRun.findUnique({ where: { tenantId_businessDate: { tenantId, businessDate: dbDate(businessDate) } } });
+      await advisoryLock(tx, lockKey);
+      const existing = await tx.nightAuditRun.findUnique({ where: { propertyId_businessDate: { propertyId, businessDate: dbDate(businessDate) } } });
       if (existing?.status === 'COMPLETED') return { run: existing, already: true };
       if (existing?.status === 'RUNNING' && now.getTime() - existing.startedAt.getTime() < STALE_RUN_MS) {
         return { run: existing, already: true };
@@ -95,14 +112,14 @@ export class NightAuditService {
       };
       const run = existing
         ? await tx.nightAuditRun.update({ where: { id: existing.id }, data })
-        : await tx.nightAuditRun.create({ data: { tenantId, businessDate: dbDate(businessDate), ...data } });
+        : await tx.nightAuditRun.create({ data: { tenantId, propertyId, businessDate: dbDate(businessDate), ...data } });
       return { run, already: false };
     });
     if (claim.already) return { ...toView(claim.run), alreadyRun: true };
 
     try {
       const run = await this.db.tenant(tenantId, async (tx) => {
-        await advisoryLock(tx, `night-audit:${tenantId}`);
+        await advisoryLock(tx, lockKey);
         const summary: AuditSummary = { roomChargesPosted: 0, roomChargesKobo: 0, noShows: 0, flagsCreated: 0 };
         const dayStart = lagosStartOfDay(businessDate);
         const dayEnd = lagosStartOfDay(addDays(businessDate, 1));
@@ -160,9 +177,10 @@ export class NightAuditService {
         const [flash] = await computeDailyFlashes(tx, tenantId, businessDate, businessDate);
         const snapshot = { ...flash, live: false };
         await tx.dailyStat.upsert({
-          where: { tenantId_date: { tenantId, date: dbDate(businessDate) } },
+          where: { propertyId_date: { propertyId, date: dbDate(businessDate) } },
           create: {
             tenantId,
+            propertyId,
             date: dbDate(businessDate),
             roomsAvailable: flash.roomsAvailable,
             roomsSold: flash.roomsSold,

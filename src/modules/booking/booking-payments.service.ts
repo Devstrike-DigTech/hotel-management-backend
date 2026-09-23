@@ -304,7 +304,7 @@ export class BookingPaymentsService {
     if (k(pay.commissionKobo) > 0) {
       await this.commission.collect(tx, { tenantId, reservationId: r.id, paymentId: pay.id, amountKobo: k(pay.commissionKobo), baseKobo: paid.amountKobo, bps: pay.commissionBps, channel: r.source });
       await tx.commissionEntry.create({
-        data: { tenantId, reservationId: r.id, paymentId: pay.id, kind: 'REVERSED', accrual: false, amountKobo: k(pay.commissionKobo), baseKobo: paid.amountKobo, commissionBps: pay.commissionBps, channel: r.source, note: 'Orphaned payment refunded in full' },
+        data: { tenantId, propertyId: r.propertyId, reservationId: r.id, paymentId: pay.id, kind: 'REVERSED', accrual: false, amountKobo: k(pay.commissionKobo), baseKobo: paid.amountKobo, commissionBps: pay.commissionBps, channel: r.source, note: 'Orphaned payment refunded in full' },
       });
     }
     const refund = await tx.bookingRefund.create({
@@ -475,6 +475,7 @@ export class BookingPaymentsService {
       return tx.bookingPayment.create({
         data: {
           tenantId: pay.tenantId,
+          propertyId: r.propertyId,
           reservationId: r.id,
           reference: BookingPaymentsService.newReference(),
           provider: this.paystack.providerName,

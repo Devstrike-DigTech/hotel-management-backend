@@ -1,9 +1,10 @@
 import { Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthGuard } from './common/guards/auth.guard.js';
 import { PermissionGuard } from './common/guards/permission.guard.js';
+import { PropertyScopeInterceptor } from './common/property-scope.interceptor.js';
 import { AppConfigModule } from './config/config.module.js';
 import { AppConfigService } from './config/app-config.service.js';
 import { AuditModule } from './modules/audit/audit.module.js';
@@ -83,6 +84,8 @@ function jobsEnabled(): boolean {
     { provide: APP_GUARD, useExisting: SubscriptionGuard },
     { provide: APP_GUARD, useExisting: FeatureGuard },
     { provide: APP_GUARD, useExisting: LimitGuard },
+    // M5: every staff request runs in its property scope.
+    { provide: APP_INTERCEPTOR, useClass: PropertyScopeInterceptor },
   ],
 })
 export class AppModule {}

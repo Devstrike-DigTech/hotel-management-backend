@@ -10,7 +10,7 @@ import { EntitlementsService } from '../entitlements/entitlements.service.js';
 import { GuestsService, type UploadedFileLike } from '../guests/guests.service.js';
 import { HousekeepingService } from '../housekeeping/housekeeping.service.js';
 import { DocumentsService } from '../invoices/documents.service.js';
-import { appError, Err, k, paginate, parseClientCreatedAt } from '../ops/ops.helpers.js';
+import { appError, Err, k, paginate, parseClientCreatedAt, primaryProperty } from '../ops/ops.helpers.js';
 import { ACTIVE_STATUSES, loadCapacity, rawFreeRooms } from '../rates/capacity.js';
 import { OBJECT_STORAGE, type ObjectStorage } from '../storage/object-storage.js';
 import { photosOf, storePhoto, type StoredPhoto } from '../storage/photos.js';
@@ -200,6 +200,7 @@ export class MaintenanceService {
     const t = await tx.maintenanceTicket.create({
       data: {
         tenantId,
+        propertyId: room?.propertyId ?? (await primaryProperty(tx, tenantId)).id,
         number,
         roomId: room?.id ?? null,
         area: input.area?.trim() || null,
@@ -486,7 +487,7 @@ export class MaintenanceService {
     const block = input.blockId
       ? await tx.roomBlock.update({ where: { id: input.blockId }, data: { startsAt, endsAt, reason: input.reason }, include: { room: true, ticket: { select: { number: true } } } })
       : await tx.roomBlock.create({
-          data: { tenantId, roomId: room.id, roomTypeId: room.roomTypeId, startsAt, endsAt, reason: input.reason, ticketId: input.ticketId ?? null, createdById: actor.id, createdByName: actor.name },
+          data: { tenantId, propertyId: room.propertyId, roomId: room.id, roomTypeId: room.roomTypeId, startsAt, endsAt, reason: input.reason, ticketId: input.ticketId ?? null, createdById: actor.id, createdByName: actor.name },
           include: { room: true, ticket: { select: { number: true } } },
         });
     const now = new Date();
@@ -658,7 +659,7 @@ export class MaintenanceService {
         const found = await tx.room.count({ where: { tenantId: user.tenantId, id: { in: dto.roomIds } } });
         if (found !== new Set(dto.roomIds).size) throw Err.validation('roomIds', 'Unknown room');
       }
-      const s = await tx.maintenanceSchedule.create({ data: { tenantId: user.tenantId, ...(this.scheduleData(dto) as Required<Pick<Prisma.MaintenanceScheduleUncheckedCreateInput, 'title' | 'category' | 'everyDays' | 'nextDueAt'>>) } });
+      const s = await tx.maintenanceSchedule.create({ data: { tenantId: user.tenantId, propertyId: (await primaryProperty(tx, user.tenantId)).id, ...(this.scheduleData(dto) as Required<Pick<Prisma.MaintenanceScheduleUncheckedCreateInput, 'title' | 'category' | 'everyDays' | 'nextDueAt'>>) } });
       await this.audit.record(tx, { tenantId: user.tenantId, actor: userActor(user), action: 'maintenance.schedule_created', entityType: 'maintenance_schedule', entityId: s.id, metadata: { title: s.title, everyDays: s.everyDays }, ip });
       return this.scheduleView(tx, s);
     });
@@ -751,6 +752,7 @@ export class MaintenanceService {
       const f = await tx.fuelLog.create({
         data: {
           tenantId: user.tenantId,
+          propertyId: (await primaryProperty(tx, user.tenantId)).id,
           date: dbDate(date),
           litres: dto.litres,
           costKobo: BigInt(dto.costKobo),

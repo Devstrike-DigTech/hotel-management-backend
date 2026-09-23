@@ -112,14 +112,16 @@ function newCode(h: HotelCtx, rand: () => number): string {
   }
 }
 
-async function nextNumber(tx: Tx, tenantId: string, kind: 'INVOICE' | 'RECEIPT', year: number) {
+async function nextNumber(tx: Tx, h: { tenantId: string; property: { id: string; invoicePrefix: string | null } }, kind: 'INVOICE' | 'RECEIPT', year: number) {
+  // M5: invoice and receipt series are per property (scope = property id).
   const rows = await tx.$queryRaw<{ last_value: number }[]>`
-    INSERT INTO document_counters (tenant_id, kind, year, last_value)
-    VALUES (${tenantId}::uuid, ${kind}::"DocumentCounterKind", ${year}, 1)
-    ON CONFLICT (tenant_id, kind, year) DO UPDATE SET last_value = document_counters.last_value + 1
+    INSERT INTO document_counters (tenant_id, kind, year, scope, last_value)
+    VALUES (${h.tenantId}::uuid, ${kind}::"DocumentCounterKind", ${year}, ${h.property.id}, 1)
+    ON CONFLICT (tenant_id, kind, year, scope) DO UPDATE SET last_value = document_counters.last_value + 1
     RETURNING last_value`;
   const seq = Number(rows[0].last_value);
-  return { seq, number: `${kind === 'INVOICE' ? 'INV' : 'RCT'}-${year}-${String(seq).padStart(6, '0')}` };
+  const pre = `${kind === 'INVOICE' ? 'INV' : 'RCT'}${h.property.invoicePrefix ? `-${h.property.invoicePrefix}` : ''}`;
+  return { seq, number: `${pre}-${year}-${String(seq).padStart(6, '0')}` };
 }
 
 async function hotelCtx(prisma: PrismaClient, slug: string, appName: string): Promise<HotelCtx | null> {
@@ -177,7 +179,7 @@ async function seedSettings(prisma: PrismaClient, cipher: FieldCipher): Promise<
       },
     });
     if (!ready) {
-      await prisma.payoutAccount.deleteMany({ where: { tenantId: p.tenantId } });
+      await prisma.payoutAccount.deleteMany({ where: { propertyId: p.id } });
       continue;
     }
     const [bankCode, bankName] = BANKS[i % BANKS.length];
@@ -195,7 +197,7 @@ async function seedSettings(prisma: PrismaClient, cipher: FieldCipher): Promise<
       settlementVerified: true,
       percentageCharge: 0,
     };
-    await prisma.payoutAccount.upsert({ where: { tenantId: p.tenantId }, create: { tenantId: p.tenantId, ...data }, update: data });
+    await prisma.payoutAccount.upsert({ where: { propertyId: p.id }, create: { tenantId: p.tenantId, propertyId: p.id, ...data }, update: data });
     payouts++;
   }
   return { payouts };
@@ -298,12 +300,13 @@ async function postNights(tx: Tx, h: HotelCtx, folioId: string, arrival: string,
     const at = lagosDateTime(i === 0 ? night : addDays(night, 1), i === 0 ? h.property.checkInTime : '02:00');
     const b = computeCharge(rate, h.comps);
     const main = await tx.folioEntry.create({
-      data: { tenantId: h.tenantId, folioId, type: 'ROOM', amountKobo: b.netKobo, description: roomNightLabel(roomLabel, night), businessDate: dbDate(night), createdAt: at },
+      data: { tenantId: h.tenantId, propertyId: h.property.id, folioId, type: 'ROOM', amountKobo: b.netKobo, description: roomNightLabel(roomLabel, night), businessDate: dbDate(night), createdAt: at },
     });
     for (const l of b.lines) {
       await tx.folioEntry.create({
         data: {
           tenantId: h.tenantId,
+          propertyId: h.property.id,
           folioId,
           type: l.code === 'SERVICE_CHARGE' ? 'SERVICE_CHARGE' : 'TAX',
           amountKobo: l.amountKobo,
@@ -341,6 +344,7 @@ async function payOnline(
   const entry = await tx.folioEntry.create({
     data: {
       tenantId: h.tenantId,
+      propertyId: h.property.id,
       folioId: stay.folio.id,
       type: 'PAYMENT',
       amountKobo: -amount,
@@ -354,6 +358,7 @@ async function payOnline(
   const pay = await tx.bookingPayment.create({
     data: {
       tenantId: h.tenantId,
+      propertyId: h.property.id,
       reservationId: stay.r.id,
       reference,
       provider: 'mock',
@@ -375,19 +380,20 @@ async function payOnline(
   });
   if (commission > 0) {
     await tx.commissionEntry.create({
-      data: { tenantId: h.tenantId, reservationId: stay.r.id, paymentId: pay.id, kind: 'COLLECTED', amountKobo: commission, baseKobo: amount, commissionBps: stay.bps, channel: stay.r.source, note: 'Split at payment (Paystack transaction charge)', createdAt: at },
+      data: { tenantId: h.tenantId, propertyId: h.property.id, reservationId: stay.r.id, paymentId: pay.id, kind: 'COLLECTED', amountKobo: commission, baseKobo: amount, commissionBps: stay.bps, channel: stay.r.source, note: 'Split at payment (Paystack transaction charge)', createdAt: at },
     });
   }
   if (opts.receipt !== false) {
     const f = await folioLike(tx, stay.folio.id);
     const balance = f.entries.reduce((a, e) => a + Number(e.amountKobo), 0);
-    const n = await nextNumber(tx, h.tenantId, 'RECEIPT', lagosYear(at));
+    const n = await nextNumber(tx, h, 'RECEIPT', lagosYear(at));
     const doc = buildReceiptDocument({ folio: f, entry, hotel: h.header, number: n.number, issuedAt: at, balanceAfterKobo: balance, issuer: null });
     const id = randomUUID();
     await tx.receipt.create({
       data: {
         id,
         tenantId: h.tenantId,
+        propertyId: h.property.id,
         folioId: stay.folio.id,
         entryId: entry.id,
         number: n.number,
@@ -461,6 +467,7 @@ async function seedReviews(tx: Tx, h: HotelCtx, reviews: ReviewSeed[], now: Date
     await tx.folioEntry.create({
       data: {
         tenantId: h.tenantId,
+        propertyId: h.property.id,
         folioId: stay.folio.id,
         type: 'PAYMENT',
         amountKobo: -total,
@@ -581,7 +588,7 @@ async function seedPalmwineOnline(tx: Tx, h: HotelCtx, now: Date, demoAccountId:
     const s = await createStay(tx, { h, rand, guest: { name: DEMO_GUEST.fullName, phone: DEMO_GUEST.phone, email: DEMO_GUEST.email, accountId: demoAccountId }, type: suite, arrival: addDays(today, 9), nights: 2, source: 'MARKETPLACE', status: 'CONFIRMED', paymentMode: 'PAY_AT_HOTEL', createdAt: created, notes: '', specialRequests: 'Anniversary: a quiet room if possible.' });
     const c = commissionFor(s.quote.totalKobo, h.commissionBps);
     if (c > 0) {
-      await tx.commissionEntry.create({ data: { tenantId: h.tenantId, reservationId: s.r.id, kind: 'ACCRUED', amountKobo: c, baseKobo: s.quote.totalKobo, commissionBps: h.commissionBps, channel: 'MARKETPLACE', note: 'Pay-at-hotel marketplace booking (receivable)', createdAt: created } });
+      await tx.commissionEntry.create({ data: { tenantId: h.tenantId, propertyId: h.property.id, reservationId: s.r.id, kind: 'ACCRUED', amountKobo: c, baseKobo: s.quote.totalKobo, commissionBps: h.commissionBps, channel: 'MARKETPLACE', note: 'Pay-at-hotel marketplace booking (receivable)', createdAt: created } });
     }
     await logMessages(tx, h, s.r.id, s.r.code, created, [
       { template: 'PAY_AT_HOTEL_CONFIRMED', channel: 'EMAIL', to: DEMO_GUEST.email, subject: `Booking confirmed: The Palmwine House (${s.r.code}), pay at the hotel`, text: 'Booking confirmed. You pay at the hotel.' },
@@ -603,13 +610,13 @@ async function seedPalmwineOnline(tx: Tx, h: HotelCtx, now: Date, demoAccountId:
     const p = await payOnline(tx, h, s, paidAt, { channel: 'card', status: 'REFUNDED' });
     const cancelledAt = hoursAgo(30);
     await tx.folioEntry.create({
-      data: { tenantId: h.tenantId, folioId: s.folio.id, type: 'REFUND', amountKobo: p.amount, description: 'Refund (online payment)', businessDate: dbDate(lagosDate(cancelledAt)), paymentMethod: 'CARD_ONLINE', paymentRef: p.reference, reason: 'Guest cancellation', createdAt: cancelledAt },
+      data: { tenantId: h.tenantId, propertyId: h.property.id, folioId: s.folio.id, type: 'REFUND', amountKobo: p.amount, description: 'Refund (online payment)', businessDate: dbDate(lagosDate(cancelledAt)), paymentMethod: 'CARD_ONLINE', paymentRef: p.reference, reason: 'Guest cancellation', createdAt: cancelledAt },
     });
     await tx.bookingRefund.create({
       data: { tenantId: h.tenantId, paymentId: p.pay.id, reservationId: s.r.id, amountKobo: p.amount, reason: 'GUEST_CANCELLED', status: 'PROCESSED', providerRefundId: 'mock_rf_seed01', attempts: 1, requestedBy: 'Guest (Damilola Fashola)', processedAt: new Date(cancelledAt.getTime() + 30_000), createdAt: cancelledAt },
     });
     if (p.commission > 0) {
-      await tx.commissionEntry.create({ data: { tenantId: h.tenantId, reservationId: s.r.id, paymentId: p.pay.id, kind: 'REVERSED', accrual: false, amountKobo: p.commission, baseKobo: p.amount, commissionBps: s.bps, channel: 'MARKETPLACE', note: 'Guest cancellation refund', createdAt: cancelledAt } });
+      await tx.commissionEntry.create({ data: { tenantId: h.tenantId, propertyId: h.property.id, reservationId: s.r.id, paymentId: p.pay.id, kind: 'REVERSED', accrual: false, amountKobo: p.commission, baseKobo: p.amount, commissionBps: s.bps, channel: 'MARKETPLACE', note: 'Guest cancellation refund', createdAt: cancelledAt } });
     }
     await tx.reservation.update({ where: { id: s.r.id }, data: { cancelledAt, cancelledBy: 'GUEST', cancelReason: 'Trip moved to next month', cancellationFeeKobo: 0 } });
     await logMessages(tx, h, s.r.id, s.r.code, cancelledAt, [
@@ -625,7 +632,7 @@ async function seedPalmwineOnline(tx: Tx, h: HotelCtx, now: Date, demoAccountId:
     const expiresAt = new Date(created.getTime() + 20 * 60_000);
     await tx.reservation.update({ where: { id: s.r.id }, data: { holdExpiresAt: expiresAt, cancelledAt: expiresAt, cancelReason: HOLD_EXPIRED_REASON, cancelledBy: 'SYSTEM' } });
     await tx.bookingPayment.create({
-      data: { tenantId: h.tenantId, reservationId: s.r.id, reference: `BKG_seedexp${s.r.code.slice(-4)}`, provider: 'mock', status: 'INITIALIZED', amountKobo: s.quote.totalKobo, commissionKobo: commissionFor(s.quote.totalKobo, s.bps), commissionBps: s.bps, subaccountCode: 'ACCT_mockseed', callbackUrl: 'http://localhost:3000/booking/confirmation', email: 'precious.o@example.ng', authorizationUrl: `http://localhost:3000/pay/mock?reference=BKG_seedexp${s.r.code.slice(-4)}`, createdAt: created },
+      data: { tenantId: h.tenantId, propertyId: h.property.id, reservationId: s.r.id, reference: `BKG_seedexp${s.r.code.slice(-4)}`, provider: 'mock', status: 'INITIALIZED', amountKobo: s.quote.totalKobo, commissionKobo: commissionFor(s.quote.totalKobo, s.bps), commissionBps: s.bps, subaccountCode: 'ACCT_mockseed', callbackUrl: 'http://localhost:3000/booking/confirmation', email: 'precious.o@example.ng', authorizationUrl: `http://localhost:3000/pay/mock?reference=BKG_seedexp${s.r.code.slice(-4)}`, createdAt: created },
     });
     await logMessages(tx, h, s.r.id, s.r.code, expiresAt, [
       { template: 'HOLD_EXPIRED', channel: 'EMAIL', to: 'precious.o@example.ng', subject: 'Your hold at The Palmwine House has expired', text: 'We released the room because payment was not completed in time.' },
@@ -641,10 +648,10 @@ async function seedPalmwineOnline(tx: Tx, h: HotelCtx, now: Date, demoAccountId:
     const paidAt = new Date(created.getTime() + 34 * 60_000);
     const p = await payOnline(tx, h, s, paidAt, { channel: 'bank_transfer', status: 'ORPHANED', orphanReason: 'LATE_NO_INVENTORY', receipt: false });
     await tx.folioEntry.create({
-      data: { tenantId: h.tenantId, folioId: s.folio.id, type: 'REFUND', amountKobo: p.amount, description: 'Refund (online payment)', businessDate: dbDate(lagosDate(paidAt)), paymentMethod: 'CARD_ONLINE', paymentRef: p.reference, reason: 'The payment arrived after the 20-minute hold ended and the room had been sold.', createdAt: paidAt },
+      data: { tenantId: h.tenantId, propertyId: h.property.id, folioId: s.folio.id, type: 'REFUND', amountKobo: p.amount, description: 'Refund (online payment)', businessDate: dbDate(lagosDate(paidAt)), paymentMethod: 'CARD_ONLINE', paymentRef: p.reference, reason: 'The payment arrived after the 20-minute hold ended and the room had been sold.', createdAt: paidAt },
     });
     if (p.commission > 0) {
-      await tx.commissionEntry.create({ data: { tenantId: h.tenantId, reservationId: s.r.id, paymentId: p.pay.id, kind: 'REVERSED', accrual: false, amountKobo: p.commission, baseKobo: p.amount, commissionBps: s.bps, channel: 'MARKETPLACE', note: 'Orphaned payment refunded in full', createdAt: paidAt } });
+      await tx.commissionEntry.create({ data: { tenantId: h.tenantId, propertyId: h.property.id, reservationId: s.r.id, paymentId: p.pay.id, kind: 'REVERSED', accrual: false, amountKobo: p.commission, baseKobo: p.amount, commissionBps: s.bps, channel: 'MARKETPLACE', note: 'Orphaned payment refunded in full', createdAt: paidAt } });
     }
     await tx.bookingRefund.create({
       data: { tenantId: h.tenantId, paymentId: p.pay.id, reservationId: s.r.id, amountKobo: p.amount, reason: 'PAYMENT_ORPHANED', status: 'FAILED', attempts: 1, error: 'Refund declined by the customer bank (account restricted). Retry or refund by transfer.', requestedBy: 'System', createdAt: paidAt },
@@ -652,6 +659,7 @@ async function seedPalmwineOnline(tx: Tx, h: HotelCtx, now: Date, demoAccountId:
     await tx.guardFlag.create({
       data: {
         tenantId: h.tenantId,
+        propertyId: h.property.id,
         rule: 'PAYMENT_ORPHANED',
         severity: 'HIGH',
         title: `Online payment for ${s.r.code} could not be applied`,
@@ -673,7 +681,7 @@ async function seedPalmwineOnline(tx: Tx, h: HotelCtx, now: Date, demoAccountId:
     const ref = `BKG_seedhold${s.r.code.slice(-4)}`;
     await tx.reservation.update({ where: { id: s.r.id }, data: { holdExpiresAt: new Date(created.getTime() + 20 * 60_000) } });
     await tx.bookingPayment.create({
-      data: { tenantId: h.tenantId, reservationId: s.r.id, reference: ref, provider: 'mock', status: 'INITIALIZED', amountKobo: s.quote.totalKobo, commissionKobo: commissionFor(s.quote.totalKobo, s.bps), commissionBps: s.bps, subaccountCode: 'ACCT_mockseed', callbackUrl: 'http://localhost:3000/booking/confirmation', email: 'seyi.oladipo@example.ng', authorizationUrl: `http://localhost:3000/pay/mock?reference=${ref}`, createdAt: created },
+      data: { tenantId: h.tenantId, propertyId: h.property.id, reservationId: s.r.id, reference: ref, provider: 'mock', status: 'INITIALIZED', amountKobo: s.quote.totalKobo, commissionKobo: commissionFor(s.quote.totalKobo, s.bps), commissionBps: s.bps, subaccountCode: 'ACCT_mockseed', callbackUrl: 'http://localhost:3000/booking/confirmation', email: 'seyi.oladipo@example.ng', authorizationUrl: `http://localhost:3000/pay/mock?reference=${ref}`, createdAt: created },
     });
     n++;
   }
@@ -688,11 +696,11 @@ async function seedPalmwineOnline(tx: Tx, h: HotelCtx, now: Date, demoAccountId:
     const f = await folioLike(tx, s.folio.id);
     const at = s.checkedOutAt!;
     const receipts = await tx.receipt.findMany({ where: { folioId: s.folio.id } });
-    const num = await nextNumber(tx, h.tenantId, 'INVOICE', lagosYear(at));
+    const num = await nextNumber(tx, h, 'INVOICE', lagosYear(at));
     const doc = buildInvoiceDocument({ folio: f, receiptNumbers: new Map(receipts.map((r) => [r.entryId, r.number])), hotel: h.header, number: num.number, kind: 'FINAL', issuedAt: at, issuer: null });
     const id = randomUUID();
     await tx.guestInvoice.create({
-      data: { id, tenantId: h.tenantId, folioId: s.folio.id, kind: 'FINAL', number: num.number, year: lagosYear(at), seq: num.seq, issuedAt: at, businessDate: dbDate(lagosDate(at)), totalKobo: doc.totals.totalKobo, balanceKobo: doc.totals.balanceKobo, guestName: doc.guest?.fullName ?? f.name, reservationCode: s.r.code, document: { ...doc, id } as unknown as Prisma.InputJsonValue },
+      data: { id, tenantId: h.tenantId, propertyId: h.property.id, folioId: s.folio.id, kind: 'FINAL', number: num.number, year: lagosYear(at), seq: num.seq, issuedAt: at, businessDate: dbDate(lagosDate(at)), totalKobo: doc.totals.totalKobo, balanceKobo: doc.totals.balanceKobo, guestName: doc.guest?.fullName ?? f.name, reservationCode: s.r.code, document: { ...doc, id } as unknown as Prisma.InputJsonValue },
     });
     n++;
   }

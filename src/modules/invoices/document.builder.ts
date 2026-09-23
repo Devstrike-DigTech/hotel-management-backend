@@ -6,6 +6,8 @@ import { folioTotals, sortEntries, voidIndex } from '../folios/folio.logic.js';
 import { k } from '../ops/ops.helpers.js';
 
 export interface HotelHeader {
+  /** M5: the issuing property. */
+  propertyId?: string;
   name: string;
   address: string;
   area: string;

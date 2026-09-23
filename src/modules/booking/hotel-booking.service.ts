@@ -150,15 +150,18 @@ export class HotelBookingService {
   }
 
   getPayoutAccount(user: AuthUser) {
-    return this.db.tenant(user.tenantId, async (tx) => this.payoutView(await tx.payoutAccount.findUnique({ where: { tenantId: user.tenantId } })));
+    return this.db.tenant(user.tenantId, async (tx) => {
+      const p = await primaryProperty(tx, user.tenantId);
+      return this.payoutView(await tx.payoutAccount.findUnique({ where: { propertyId: p.id } }));
+    });
   }
 
   async savePayoutAccount(user: AuthUser, dto: SavePayoutAccountDto, ip?: string) {
     const resolved = await this.resolveAccount(dto.bankCode, dto.accountNumber);
-    const { existing, property } = await this.db.tenant(user.tenantId, async (tx) => ({
-      existing: await tx.payoutAccount.findUnique({ where: { tenantId: user.tenantId } }),
-      property: await primaryProperty(tx, user.tenantId),
-    }));
+    const { existing, property } = await this.db.tenant(user.tenantId, async (tx) => {
+      const property = await primaryProperty(tx, user.tenantId);
+      return { existing: await tx.payoutAccount.findUnique({ where: { propertyId: property.id } }), property };
+    });
     const businessName = dto.businessName?.trim() || property.name;
     const sub = existing
       ? await this.paystack.updateSubaccount(existing.subaccountCode, { businessName, bankCode: dto.bankCode, accountNumber: dto.accountNumber })
@@ -176,8 +179,8 @@ export class HotelBookingService {
         settlementVerified: sub.verified,
         percentageCharge: 0,
       };
-      const saved = await tx.payoutAccount.upsert({ where: { tenantId: user.tenantId }, create: { tenantId: user.tenantId, ...data }, update: data });
-      await tx.property.updateMany({ where: { tenantId: user.tenantId }, data: { payoutReady: true } });
+      const saved = await tx.payoutAccount.upsert({ where: { propertyId: property.id }, create: { tenantId: user.tenantId, propertyId: property.id, ...data }, update: data });
+      await tx.property.updateMany({ where: { tenantId: user.tenantId, id: property.id }, data: { payoutReady: true } });
       await this.audit.record(tx, {
         tenantId: user.tenantId,
         actor: userActor(user),
