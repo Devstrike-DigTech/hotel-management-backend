@@ -100,10 +100,8 @@ export class PlatformService {
 
   metrics(now: Date = new Date()) {
     return this.db.system(async (tx) => {
-      const [tenants, plans] = await Promise.all([
-        tx.tenant.findMany({ include: tenantRowInclude }),
-        tx.plan.findMany({ orderBy: { sortOrder: 'asc' } }),
-      ]);
+      const tenants = await tx.tenant.findMany({ include: tenantRowInclude });
+      const plans = await tx.plan.findMany({ orderBy: { sortOrder: 'asc' } });
       const subs = await tx.subscription.findMany({ include: { plan: true } });
 
       let mrrKobo = 0;
@@ -182,16 +180,14 @@ export class PlatformService {
     const where: Prisma.TenantWhereInput = and.length ? { AND: and } : {};
 
     return this.db.system(async (tx) => {
-      const [rows, total] = await Promise.all([
-        tx.tenant.findMany({
-          where,
-          include: tenantRowInclude,
-          orderBy: { createdAt: 'desc' },
-          skip: (page - 1) * pageSize,
-          take: pageSize,
-        }),
-        tx.tenant.count({ where }),
-      ]);
+      const rows = await tx.tenant.findMany({
+        where,
+        include: tenantRowInclude,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      });
+      const total = await tx.tenant.count({ where });
       return { items: rows.map(toTenantRow), total, page, pageSize };
     });
   }
@@ -210,22 +206,20 @@ export class PlatformService {
       },
     });
     if (!t) throw AppException.notFound('Tenant');
-    const [owner, invoices, activity] = await Promise.all([
-      tx.user.findFirst({
-        where: { tenantId: id, role: 'OWNER' },
-        orderBy: { createdAt: 'asc' },
-      }),
-      tx.invoice.findMany({
-        where: { tenantId: id },
-        orderBy: { createdAt: 'desc' },
-        take: 10,
-      }),
-      tx.auditLog.findMany({
-        where: { tenantId: id },
-        orderBy: { createdAt: 'desc' },
-        take: 10,
-      }),
-    ]);
+    const owner = await tx.user.findFirst({
+      where: { tenantId: id, role: 'OWNER' },
+      orderBy: { createdAt: 'asc' },
+    });
+    const invoices = await tx.invoice.findMany({
+      where: { tenantId: id },
+      orderBy: { createdAt: 'desc' },
+      take: 10,
+    });
+    const activity = await tx.auditLog.findMany({
+      where: { tenantId: id },
+      orderBy: { createdAt: 'desc' },
+      take: 10,
+    });
     const ent = t.subscription
       ? await this.entitlements.getEntitlements(id, tx)
       : null;

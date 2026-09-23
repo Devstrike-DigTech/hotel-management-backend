@@ -87,11 +87,10 @@ export class EntitlementsService {
 
   async getUsage(tenantId: string, tx?: Tx): Promise<Usage> {
     const run = async (t: Tx): Promise<Usage> => {
-      const [rooms, staff, properties] = await Promise.all([
-        t.room.count({ where: { tenantId } }),
-        t.user.count({ where: { tenantId, isActive: true } }),
-        t.property.count({ where: { tenantId } }),
-      ]);
+      // Sequential on purpose: queries in one transaction share a connection.
+      const rooms = await t.room.count({ where: { tenantId } });
+      const staff = await t.user.count({ where: { tenantId, isActive: true } });
+      const properties = await t.property.count({ where: { tenantId } });
       return { rooms, staff, properties };
     };
     return tx ? run(tx) : this.db.tenant(tenantId, run);

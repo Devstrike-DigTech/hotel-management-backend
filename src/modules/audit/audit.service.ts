@@ -88,15 +88,13 @@ export class AuditService {
     pageSize: number,
   ): Promise<{ items: AuditItem[]; total: number }> {
     return this.db.tenant(tenantId, async (tx) => {
-      const [rows, total] = await Promise.all([
-        tx.auditLog.findMany({
-          where: { tenantId },
-          orderBy: { createdAt: 'desc' },
-          skip: (page - 1) * pageSize,
-          take: pageSize,
-        }),
-        tx.auditLog.count({ where: { tenantId } }),
-      ]);
+      const rows = await tx.auditLog.findMany({
+        where: { tenantId },
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      });
+      const total = await tx.auditLog.count({ where: { tenantId } });
       return { items: rows.map(toAuditItem), total };
     });
   }

@@ -36,6 +36,8 @@ export function normaliseLimits(raw: unknown): Record<string, number> {
   const out: Record<string, number> = {};
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
     for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof v !== 'number' && typeof v !== 'string') continue;
+      if (typeof v === 'string' && v.trim() === '') continue;
       const n = typeof v === 'number' ? v : Number(v);
       if (Number.isFinite(n)) out[k] = Math.trunc(n);
     }

@@ -13,10 +13,8 @@ export class MeService {
 
   async get(auth: AuthUser) {
     return this.db.tenant(auth.tenantId, async (tx) => {
-      const [user, tenant] = await Promise.all([
-        tx.user.findUnique({ where: { id: auth.userId } }),
-        tx.tenant.findUnique({ where: { id: auth.tenantId } }),
-      ]);
+      const user = await tx.user.findUnique({ where: { id: auth.userId } });
+      const tenant = await tx.tenant.findUnique({ where: { id: auth.tenantId } });
       if (!user || !tenant || !user.isActive) {
         throw AppException.unauthorized('This account is no longer active');
       }

@@ -137,22 +137,21 @@ export class PublicService {
     }
 
     const where: Prisma.PropertyWhereInput = { AND: and };
-    const [rows, total] = await this.db.public((tx) =>
-      Promise.all([
-        tx.property.findMany({
-          where,
-          include: { roomTypes: { select: { basePriceKobo: true } } },
-          orderBy: [
-            { featured: 'desc' },
-            { rating: { sort: 'desc', nulls: 'last' } },
-            { name: 'asc' },
-          ],
-          skip: (page - 1) * pageSize,
-          take: pageSize,
-        }),
-        tx.property.count({ where }),
-      ]),
-    );
+    const { rows, total } = await this.db.public(async (tx) => {
+      const rows = await tx.property.findMany({
+        where,
+        include: { roomTypes: { select: { basePriceKobo: true } } },
+        orderBy: [
+          { featured: 'desc' },
+          { rating: { sort: 'desc', nulls: 'last' } },
+          { name: 'asc' },
+        ],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      });
+      const total = await tx.property.count({ where });
+      return { rows, total };
+    });
 
     return {
       items: rows.map((p) =>
