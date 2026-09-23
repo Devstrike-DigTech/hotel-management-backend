@@ -22,6 +22,7 @@ import { RoomsModule } from './modules/rooms/rooms.module.js';
 import { BillingModule } from './modules/billing/billing.module.js';
 import { DashboardModule } from './modules/dashboard/dashboard.module.js';
 import { JobsModule } from './modules/jobs/jobs.module.js';
+import { GuestSideModule } from './modules/guest-side.module.js';
 import { OperationsModule } from './modules/operations.module.js';
 import { PlatformModule } from './modules/platform/platform.module.js';
 import { PropertyModule } from './modules/property/property.module.js';
@@ -57,6 +58,7 @@ function jobsEnabled(): boolean {
     PropertyModule,
     StaffModule,
     OperationsModule,
+    GuestSideModule,
     BillingModule,
     PlatformModule,
     // BullMQ workers + the daily dunning schedule. Skipped when

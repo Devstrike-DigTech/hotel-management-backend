@@ -292,6 +292,8 @@ export class AvailabilityService {
         children: r.children,
         source: r.source,
         balanceKobo: r.folio ? (balances.get(r.folio.id) ?? 0) : 0,
+        paymentMode: r.paymentMode,
+        holdExpiresAt: r.status === 'PENDING' && r.paymentMode === 'ONLINE' ? (r.holdExpiresAt?.toISOString() ?? null) : null,
       }));
       return {
         from,

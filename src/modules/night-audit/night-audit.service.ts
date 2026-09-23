@@ -1,3 +1,4 @@
+import { CommissionService } from '../booking/commission.service.js';
 import { Injectable, Logger } from '@nestjs/common';
 import type { NightAuditRun, Prisma } from '../../generated/prisma/client.js';
 import type { JobTrigger } from '../../generated/prisma/enums.js';
@@ -49,6 +50,7 @@ export class NightAuditService {
     private readonly docs: DocumentsService,
     private readonly guard: GuardService,
     private readonly audit: AuditService,
+    private readonly commission: CommissionService,
   ) {}
 
   list(user: AuthUser, page?: number, pageSize?: number) {
@@ -140,6 +142,7 @@ export class NightAuditService {
             data: { status: 'NO_SHOW', noShowAt: new Date(), cancelReason: `Not checked in by the night audit of ${humanDate(businessDate)}` },
           });
           summary.noShows = unarrived.length;
+          await this.commission.reverseAccruedMany(tx, tenantId, unarrived.map((u) => u.id), 'No-show (night audit)');
         }
 
         // 3. Revenue Guard sweep.

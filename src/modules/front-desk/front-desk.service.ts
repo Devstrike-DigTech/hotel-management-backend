@@ -1,3 +1,4 @@
+import { HotelBookingService } from '../booking/hotel-booking.service.js';
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '../../generated/prisma/client.js';
 import { RoomStatus } from '../../generated/prisma/enums.js';
@@ -20,6 +21,7 @@ export class FrontDeskService {
     private readonly ledger: LedgerService,
     private readonly shifts: ShiftsService,
     private readonly entitlements: EntitlementsService,
+    private readonly hotelBooking: HotelBookingService,
   ) {}
 
   async todayTx(tx: Tx, user: AuthUser, now = new Date()) {
@@ -57,6 +59,8 @@ export class FrontDeskService {
       balanceKobo: r.folio ? (balances.get(r.folio.id) ?? 0) : 0,
       registrationComplete: registrationComplete(r, r.guest),
       overdue: r.status === 'CHECKED_IN' && r.departureAt < now,
+      paymentMode: r.paymentMode,
+      holdExpiresAt: r.status === 'PENDING' && r.paymentMode === 'ONLINE' ? (r.holdExpiresAt?.toISOString() ?? null) : null,
     });
     const arrivalDay = (r: Row) => lagosDate(r.arrivalAt) === today || (r.checkedInAt && lagosDate(r.checkedInAt) === today);
     const arrivals = rows.filter((r) => ['PENDING', 'CONFIRMED', 'CHECKED_IN'].includes(r.status) && arrivalDay(r));
@@ -89,6 +93,7 @@ export class FrontDeskService {
       rooms: { total: Object.values(byStatus).reduce((a, b) => a + b, 0), byStatus },
       openFlags,
       myShift: await this.shifts.currentTx(tx, user),
+      online: await this.hotelBooking.onlineCountsTx(tx, user.tenantId, now),
     };
   }
 
@@ -103,6 +108,7 @@ export class FrontDeskService {
       frontDesk: { businessDate: t.businessDate, ...t.counts },
       openFlags: t.openFlags,
       myShift: t.myShift,
+      online: t.online,
     };
   }
 }

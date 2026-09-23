@@ -35,6 +35,12 @@ import {
   userNames,
 } from '../ops/ops.helpers.js';
 import { ACTIVE, AvailabilityService } from './availability.service.js';
+import { runAfter, type After } from '../booking/booking-payments.service.js';
+import { CancellationService } from '../booking/cancellation.service.js';
+import { CommissionService } from '../booking/commission.service.js';
+import { GuestJobsService } from '../booking/guest-jobs.service.js';
+import { HotelBookingService } from '../booking/hotel-booking.service.js';
+import { Logger } from '@nestjs/common';
 import type {
   CancelDto,
   CheckInDto,
@@ -93,7 +99,13 @@ export class ReservationsService {
     private readonly guard: GuardService,
     private readonly docs: DocumentsService,
     private readonly housekeeping: HousekeepingService,
+    private readonly hotelBooking: HotelBookingService,
+    private readonly cancellation: CancellationService,
+    private readonly commission: CommissionService,
+    private readonly guestJobs: GuestJobsService,
   ) {}
+
+  private readonly logger = new Logger(ReservationsService.name);
 
   // ---------------------------------------------------------------------------
   // Views
@@ -125,6 +137,8 @@ export class ReservationsService {
       checkedOutAt: r.checkedOutAt?.toISOString() ?? null,
       createdAt: r.createdAt.toISOString(),
       updatedAt: r.updatedAt.toISOString(),
+      paymentMode: r.paymentMode,
+      holdExpiresAt: r.status === 'PENDING' && r.paymentMode === 'ONLINE' ? (r.holdExpiresAt?.toISOString() ?? null) : null,
     };
   }
 
@@ -162,6 +176,7 @@ export class ReservationsService {
       clientCreatedAt: r.clientCreatedAt?.toISOString() ?? null,
       createdBy: r.createdById ? { id: r.createdById, fullName: names.get(r.createdById) ?? 'Former staff member' } : null,
       guest: this.guests.toView(r.guest, stats.get(r.guestId)),
+      online: await this.hotelBooking.onlineInfo(tx, r, r.guest.guestAccountId),
     };
   }
 
@@ -447,11 +462,26 @@ export class ReservationsService {
     });
   }
 
-  cancel(user: AuthUser, id: string, dto: CancelDto, ip?: string) {
-    return this.db.tenant(user.tenantId, async (tx) => {
+  async cancel(user: AuthUser, id: string, dto: CancelDto, ip?: string) {
+    let after: After | null = null;
+    const result = await this.db.tenant(user.tenantId, async (tx) => {
       const r = await this.load(tx, user.tenantId, id);
       if (r.status !== 'PENDING' && r.status !== 'CONFIRMED') throw Err.invalidState(r.status, ['PENDING', 'CONFIRMED'], 'This reservation');
-      await tx.reservation.update({ where: { id }, data: { status: 'CANCELLED', cancelledAt: new Date(), cancelReason: dto.reason } });
+      if (r.paymentMode) {
+        // Online booking: the hotel refunds in full (no fee), commission is reversed, the guest is told.
+        const paid = await tx.bookingPayment.count({ where: { reservationId: r.id, status: { in: ['SUCCEEDED', 'PARTIALLY_REFUNDED'] } } });
+        if (paid && dto.feeKobo) throw AppException.badRequest('A booking paid online is refunded in full when the hotel cancels it; leave the fee out');
+        const res = await this.cancellation.cancelTx(tx, user.tenantId, r.id, {
+          by: 'HOTEL',
+          reason: dto.reason,
+          actor: userActor(user),
+          ledgerActor: actorOf(user),
+          ip,
+        });
+        after = res.after;
+        return null;
+      }
+      await tx.reservation.update({ where: { id }, data: { status: 'CANCELLED', cancelledAt: new Date(), cancelReason: dto.reason, cancelledBy: 'HOTEL' } });
       if (dto.feeKobo && r.folio) {
         const folio = await this.docs.loadFolio(tx, user.tenantId, r.folio.id);
         await this.ledger.postCharge(tx, user.tenantId, folio, { type: 'EXTRA', description: `Cancellation fee (${r.code})`, amountKobo: dto.feeKobo }, actorOf(user));
@@ -467,6 +497,9 @@ export class ReservationsService {
       });
       return this.detail(tx, user.tenantId, id);
     });
+    if (result) return result;
+    if (after) await runAfter(after, this.logger);
+    return this.get(user, id);
   }
 
   noShow(user: AuthUser, id: string, dto: NoShowDto, ip?: string) {
@@ -475,6 +508,7 @@ export class ReservationsService {
       if (r.status !== 'PENDING' && r.status !== 'CONFIRMED') throw Err.invalidState(r.status, ['PENDING', 'CONFIRMED'], 'This reservation');
       if (lagosDate(r.arrivalAt) > lagosDate()) throw AppException.badRequest('A guest can only be marked no-show on or after the arrival date');
       await tx.reservation.update({ where: { id }, data: { status: 'NO_SHOW', noShowAt: new Date(), cancelReason: dto.reason ?? null } });
+      await this.commission.reverseAccrued(tx, user.tenantId, r.id, 'No-show');
       if (dto.feeKobo && r.folio) {
         const folio = await this.docs.loadFolio(tx, user.tenantId, r.folio.id);
         await this.ledger.postCharge(tx, user.tenantId, folio, { type: 'EXTRA', description: `No-show fee (${r.code})`, amountKobo: dto.feeKobo }, actorOf(user));
@@ -751,6 +785,9 @@ export class ReservationsService {
         ip,
       });
       return { reservation: await this.detail(tx, user.tenantId, id), invoice };
+    }).then(async (out) => {
+      await runAfter(() => this.guestJobs.scheduleReviewRequest(user.tenantId, id, new Date(out.reservation.checkedOutAt ?? Date.now())), this.logger);
+      return out;
     });
   }
 

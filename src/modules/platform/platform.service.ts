@@ -1,3 +1,4 @@
+import { PlatformMarketplaceService } from '../booking/platform-marketplace.service.js';
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '../../generated/prisma/client.js';
 import {
@@ -96,6 +97,7 @@ export class PlatformService {
     private readonly db: DbService,
     private readonly audit: AuditService,
     private readonly entitlements: EntitlementsService,
+    private readonly marketplace: PlatformMarketplaceService,
   ) {}
 
   metrics(now: Date = new Date()) {
@@ -164,7 +166,7 @@ export class PlatformService {
         newTenants30d,
         signupsByWeek: weeks.map((week) => ({ week, count: counts.get(week)! })),
       };
-    });
+    }).then(async (m) => ({ ...m, marketplace: await this.marketplace.metricsBlock(now) }));
   }
 
   tenants(q: TenantListQueryDto) {
