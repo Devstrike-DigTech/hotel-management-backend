@@ -4,6 +4,7 @@ import type { Prisma } from '../generated/prisma/client.js';
 import { AppConfigService } from '../config/app-config.service.js';
 import { PlatformPrismaService } from './platform-prisma.service.js';
 import { PrismaService } from './prisma.service.js';
+import { idempotencyContext } from '../modules/idempotency/idempotency.context.js';
 
 /** The client handed to callbacks: a Prisma interactive transaction. */
 export type Tx = Prisma.TransactionClient;
@@ -53,9 +54,19 @@ export class DbService {
     }
     const id = tenantId.toLowerCase();
     const sig = signContext(this.secret, `tenant:${id}`);
+    const idem = idempotencyContext.getStore();
     return this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.tenant_id', ${id}, true), set_config('app.context_sig', ${sig}, true)`;
-      return fn(tx);
+      const result = await fn(tx);
+      if (idem && idem.tenantId.toLowerCase() === id) {
+        // Mark the request's Idempotency-Key as applied in the same
+        // transaction as its writes. txid_current_if_assigned() is non-null
+        // only if this transaction has written something, so read-only
+        // transactions leave the key retryable.
+        await tx.$executeRaw`UPDATE idempotency_keys SET applied = true
+          WHERE tenant_id = ${id}::uuid AND key = ${idem.key} AND NOT applied AND txid_current_if_assigned() IS NOT NULL`;
+      }
+      return result;
     }, TX_OPTIONS);
   }
 

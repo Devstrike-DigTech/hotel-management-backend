@@ -9,12 +9,15 @@ import type { AppRequest } from '../../common/auth-types.js';
 import { AppException, ErrorCode } from '../../common/errors/app-exception.js';
 import { DbService } from '../../prisma/db.service.js';
 import { isUniqueViolation } from '../ops/ops.helpers.js';
+import { idempotencyContext } from './idempotency.context.js';
 
 export const IDEMPOTENCY_HEADER = 'idempotency-key';
 export const REPLAY_HEADER = 'Idempotent-Replayed';
 const KEY_RE = /^[A-Za-z0-9_.:-]{8,128}$/;
 export const IDEMPOTENCY_TTL_MS = 72 * 3_600_000;
 const SAFE = new Set(['GET', 'HEAD', 'OPTIONS']);
+/** An unapplied reservation older than this is treated as abandoned (the process died before writing). */
+export const IDEMPOTENCY_LEASE_MS = 2 * 60_000;
 
 /** Stable JSON: object keys sorted, so field order does not change the fingerprint. */
 export function stableStringify(v: unknown): string {
@@ -35,9 +38,25 @@ export function fingerprint(method: string, path: string, body: unknown): string
 
 /**
  * Offline-safe retries. A mutating hotel request carrying `Idempotency-Key`
- * runs once per (tenant, key); a 2xx result is stored for 72 hours and
- * replayed verbatim (with `Idempotent-Replayed: true`). Errors release the
- * key so the client can fix the cause and retry with the same key.
+ * runs at most once per (tenant, key):
+ *
+ * 1. The key is reserved first in its own committed transaction (row with
+ *    completed = false). A concurrent duplicate sees the row and gets
+ *    409 IDEMPOTENCY_IN_PROGRESS; the primary key makes the race exact.
+ * 2. The handler runs inside an AsyncLocalStorage context. Every business
+ *    transaction that writes data sets `applied = true` on the key row as its
+ *    last statement (see DbService.tenant), so "the writes committed" and "the
+ *    key is applied" are one atomic fact.
+ * 3. A 2xx response is stored (completed = true) for 72 hours and replayed
+ *    verbatim with `Idempotent-Replayed: true`.
+ *
+ * Failure handling: an error releases the key only if nothing was applied,
+ * so the client can fix the cause and retry. If the process dies after the
+ * writes committed but before the response was stored, the key stays
+ * applied-but-incomplete and every retry gets 409 IDEMPOTENCY_IN_PROGRESS:
+ * the action is never applied twice (the client reconciles by reading the
+ * resource). An unapplied reservation older than the lease (2 minutes) is
+ * considered abandoned and may be taken over by a retry.
  */
 @Injectable()
 export class IdempotencyInterceptor implements NestInterceptor {
@@ -72,9 +91,12 @@ export class IdempotencyInterceptor implements NestInterceptor {
           res.status(stored.status);
           return of(stored.body);
         }
-        return next.handle().pipe(
-          mergeMap((body) => from(this.complete(tenantId, key, status, body).then(() => body))),
-          catchError((err) => from(this.release(tenantId, key)).pipe(mergeMap(() => throwError(() => err)))),
+        const handled = new Observable<unknown>((subscriber) =>
+          idempotencyContext.run({ tenantId, key }, () => next.handle().subscribe(subscriber)),
+        );
+        return handled.pipe(
+          mergeMap((body) => from(idempotencyContext.exit(() => this.complete(tenantId, key, status, body)).then(() => body))),
+          catchError((err) => from(idempotencyContext.exit(() => this.release(tenantId, key))).pipe(mergeMap(() => throwError(() => err)))),
         );
       }),
     );
@@ -94,10 +116,22 @@ export class IdempotencyInterceptor implements NestInterceptor {
               'This Idempotency-Key was already used for a different request',
             );
           }
-          if (!existing.completed) {
+          if (existing.completed) return { status: existing.responseStatus ?? 200, body: existing.responseBody };
+          const abandoned = !existing.applied && now.getTime() - existing.createdAt.getTime() > IDEMPOTENCY_LEASE_MS;
+          if (!abandoned) {
+            throw new AppException(HttpStatus.CONFLICT, 'IDEMPOTENCY_IN_PROGRESS', 'A request with this Idempotency-Key is still being processed', {
+              applied: existing.applied,
+            });
+          }
+          // Take over an abandoned reservation (only one retry can win).
+          const won = await tx.idempotencyKey.updateMany({
+            where: { tenantId, key, completed: false, applied: false, createdAt: existing.createdAt },
+            data: { createdAt: now },
+          });
+          if (won.count !== 1) {
             throw new AppException(HttpStatus.CONFLICT, 'IDEMPOTENCY_IN_PROGRESS', 'A request with this Idempotency-Key is still being processed');
           }
-          return { status: existing.responseStatus ?? 200, body: existing.responseBody };
+          return null;
         }
         if (existing) await tx.idempotencyKey.delete({ where: { tenantId_key: { tenantId, key } } });
         await tx.idempotencyKey.create({
@@ -130,7 +164,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
 
   private async release(tenantId: string, key: string): Promise<void> {
     await this.db
-      .tenant(tenantId, (tx) => tx.idempotencyKey.deleteMany({ where: { tenantId, key, completed: false } }))
+      .tenant(tenantId, (tx) => tx.idempotencyKey.deleteMany({ where: { tenantId, key, completed: false, applied: false } }))
       .catch(() => undefined);
   }
 }

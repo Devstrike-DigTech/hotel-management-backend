@@ -362,6 +362,13 @@ document shared with the admin app. This section explains the rules.
 - Moving, extending or shortening a stay re-runs the same checks. Early
   check-out moves the departure to now; early check-in moves the arrival.
 - Availability is per hotel night: night D is `[D check-in, D+1 check-out)`.
+- Room picker (`GET /availability/rooms`): `free` means no active stay overlaps
+  the window, which is right for future bookings (a room whose guest leaves
+  in the morning is free tonight). For a check-in now, pass `forCheckIn=true`:
+  the window starts now, so a room with a guest still checked in is not free
+  even if they leave later today. `checkInReady` (free, clean, nobody in it
+  now) and `reason` (OUT_OF_ORDER, OCCUPIED, BOOKED, DIRTY) tell the desk
+  which rooms can take the guest.
 
 ### Check-in and check-out
 
@@ -457,10 +464,16 @@ sweeps never duplicate. Locked rules are skipped (and shown as locked by
   snapshots `DailyStat`. A `night_audit_runs` row per (tenant, business date)
   makes it idempotent; a failed run can be retried and a stuck one is taken
   over after 15 minutes. `POST /night-audit/run` runs it on demand.
-- **Reports** are computed from the ledger (voided lines excluded): rooms sold
-  (room-nights), occupancy, ADR, RevPAR, revenue by type, taxes, payments by
-  method, day use, arrivals, departures, no-shows. Where a night-audit
-  snapshot exists, the daily flash uses it.
+- **Reports.** Occupancy comes from the stays: `roomsSold` for night D counts
+  nightly stays checked in or out with arrival date <= D < departure date, so
+  tonight's guests count before the night audit posts their charge. Money
+  comes from the ledger (voided lines excluded): `roomNightsPosted` and
+  `roomRevenuePostedKobo` are the posted room charges, ADR is posted revenue
+  per posted night, RevPAR is posted revenue per available room; plus revenue
+  by type, taxes, payments by method, day use, arrivals, departures, no-shows.
+  Where a night-audit snapshot exists, the daily flash uses it.
+- Text meant for people (folio lines, digests, flag details) uses Lagos dates
+  such as `Tue 22 Sep 2026`; machine fields stay ISO.
 - **Owner digest** (`owner_whatsapp_alerts`, 23:00 Lagos): rooms sold,
   occupancy, day use, revenue and money received by method, and the top three
   open flags. Delivery goes through a `DigestProvider`: WhatsApp Cloud API when
@@ -488,12 +501,22 @@ sweeps never duplicate. Locked rules are skipped (and shown as locked by
 ### Offline front desk: Idempotency-Key and clientCreatedAt
 
 - Any mutating hotel request may carry `Idempotency-Key`. The interceptor
-  reserves `(tenant, key)` with a fingerprint of method, path and body, runs
-  the handler once, and stores a 2xx response for 72 hours. A replay returns
-  the stored body and status with `Idempotent-Replayed: true`; the same key
-  with a different request gets `422 IDEMPOTENCY_CONFLICT`; a concurrent
-  duplicate gets `409 IDEMPOTENCY_IN_PROGRESS`. Errors release the key so the
-  outbox can retry after fixing the cause. Expired keys are purged hourly.
+  reserves `(tenant, key)` with a fingerprint of method, path and body in its
+  own committed transaction (a concurrent duplicate gets
+  `409 IDEMPOTENCY_IN_PROGRESS`), then runs the handler inside an
+  AsyncLocalStorage context. Every business transaction of that request that
+  writes data sets `applied = true` on the key row as its last statement
+  (`DbService.tenant`, guarded by `txid_current_if_assigned()`), so the writes
+  and the "used" mark commit atomically. A 2xx response is then stored for 72
+  hours and replayed verbatim with `Idempotent-Replayed: true`; the same key
+  with a different request gets `422 IDEMPOTENCY_CONFLICT`.
+- If the request fails and nothing was applied, the key is released so the
+  outbox can retry after fixing the cause. If the process dies after the
+  writes committed but before the response was stored, the key stays applied
+  and retries get `409` with `details.applied = true`: the action is never
+  applied twice, and the client reconciles by reading the resource. An
+  unapplied reservation older than two minutes is treated as abandoned and a
+  retry takes it over. Expired keys are purged hourly.
 - Offline-queued actions send `clientCreatedAt` (at most 72 hours old). It is
   stored on the reservation or folio entries and in the audit metadata, so
   the audit trail shows when things really happened at the desk.

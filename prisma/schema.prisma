@@ -1036,6 +1036,9 @@ model IdempotencyKey {
   key            String
   fingerprint    String
   completed      Boolean  @default(false)
+  /// Set inside the request's business transaction(s) that wrote data, so it
+  /// commits or rolls back with them: an applied key is never executed again.
+  applied        Boolean  @default(false)
   responseStatus Int?     @map("response_status")
   responseBody   Json?    @map("response_body")
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
