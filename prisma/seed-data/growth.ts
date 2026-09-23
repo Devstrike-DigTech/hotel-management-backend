@@ -614,7 +614,7 @@ export async function seedGrowth(prisma: PrismaClient, tenantSlug: string): Prom
       },
       {
         tenantId, propertyId: property.id, name: 'Detty December +35%', dateFrom: dbDate(`${decStart}-12-15`), dateTo: dbDate(`${decStart + 1}-01-05`),
-        adjustmentType: 'PERCENT', adjustmentValue: 3_500, priority: 50, color: 'terracotta',
+        adjustmentType: 'PERCENT', adjustmentValue: 3_500, priority: 50, color: 'laterite',
       },
       {
         tenantId, propertyId: property.id, name: 'Easter +20%', dateFrom: dbDate(addDays(easter, -3)), dateTo: dbDate(addDays(easter, 1)),

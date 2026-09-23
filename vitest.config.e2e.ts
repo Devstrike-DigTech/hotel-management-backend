@@ -32,6 +32,10 @@ const env: Record<string, string> = {
   REDIS_URL: 'redis://localhost:6379',
   ADMIN_URL: 'http://localhost:3001',
   WEB_URL: 'http://localhost:3000',
+  // M4: trusted proxy header and the WhatsApp webhook (signature and verify token).
+  TRUSTED_PROXY_SECRET: 'e2e-trusted-proxy-secret-0123456789',
+  WHATSAPP_APP_SECRET: 'e2e-whatsapp-app-secret',
+  WHATSAPP_VERIFY_TOKEN: 'e2e-whatsapp-verify-token',
 };
 
 // The global setup runs in this (main) process, so it needs the same values.
