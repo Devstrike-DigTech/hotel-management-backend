@@ -98,6 +98,13 @@ model Tenant {
   housekeepingTasks HousekeepingTask[]
   idempotencyKeys   IdempotencyKey[]
 
+  bookingPayments   BookingPayment[]
+  bookingRefunds    BookingRefund[]
+  commissionEntries CommissionEntry[]
+  payoutAccount     PayoutAccount?
+  reviews           Review[]
+  notificationLogs  NotificationLog[]
+
   @@map("tenants")
 }
 
@@ -129,8 +136,27 @@ model Property {
   reviewCount            Int       @default(0) @map("review_count")
   customDomain           String?   @unique @map("custom_domain")
   customDomainVerifiedAt DateTime? @map("custom_domain_verified_at") @db.Timestamptz(3)
-  createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt              DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  // M3: online booking settings and cancellation policy.
+  onlineBookingEnabled     Boolean @default(true) @map("online_booking_enabled")
+  allowPayAtHotel          Boolean @default(true) @map("allow_pay_at_hotel")
+  requireCardForPayAtHotel Boolean @default(false) @map("require_card_for_pay_at_hotel")
+  freeCancellationHours    Int     @default(48) @map("free_cancellation_hours")
+  lateCancellationFeePct   Int     @default(100) @map("late_cancellation_fee_pct")
+  noShowFeePct             Int     @default(100) @map("no_show_fee_pct")
+  preArrivalMessage        String  @default("") @map("pre_arrival_message")
+  /// True once a Paystack subaccount exists (online payments possible).
+  payoutReady              Boolean @default(false) @map("payout_ready")
+  // M3: review aggregates (maintained on every review change).
+  ratingCleanliness        Float?  @map("rating_cleanliness")
+  ratingService            Float?  @map("rating_service")
+  ratingLocation           Float?  @map("rating_location")
+  ratingValue              Float?  @map("rating_value")
+  /// { "1": n, ..., "5": n, "byTravellerType": { ... } }
+  ratingDistribution       Json    @default("{}") @map("rating_distribution")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   roomTypes     RoomType[]
@@ -139,6 +165,7 @@ model Property {
   folios        Folio[]
   taxSetting    TaxSetting?
   digestSetting DigestSetting?
+  reviews       Review[]
 
   @@index([tenantId])
   @@index([city])
@@ -555,6 +582,7 @@ enum GuardRule {
   LATE_REGISTRATION
   REPEATED_VOIDS_BY_USER
   ROOM_STATUS_FLIP
+  PAYMENT_ORPHANED
 }
 
 enum GuardSeverity {
@@ -629,14 +657,18 @@ model Guest {
   consentAt          DateTime? @map("consent_at") @db.Timestamptz(3)
   marketingOptIn     Boolean   @default(false) @map("marketing_opt_in")
   anonymisedAt       DateTime? @map("anonymised_at") @db.Timestamptz(3)
+  /// Platform-level guest account (guest_accounts.id) linked by verified phone. No FK: that table is platform-only.
+  guestAccountId     String?   @map("guest_account_id") @db.Uuid
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   reservations Reservation[]
   folios       Folio[]
+  reviews      Review[]
 
   @@unique([tenantId, phone])
+  @@index([guestAccountId])
   @@index([tenantId, fullName])
   @@map("guests")
 }
@@ -678,6 +710,23 @@ model Reservation {
   registrationCompletedAt   DateTime?     @map("registration_completed_at") @db.Timestamptz(3)
   registrationCompletedById String?       @map("registration_completed_by_id") @db.Uuid
 
+  // M3: online bookings (null for desk bookings).
+  paymentMode         PaymentMode?   @map("payment_mode")
+  guaranteeType       GuaranteeType? @map("guarantee_type")
+  holdExpiresAt       DateTime?      @map("hold_expires_at") @db.Timestamptz(3)
+  commissionBps       Int?           @map("commission_bps")
+  quotedTotalKobo     BigInt?        @map("quoted_total_kobo")
+  /// Nonce of the quote token the booking was made from (idempotent retries).
+  quoteRef            String?        @map("quote_ref")
+  /// PriceBreakdown snapshot the guest accepted.
+  quote               Json?
+  contactPhone        String?        @map("contact_phone")
+  contactEmail        String?        @map("contact_email")
+  specialRequests     String         @default("") @map("special_requests")
+  guestAccountId      String?        @map("guest_account_id") @db.Uuid
+  cancelledBy         CancelledBy?   @map("cancelled_by")
+  cancellationFeeKobo BigInt?        @map("cancellation_fee_kobo")
+
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -689,8 +738,16 @@ model Reservation {
   folio             Folio?
   housekeepingTasks HousekeepingTask[]
   guardFlags        GuardFlag[]
+  bookingPayments   BookingPayment[]
+  bookingRefunds    BookingRefund[]
+  commissionEntries CommissionEntry[]
+  review            Review?
+  notificationLogs  NotificationLog[]
 
   @@unique([tenantId, code])
+  @@unique([tenantId, quoteRef])
+  @@index([guestAccountId])
+  @@index([status, holdExpiresAt])
   @@index([tenantId, status])
   @@index([tenantId, arrivalAt])
   @@index([tenantId, departureAt])
@@ -1049,4 +1106,357 @@ model IdempotencyKey {
   @@id([tenantId, key])
   @@index([expiresAt])
   @@map("idempotency_keys")
+}
+
+// ===========================================================================
+// M3: online booking, payments, commission, guests, reviews, notifications
+// ===========================================================================
+
+enum PaymentMode {
+  ONLINE
+  PAY_AT_HOTEL
+}
+
+enum GuaranteeType {
+  NONE
+  PREPAID
+}
+
+enum CancelledBy {
+  GUEST
+  HOTEL
+  SYSTEM
+}
+
+enum BookingPaymentStatus {
+  INITIALIZED
+  SUCCEEDED
+  FAILED
+  ORPHANED
+  PARTIALLY_REFUNDED
+  REFUNDED
+}
+
+enum OrphanReason {
+  LATE_NO_INVENTORY
+  AMOUNT_MISMATCH
+  BOOKING_CANCELLED
+  DUPLICATE_PAYMENT
+}
+
+enum RefundStatus {
+  PENDING
+  PROCESSED
+  FAILED
+}
+
+enum RefundReason {
+  GUEST_CANCELLED
+  HOTEL_CANCELLED
+  PAYMENT_ORPHANED
+}
+
+enum CommissionKind {
+  ACCRUED
+  COLLECTED
+  REVERSED
+}
+
+enum ReviewStatus {
+  PUBLISHED
+  HIDDEN
+  FLAGGED
+}
+
+enum TravellerType {
+  BUSINESS
+  COUPLE
+  FAMILY
+  SOLO
+  FRIENDS
+}
+
+enum ModerationReason {
+  ABUSE
+  PII
+  SPAM
+  OFF_TOPIC
+  OTHER
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  WHATSAPP
+}
+
+enum NotificationStatus {
+  QUEUED
+  SENT
+  FAILED
+  OUTBOX
+}
+
+enum NotificationAudience {
+  GUEST
+  HOTEL
+  PLATFORM
+}
+
+enum GuestChallengeKind {
+  OTP
+  MAGIC_LINK
+}
+
+/// One Paystack transaction attempt for an online booking. `reference` is
+/// globally unique; the webhook finds the booking through it.
+model BookingPayment {
+  id                    String               @id @default(uuid()) @db.Uuid
+  tenantId              String               @map("tenant_id") @db.Uuid
+  reservationId         String               @map("reservation_id") @db.Uuid
+  reference             String               @unique
+  provider              String               @default("paystack")
+  status                BookingPaymentStatus @default(INITIALIZED)
+  amountKobo            BigInt               @map("amount_kobo")
+  commissionKobo        BigInt               @map("commission_kobo")
+  commissionBps         Int                  @map("commission_bps")
+  currency              String               @default("NGN")
+  subaccountCode        String?              @map("subaccount_code")
+  authorizationUrl      String?              @map("authorization_url")
+  accessCode            String?              @map("access_code")
+  callbackUrl           String               @map("callback_url")
+  email                 String
+  paidAmountKobo        BigInt?              @map("paid_amount_kobo")
+  paidAt                DateTime?            @map("paid_at") @db.Timestamptz(3)
+  channel               String?
+  providerTransactionId String?              @map("provider_transaction_id")
+  orphanReason          OrphanReason?        @map("orphan_reason")
+  folioEntryId          String?              @map("folio_entry_id") @db.Uuid
+  lastVerifiedAt        DateTime?            @map("last_verified_at") @db.Timestamptz(3)
+  createdAt             DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reservation Reservation       @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+  refunds     BookingRefund[]
+  commission  CommissionEntry[]
+
+  @@index([tenantId, createdAt])
+  @@index([reservationId])
+  @@index([status])
+  @@map("booking_payments")
+}
+
+model BookingRefund {
+  id               String       @id @default(uuid()) @db.Uuid
+  tenantId         String       @map("tenant_id") @db.Uuid
+  paymentId        String       @map("payment_id") @db.Uuid
+  reservationId    String       @map("reservation_id") @db.Uuid
+  amountKobo       BigInt       @map("amount_kobo")
+  reason           RefundReason
+  status           RefundStatus @default(PENDING)
+  providerRefundId String?      @map("provider_refund_id")
+  error            String?
+  attempts         Int          @default(0)
+  requestedBy      String?      @map("requested_by")
+  processedAt      DateTime?    @map("processed_at") @db.Timestamptz(3)
+  createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant      Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  payment     BookingPayment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  reservation Reservation    @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, createdAt])
+  @@index([paymentId])
+  @@index([status])
+  @@map("booking_refunds")
+}
+
+/// Platform commission per online booking. Amounts are positive; the net
+/// commission is COLLECTED + ACCRUED - REVERSED. `accrual` tells a REVERSED
+/// entry which side it reduces.
+model CommissionEntry {
+  id            String            @id @default(uuid()) @db.Uuid
+  tenantId      String            @map("tenant_id") @db.Uuid
+  reservationId String            @map("reservation_id") @db.Uuid
+  paymentId     String?           @map("payment_id") @db.Uuid
+  kind          CommissionKind
+  /// For REVERSED: true when it reverses an ACCRUED (receivable) entry.
+  accrual       Boolean           @default(false)
+  amountKobo    BigInt            @map("amount_kobo")
+  baseKobo      BigInt            @map("base_kobo")
+  commissionBps Int               @map("commission_bps")
+  channel       ReservationSource
+  note          String?
+  settledAt     DateTime?         @map("settled_at") @db.Timestamptz(3)
+  settlementRef String?           @map("settlement_ref")
+  createdAt     DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reservation Reservation     @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+  payment     BookingPayment? @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, createdAt])
+  @@index([reservationId])
+  @@map("commission_entries")
+}
+
+/// Hotel payout bank account and its Paystack subaccount.
+model PayoutAccount {
+  id                 String   @id @default(uuid()) @db.Uuid
+  tenantId           String   @unique @map("tenant_id") @db.Uuid
+  bankCode           String   @map("bank_code")
+  bankName           String   @map("bank_name")
+  /// AES-256-GCM ciphertext (GUEST_DATA_KEY), tenant id as associated data.
+  accountNumberEnc   String   @map("account_number_enc")
+  accountNumberLast4 String   @map("account_number_last4")
+  accountName        String   @map("account_name")
+  businessName       String   @map("business_name")
+  subaccountCode     String   @map("subaccount_code")
+  provider           String   @default("paystack")
+  settlementVerified Boolean  @default(false) @map("settlement_verified")
+  percentageCharge   Float    @default(0) @map("percentage_charge")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("payout_accounts")
+}
+
+/// Verified-stay review: one per checked-out reservation.
+model Review {
+  id               String            @id @default(uuid()) @db.Uuid
+  tenantId         String            @map("tenant_id") @db.Uuid
+  propertyId       String            @map("property_id") @db.Uuid
+  reservationId    String            @unique @map("reservation_id") @db.Uuid
+  guestId          String            @map("guest_id") @db.Uuid
+  guestAccountId   String?           @map("guest_account_id") @db.Uuid
+  overall          Int
+  cleanliness      Int
+  service          Int
+  location         Int
+  value            Int
+  title            String?
+  body             String
+  stayMonth        String            @map("stay_month")
+  travellerType    TravellerType     @map("traveller_type")
+  displayName      String            @map("display_name")
+  status           ReviewStatus      @default(PUBLISHED)
+  hotelReply       String?           @map("hotel_reply")
+  hotelRepliedAt   DateTime?         @map("hotel_replied_at") @db.Timestamptz(3)
+  hotelRepliedById String?           @map("hotel_replied_by_id") @db.Uuid
+  flaggedReason    String?           @map("flagged_reason")
+  flaggedAt        DateTime?         @map("flagged_at") @db.Timestamptz(3)
+  hiddenReason     ModerationReason? @map("hidden_reason")
+  moderationNote   String?           @map("moderation_note")
+  moderatedAt      DateTime?         @map("moderated_at") @db.Timestamptz(3)
+  moderatedBy      String?           @map("moderated_by")
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property    Property    @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  reservation Reservation @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+  guest       Guest       @relation(fields: [guestId], references: [id], onDelete: Restrict)
+
+  @@index([propertyId, status, createdAt(sort: Desc)])
+  @@index([tenantId, createdAt])
+  @@index([status])
+  @@map("reviews")
+}
+
+/// Every guest / hotel / platform message. Tenant-scoped when it concerns a
+/// hotel (RLS); OTP and magic-link rows have no tenant and are visible to the
+/// platform role only.
+model NotificationLog {
+  id                String               @id @default(uuid()) @db.Uuid
+  tenantId          String?              @map("tenant_id") @db.Uuid
+  reservationId     String?              @map("reservation_id") @db.Uuid
+  guestAccountId    String?              @map("guest_account_id") @db.Uuid
+  template          String
+  channel           NotificationChannel
+  audience          NotificationAudience @default(GUEST)
+  recipient         String
+  subject           String?
+  bodyText          String               @map("body_text")
+  bodyHtml          String?              @map("body_html")
+  status            NotificationStatus   @default(QUEUED)
+  provider          String
+  providerMessageId String?              @map("provider_message_id")
+  attempts          Int                  @default(0)
+  error             String?
+  /// e.g. "PRE_ARRIVAL:<reservationId>:EMAIL"; unique so scheduled messages go out once.
+  dedupeKey         String?              @unique @map("dedupe_key")
+  sentAt            DateTime?            @map("sent_at") @db.Timestamptz(3)
+  createdAt         DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant      Tenant?      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reservation Reservation? @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@index([reservationId])
+  @@index([status])
+  @@map("notification_logs")
+}
+
+// ---------------------------------------------------------------------------
+// Platform-level guest identity (hotel_platform only; no hotel_app grants)
+// ---------------------------------------------------------------------------
+
+model GuestAccount {
+  id             String    @id @default(uuid()) @db.Uuid
+  phone          String    @unique
+  email          String?
+  fullName       String    @default("") @map("full_name")
+  marketingOptIn Boolean   @default(false) @map("marketing_opt_in")
+  lastLoginAt    DateTime? @map("last_login_at") @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  refreshTokens GuestRefreshToken[]
+
+  @@index([email])
+  @@map("guest_accounts")
+}
+
+/// OTP (6 digits) or magic-link challenge. Only an HMAC of the secret is stored.
+model GuestOtpChallenge {
+  id          String             @id @default(uuid()) @db.Uuid
+  kind        GuestChallengeKind @default(OTP)
+  phone       String?
+  email       String?
+  channel     String
+  codeHash    String             @map("code_hash")
+  attempts    Int                @default(0)
+  maxAttempts Int                @default(5) @map("max_attempts")
+  expiresAt   DateTime           @map("expires_at") @db.Timestamptz(3)
+  consumedAt  DateTime?          @map("consumed_at") @db.Timestamptz(3)
+  lockedAt    DateTime?          @map("locked_at") @db.Timestamptz(3)
+  ip          String?
+  createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([phone, createdAt])
+  @@index([email, createdAt])
+  @@map("guest_otp_challenges")
+}
+
+model GuestRefreshToken {
+  id             String    @id @default(uuid()) @db.Uuid
+  guestAccountId String    @map("guest_account_id") @db.Uuid
+  familyId       String    @map("family_id") @db.Uuid
+  tokenHash      String    @unique @map("token_hash")
+  expiresAt      DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt      DateTime? @map("revoked_at") @db.Timestamptz(3)
+  revokeReason   String?   @map("revoke_reason")
+  replacedById   String?   @map("replaced_by_id") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  account GuestAccount @relation(fields: [guestAccountId], references: [id], onDelete: Cascade)
+
+  @@index([guestAccountId])
+  @@index([familyId])
+  @@map("guest_refresh_tokens")
 }

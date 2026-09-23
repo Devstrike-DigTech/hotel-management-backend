@@ -27,6 +27,8 @@ const env: Record<string, string> = {
   JWT_ACCESS_SECRET: 'e2e-access-secret-0123456789abcdef0123',
   JWT_PLATFORM_SECRET: 'e2e-platform-secret-0123456789abcdef0123',
   JWT_REFRESH_SECRET: 'e2e-refresh-secret-0123456789abcdef0123',
+  GUEST_JWT_SECRET: 'e2e-guest-jwt-secret-0123456789abcdef0123',
+  GUEST_TOKEN_SECRET: 'e2e-guest-token-secret-0123456789abcdef012',
   REDIS_URL: 'redis://localhost:6379',
   ADMIN_URL: 'http://localhost:3001',
   WEB_URL: 'http://localhost:3000',

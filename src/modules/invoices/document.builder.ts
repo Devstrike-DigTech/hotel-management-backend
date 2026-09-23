@@ -25,7 +25,7 @@ export interface FolioLike {
   name: string;
   entries: FolioEntry[];
   guest: Guest | null;
-  reservation: (Reservation & { room: Room | null; roomType: RoomType }) | null;
+  reservation: (Pick<Reservation, 'code' | 'stayType' | 'arrivalAt' | 'departureAt' | 'adults' | 'children'> & { room: Room | null; roomType: RoomType }) | null;
 }
 
 /** The printable invoice, snapshotted into guest_invoices.document at issue time. */

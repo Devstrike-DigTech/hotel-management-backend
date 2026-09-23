@@ -77,6 +77,54 @@ export const envSchema = z.object({
         .filter(Boolean),
     ),
 
+  // --- M3: guests, notifications -------------------------------------------
+  /** Signs guest access tokens (audience `guest`). */
+  GUEST_JWT_SECRET: z.string().min(32),
+  /** Signs quote tokens, manage-booking links, review links, magic links and OTP hashes. */
+  GUEST_TOKEN_SECRET: z.string().min(32),
+  GUEST_ACCESS_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
+  /** Email sender, e.g. "HotelOS <bookings@hotelos.ng>". Defaults to APP_NAME <SUPPORT_EMAIL>. */
+  EMAIL_FROM: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim().length > 0 ? v.trim() : undefined)),
+  /** Resend (https://resend.com) API key. Preferred email provider when set. */
+  RESEND_API_KEY: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim().length > 0 ? v.trim() : undefined)),
+  RESEND_BASE_URL: z.url().default('https://api.resend.com'),
+  /** SMTP (nodemailer) when RESEND_API_KEY is not set. */
+  SMTP_HOST: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim().length > 0 ? v.trim() : undefined)),
+  SMTP_PORT: z.coerce.number().int().positive().default(587),
+  SMTP_USER: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim().length > 0 ? v.trim() : undefined)),
+  SMTP_PASS: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim().length > 0 ? v.trim() : undefined)),
+  SMTP_SECURE: bool.default(false),
+  /** Termii SMS (https://developers.termii.com). */
+  TERMII_API_KEY: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim().length > 0 ? v.trim() : undefined)),
+  TERMII_SENDER_ID: z.string().default('HotelOS'),
+  TERMII_BASE_URL: z.url().default('https://api.ng.termii.com'),
+  TERMII_CHANNEL: z.enum(['generic', 'dnd', 'whatsapp']).default('generic'),
+  /** Where orphaned-payment alerts for the platform go (defaults to SUPPORT_EMAIL). */
+  PLATFORM_ALERT_EMAIL: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim().length > 0 ? v.trim() : undefined)),
+  /** Set to false to switch off the Redis rate limits on public endpoints. */
+  PUBLIC_RATE_LIMITS: bool.default(true),
+
   /** Requests per minute per IP on the auth endpoints. */
   AUTH_RATE_LIMIT: z.coerce.number().int().positive().default(20),
   /** Disable BullMQ workers and repeatable jobs (tests, one-off scripts). */

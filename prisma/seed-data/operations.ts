@@ -57,6 +57,24 @@ export const DEMO_PINS: Record<string, string> = {
   'tunde@palmwine.ng': '1357',
 };
 
+
+/** M2 desk reservations: the M3 online-booking columns keep their defaults. */
+type SeedReservation = Omit<
+  Reservation,
+  | 'paymentMode'
+  | 'guaranteeType'
+  | 'holdExpiresAt'
+  | 'commissionBps'
+  | 'quotedTotalKobo'
+  | 'quoteRef'
+  | 'quote'
+  | 'contactPhone'
+  | 'contactEmail'
+  | 'specialRequests'
+  | 'guestAccountId'
+  | 'cancelledBy'
+  | 'cancellationFeeKobo'
+>;
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 
@@ -465,7 +483,7 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
   };
   const entries: FolioEntry[] = [];
   const folioRows: Prisma.FolioCreateManyInput[] = [];
-  const resRows: Reservation[] = [];
+  const resRows: SeedReservation[] = [];
   const payments: { entry: FolioEntry; folioId: string; resId: string; at: Date; by: { id: string; fullName: string } }[] = [];
   const checkouts: { folioId: string; resId: string; at: Date; by: { id: string; fullName: string } }[] = [];
   const flagRows: Prisma.GuardFlagCreateManyInput[] = [];
@@ -603,7 +621,7 @@ export async function seedOperations(prisma: PrismaClient, tenantSlug: string, a
       checkOutBy = shiftAt(checkedOutAt).user;
     }
     const regComplete = (status === 'CHECKED_IN' || status === 'CHECKED_OUT') && !p.lateRegistration;
-    const reservation: Reservation = {
+    const reservation: SeedReservation = {
       id: resId,
       tenantId: tenant.id,
       propertyId: property.id,
