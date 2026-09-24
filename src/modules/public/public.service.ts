@@ -14,6 +14,8 @@ import {
 } from '../plans/plan.mapper.js';
 import { checkStayDates, HOLD_MINUTES, mapUrl, policyView } from '../booking/booking.logic.js';
 import { PublicBookingService } from '../booking/public-booking.service.js';
+import { BookingFormService } from '../booking-form/booking-form.service.js';
+import { ThemeService } from '../site/theme.service.js';
 import { EntitlementsService } from '../entitlements/entitlements.service.js';
 import { componentsFrom } from '../folios/tax.logic.js';
 import { Err } from '../ops/ops.helpers.js';
@@ -58,6 +60,8 @@ export class PublicService {
     private readonly config: AppConfigService,
     private readonly booking: PublicBookingService,
     private readonly entitlements: EntitlementsService,
+    private readonly themes: ThemeService,
+    private readonly forms: BookingFormService,
     private readonly whiteLabel: WhiteLabelService,
   ) {}
 
@@ -210,7 +214,7 @@ export class PublicService {
    * A hotel page. Unlisted hotels are still reachable by slug (their own
    * booking microsite); suspended tenants are not.
    */
-  async hotel(slug: string, host?: string): Promise<HotelDetail & { whiteLabel: ReturnType<WhiteLabelService['publicBrand']> }> {
+  async hotel(slug: string, host?: string): Promise<HotelDetail & { whiteLabel: ReturnType<WhiteLabelService['publicBrand']>; siteTheme: unknown }> {
     const p = await this.db.publicForSlug(slug, (tx, t) =>
       tx.property.findFirst({
         where: {
@@ -260,6 +264,7 @@ export class PublicService {
       return list.length ? Math.min(...list.map((x) => x.fromRateKobo)) : fallback;
     };
 
+    const site = await this.siteExtras(p.tenantId, p.id, ent?.features ?? []);
     return {
       ...toHotelCard(
         p,
@@ -274,7 +279,7 @@ export class PublicService {
       images: toImages(p.images),
       roomTypes: p.roomTypes.map((rt) => ({ ...toRoomTypePublic(rt, rt._count.rooms), ratePlans: planInfo.get(rt.id) ?? [], fromRateKobo: fromRate(rt.id, rt.basePriceKobo) })),
       policies: p.policies,
-      branding: { accentColor: p.accentColor, logoUrl: p.logoUrl },
+      branding: { accentColor: p.accentColor, logoUrl: p.logoUrl, faviconUrl: site.siteTheme.brand.faviconUrl },
       mapUrl: mapUrl(p),
       booking: {
         onlineBookingEnabled: p.onlineBookingEnabled,
@@ -287,6 +292,7 @@ export class PublicService {
         taxes: p.taxSetting
           ? componentsFrom(p.taxSetting).map((c) => ({ code: c.code, label: c.label, rateBps: c.rateBps, inclusive: c.inclusive }))
           : [{ code: 'VAT' as const, label: 'VAT', rateBps: 750, inclusive: false }],
+        ...site.booking,
       },
       reviewSummary: reviewSummaryOf(p),
       // M5
@@ -295,7 +301,24 @@ export class PublicService {
       whatsapp: await this.whatsappFor(p, ent?.features ?? []),
       // M6: brand kit only on the property's own verified domain.
       whiteLabel: this.whiteLabel.publicBrand(p.tenantId, host, p),
+      // M7: the published booking-site theme.
+      siteTheme: site.siteTheme,
     };
+  }
+
+  /** M7: published theme, extras and pickups flags, form version (hotel page). */
+  private async siteExtras(tenantId: string, propertyId: string, features: readonly string[]) {
+    return runInProperty(tenantId, propertyId, () =>
+      this.db.tenant(tenantId, async (tx) => {
+        const siteTheme = await this.themes.publishedPublicTx(tx, tenantId, propertyId);
+        const form = await this.forms.publishedVersionTx(tx, tenantId, propertyId);
+        const fields = this.forms.fieldsOf(form);
+        const offered = features.includes('paid_extras');
+        const extrasAvailable = offered && (await tx.extra.count({ where: { tenantId, propertyId, active: true } })) > 0;
+        const pickupsAvailable = offered && fields.some((f) => f.type === 'PICKUP' && f.required !== 'HIDDEN') && (await tx.pickupPoint.count({ where: { tenantId, propertyId, active: true } })) > 0;
+        return { siteTheme, booking: { extrasAvailable, pickupsAvailable, bookingFormVersion: form.version } };
+      }),
+    );
   }
 
   /** `https://` host for a property: its verified custom domain, else its subdomain. */
@@ -374,6 +397,8 @@ export class PublicService {
       })),
       // M6: brand kit when served on the group's own verified domain.
       whiteLabel: await this.whiteLabel.groupBrand(data.tenant.id, host),
+      // M7
+      siteTheme: await this.themes.publicGroupTheme(data.tenant.slug).catch(() => null),
     };
   }
 

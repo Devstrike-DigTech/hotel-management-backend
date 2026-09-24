@@ -91,7 +91,7 @@ export interface HotelDetail extends HotelCard {
   images: ImageRef[];
   roomTypes: RoomTypePublic[];
   policies: string[];
-  branding: { accentColor: string | null; logoUrl: string | null };
+  branding: { accentColor: string | null; logoUrl: string | null; faviconUrl?: string | null };
   mapUrl: string;
   booking: {
     onlineBookingEnabled: boolean;
