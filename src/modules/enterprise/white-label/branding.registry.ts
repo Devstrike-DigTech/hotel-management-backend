@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { Redis } from 'ioredis';
 import { AppConfigService } from '../../../config/app-config.service.js';
 import { DbService } from '../../../prisma/db.service.js';
+import { inSeries } from '../../../common/utils/in-series.js';
 
 /** Redis channel: white-label state changed somewhere (another instance, the seed). */
 export const BRANDING_CHANNEL = 'hotel:branding-changed';
@@ -88,12 +89,12 @@ export class BrandingRegistry implements OnModuleInit, OnModuleDestroy {
       const settings = await tx.whiteLabelSetting.findMany({ where: { enabled: true } });
       const ids = settings.map((s) => s.tenantId);
       if (!ids.length) return;
-      const [domains, senders, subs, overrides] = await Promise.all([
-        tx.emailDomain.findMany({ where: { tenantId: { in: ids }, status: 'VERIFIED' } }),
-        tx.smsSenderRequest.findMany({ where: { tenantId: { in: ids }, status: 'APPROVED', current: true } }),
-        tx.subscription.findMany({ where: { tenantId: { in: ids } }, include: { plan: { include: { features: true } } } }),
-        tx.tenantFeatureOverride.findMany({ where: { tenantId: { in: ids }, featureCode: 'white_label' } }),
-      ]);
+      const [domains, senders, subs, overrides] = await inSeries(
+        () => tx.emailDomain.findMany({ where: { tenantId: { in: ids }, status: 'VERIFIED' } }),
+        () => tx.smsSenderRequest.findMany({ where: { tenantId: { in: ids }, status: 'APPROVED', current: true } }),
+        () => tx.subscription.findMany({ where: { tenantId: { in: ids } }, include: { plan: { include: { features: true } } } }),
+        () => tx.tenantFeatureOverride.findMany({ where: { tenantId: { in: ids }, featureCode: 'white_label' } }),
+      );
       for (const s of settings) {
         const sub = subs.find((x) => x.tenantId === s.tenantId);
         const ov = overrides.find((o) => o.tenantId === s.tenantId);

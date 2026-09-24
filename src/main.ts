@@ -2,10 +2,13 @@ import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module.js';
+import { installPgConcurrencyGuard } from './common/pg-concurrency-guard.js';
 import { AppConfigService } from './config/app-config.service.js';
 import { setupApp } from './setup-app.js';
 
 async function bootstrap() {
+  // One query at a time per pg connection (transactions share one; pg 9 refuses overlap).
+  installPgConcurrencyGuard();
   // rawBody is needed to verify Paystack webhook signatures byte-for-byte.
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     rawBody: true,

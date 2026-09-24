@@ -31,6 +31,7 @@ import type {
   UpdateRatePlanDto,
   UpdateRateRuleDto,
 } from './rates.dto.js';
+import { inSeries } from '../../common/utils/in-series.js';
 
 const MAX_CAL_DAYS = 92;
 
@@ -174,11 +175,11 @@ export class RatesService {
     if (!promotions) {
       return { promotions, plans: [bar], bar, rules: [], overrides: new Map(), restrictions: [] };
     }
-    const [rules, overrides, restrictions] = await Promise.all([
-      tx.rateRule.findMany({ where: { tenantId, ...pw, active: true, dateFrom: { lte: dbDate(to) }, dateTo: { gte: dbDate(from) } } }),
-      tx.rateOverride.findMany({ where: { tenantId, ...pw, date: { gte: dbDate(from), lte: dbDate(to) } } }),
-      tx.rateRestriction.findMany({ where: { tenantId, ...pw, date: { gte: dbDate(from), lte: dbDate(to) } } }),
-    ]);
+    const [rules, overrides, restrictions] = await inSeries(
+      () => tx.rateRule.findMany({ where: { tenantId, ...pw, active: true, dateFrom: { lte: dbDate(to) }, dateTo: { gte: dbDate(from) } } }),
+      () => tx.rateOverride.findMany({ where: { tenantId, ...pw, date: { gte: dbDate(from), lte: dbDate(to) } } }),
+      () => tx.rateRestriction.findMany({ where: { tenantId, ...pw, date: { gte: dbDate(from), lte: dbDate(to) } } }),
+    );
     return {
       promotions,
       plans,

@@ -5,6 +5,7 @@ import { DbService, type Tx } from '../../../prisma/db.service.js';
 import { csvCell } from '../../audit/audit.service.js';
 import { addDays, diffDays, isIsoDate, lagosStartOfDay } from '../../../common/time/lagos.js';
 import { Err } from '../../ops/ops.helpers.js';
+import { inSeries } from '../../../common/utils/in-series.js';
 
 export interface PlatformAuditEntry {
   actor?: Pick<PlatformPrincipal, 'platformUserId' | 'fullName' | 'role' | 'sessionId'> | null;
@@ -132,10 +133,10 @@ export class PlatformAuditService {
     const pageSize = Math.min(f.pageSize ?? 50, 200);
     return this.db.system(async (tx) => {
       const where = this.where(f);
-      const [rows, total] = await Promise.all([
-        tx.platformAuditLog.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: (page - 1) * pageSize, take: pageSize }),
-        tx.platformAuditLog.count({ where }),
-      ]);
+      const [rows, total] = await inSeries(
+        () => tx.platformAuditLog.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: (page - 1) * pageSize, take: pageSize }),
+        () => tx.platformAuditLog.count({ where }),
+      );
       const names = await this.tenantNames(tx, rows.map((r) => r.tenantId));
       return { items: rows.map((r) => toPlatformAuditItem(r, names)), total, page, pageSize };
     });

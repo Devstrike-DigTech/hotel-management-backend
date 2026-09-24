@@ -16,6 +16,7 @@ import { barForNight } from '../rates/rates.logic.js';
 import { RatesService } from '../rates/rates.service.js';
 import { relevantCompetitors, suggest, type EngineInput, type EngineOutput, type Factor, type Guardrail as EngineGuardrail } from './engine.js';
 import { IMPACT_BPS, nationalEventsBetween, type CalendarEvent, type EventImpact } from './events.js';
+import { inSeries } from '../../common/utils/in-series.js';
 
 const MAX_RANGE_DAYS = 366;
 const SPIKE_WINDOW_DAYS = 30;
@@ -723,10 +724,10 @@ export class DynamicPricingService {
         ...(q.roomTypeId && { roomTypeId: q.roomTypeId }),
         ...(q.source && { source: q.source }),
       };
-      const [rows, total] = await Promise.all([
-        tx.priceChange.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }], skip: pg.skip, take: pg.take }),
-        tx.priceChange.count({ where }),
-      ]);
+      const [rows, total] = await inSeries(
+        () => tx.priceChange.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }], skip: pg.skip, take: pg.take }),
+        () => tx.priceChange.count({ where }),
+      );
       return { items: await this.changeViews(tx, rows), total, page: pg.page, pageSize: pg.pageSize };
     });
   }
@@ -855,10 +856,10 @@ export class DynamicPricingService {
   /** Dashboard card: mode, pending suggestions, changes today. */
   async summaryTx(tx: Tx, tenantId: string, propertyId: string) {
     const s = await tx.pricingSetting.findFirst({ where: { propertyId } });
-    const [pending, changesToday] = await Promise.all([
-      tx.priceSuggestion.count({ where: { propertyId, status: 'PENDING', date: { gte: dbDate(lagosDate()) } } }),
-      tx.priceChange.count({ where: { propertyId, createdAt: { gte: lagosDateTime(lagosDate()) } } }),
-    ]);
+    const [pending, changesToday] = await inSeries(
+      () => tx.priceSuggestion.count({ where: { propertyId, status: 'PENDING', date: { gte: dbDate(lagosDate()) } } }),
+      () => tx.priceChange.count({ where: { propertyId, createdAt: { gte: lagosDateTime(lagosDate()) } } }),
+    );
     return { mode: s?.mode ?? 'OFF', pendingSuggestions: pending, changesToday, lastRunAt: s?.lastRunAt?.toISOString() ?? null };
   }
 

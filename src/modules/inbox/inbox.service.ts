@@ -20,6 +20,7 @@ import { appError, Err, isUniqueViolation, paginate, primaryProperty } from '../
 import { ReservationsService } from '../reservations/reservations.service.js';
 import { cleanParam, fillTemplate, type WhatsAppTemplateName } from '../whatsapp/templates.registry.js';
 import { firstName, humanTime, isConfirmation, keywordHits, parseArrivalTime, phoneDigits, renderQuickReply, windowOf, type QuickReplyVars } from './inbox.logic.js';
+import { inSeries } from '../../common/utils/in-series.js';
 
 const FEATURE = 'whatsapp_messaging';
 const PAGE_MESSAGES = 200;
@@ -190,12 +191,12 @@ export class GuestInboxService implements OnModuleInit {
   private async listItems(tx: Tx, rows: Conversation[], now = new Date()) {
     const guestIds = [...new Set(rows.map((c) => c.guestId).filter((x): x is string => !!x))];
     const resIds = [...new Set(rows.map((c) => c.reservationId).filter((x): x is string => !!x))];
-    const [guests, members, stays, pending] = await Promise.all([
-      guestIds.length ? tx.guest.findMany({ where: { id: { in: guestIds } }, select: { id: true, vip: true } }) : [],
-      guestIds.length ? tx.loyaltyMember.findMany({ where: { guestId: { in: guestIds } }, select: { guestId: true, tier: { select: { name: true } } } }) : [],
-      resIds.length ? tx.reservation.findMany({ where: { id: { in: resIds } }, select: { id: true, code: true, status: true, arrivalAt: true, departureAt: true, room: { select: { number: true } } } }) : [],
-      rows.length ? tx.taskSuggestion.groupBy({ by: ['conversationId'], where: { conversationId: { in: rows.map((c) => c.id) }, status: 'PENDING' }, _count: { _all: true } }) : [],
-    ]);
+    const [guests, members, stays, pending] = await inSeries(
+      () => guestIds.length ? tx.guest.findMany({ where: { id: { in: guestIds } }, select: { id: true, vip: true } }) : [],
+      () => guestIds.length ? tx.loyaltyMember.findMany({ where: { guestId: { in: guestIds } }, select: { guestId: true, tier: { select: { name: true } } } }) : [],
+      () => resIds.length ? tx.reservation.findMany({ where: { id: { in: resIds } }, select: { id: true, code: true, status: true, arrivalAt: true, departureAt: true, room: { select: { number: true } } } }) : [],
+      () => rows.length ? tx.taskSuggestion.groupBy({ by: ['conversationId'], where: { conversationId: { in: rows.map((c) => c.id) }, status: 'PENDING' }, _count: { _all: true } }) : [],
+    );
     const vip = new Map(guests.map((g) => [g.id, g.vip]));
     const tier = new Map(members.map((m) => [m.guestId, m.tier?.name ?? null]));
     const res = new Map(stays.map((r) => [r.id, r]));
@@ -280,14 +281,14 @@ export class GuestInboxService implements OnModuleInit {
 
   async summaryTx(tx: Tx, propertyId: string, userId?: string) {
     const live = { propertyId, status: { not: 'CLOSED' as const } };
-    const [unread, open, unassigned, overdue, mine, pendingSuggestions] = await Promise.all([
-      tx.conversation.count({ where: { ...live, unreadCount: { gt: 0 } } }),
-      tx.conversation.count({ where: live }),
-      tx.conversation.count({ where: { ...live, assigneeId: null } }),
-      tx.conversation.count({ where: { ...live, slaDueAt: { lt: new Date() } } }),
-      userId ? tx.conversation.count({ where: { ...live, assigneeId: userId } }) : 0,
-      tx.taskSuggestion.count({ where: { propertyId, status: 'PENDING' } }),
-    ]);
+    const [unread, open, unassigned, overdue, mine, pendingSuggestions] = await inSeries(
+      () => tx.conversation.count({ where: { ...live, unreadCount: { gt: 0 } } }),
+      () => tx.conversation.count({ where: live }),
+      () => tx.conversation.count({ where: { ...live, assigneeId: null } }),
+      () => tx.conversation.count({ where: { ...live, slaDueAt: { lt: new Date() } } }),
+      () => userId ? tx.conversation.count({ where: { ...live, assigneeId: userId } }) : 0,
+      () => tx.taskSuggestion.count({ where: { propertyId, status: 'PENDING' } }),
+    );
     return { unread, open, unassigned, overdue, mine, pendingSuggestions };
   }
 
@@ -305,10 +306,10 @@ export class GuestInboxService implements OnModuleInit {
         ...(q.unread && { unreadCount: { gt: 0 } }),
         ...(text && { OR: [{ guestName: { contains: text, mode: 'insensitive' } }, { guestPhone: { contains: text.replace(/\s/g, '') } }, { lastPreview: { contains: text, mode: 'insensitive' } }] }),
       };
-      const [rows, total] = await Promise.all([
-        tx.conversation.findMany({ where, orderBy: [{ lastMessageAt: 'desc' }, { id: 'asc' }], skip: pg.skip, take: pg.take }),
-        tx.conversation.count({ where }),
-      ]);
+      const [rows, total] = await inSeries(
+        () => tx.conversation.findMany({ where, orderBy: [{ lastMessageAt: 'desc' }, { id: 'asc' }], skip: pg.skip, take: pg.take }),
+        () => tx.conversation.count({ where }),
+      );
       return { items: await this.listItems(tx, rows), total, page: pg.page, pageSize: pg.pageSize };
     });
   }

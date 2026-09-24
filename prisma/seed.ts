@@ -21,6 +21,10 @@ import { HARMATTAN, seedConsole, seedHarmattan, seedHarmattanControl } from './s
 import { announceChanges, provisionDedicated, seedFailedJobs } from './seed-data/provision.js';
 import { seedM7, seedM7Harmattan, seedTransportLists } from './seed-data/m7.js';
 import { withDatabase } from '../src/modules/dedicated-db/engine.js';
+import { installPgConcurrencyGuard } from '../src/common/pg-concurrency-guard.js';
+
+// One query at a time per connection (Prisma loads include relations in parallel).
+installPgConcurrencyGuard();
 
 const DAY = 24 * 60 * 60 * 1000;
 const NAIRA = 100;

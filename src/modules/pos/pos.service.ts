@@ -40,6 +40,7 @@ import type {
   VoidLineDto,
 } from './pos.dto.js';
 import { StockService, type StockLink } from './stock.service.js';
+import { inSeries, mapInSeries } from '../../common/utils/in-series.js';
 
 export interface ModifierOption {
   id: string;
@@ -138,7 +139,7 @@ export class PosService {
   listOutlets(user: AuthUser) {
     return this.db.tenant(user.tenantId, async (tx) => {
       const rows = await tx.posOutlet.findMany({ where: { tenantId: user.tenantId }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] });
-      return Promise.all(rows.map((o) => this.outletView(tx, o)));
+      return mapInSeries(rows, (o) => this.outletView(tx, o));
     });
   }
 
@@ -446,11 +447,11 @@ export class PosService {
     return this.db.tenant(user.tenantId, async (tx) => {
       const outlet = await tx.posOutlet.findFirst({ where: { id: outletId, tenantId: user.tenantId } });
       if (!outlet) throw AppException.notFound('Outlet');
-      const [cats, items, rules] = await Promise.all([
-        tx.posCategory.findMany({ where: { tenantId: user.tenantId }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }),
-        tx.posItem.findMany({ where: { tenantId: user.tenantId, active: true, OR: [{ outletIds: { isEmpty: true } }, { outletIds: { has: outletId } }] }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }),
-        tx.posPriceRule.findMany({ where: { tenantId: user.tenantId, active: true } }),
-      ]);
+      const [cats, items, rules] = await inSeries(
+        () => tx.posCategory.findMany({ where: { tenantId: user.tenantId }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }),
+        () => tx.posItem.findMany({ where: { tenantId: user.tenantId, active: true, OR: [{ outletIds: { isEmpty: true } }, { outletIds: { has: outletId } }] }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }),
+        () => tx.posPriceRule.findMany({ where: { tenantId: user.tenantId, active: true } }),
+      );
       const now = new Date();
       const clock = lagosClock(now);
       const categories = [];
@@ -593,10 +594,10 @@ export class PosService {
           ],
         }),
       };
-      const [rows, total] = await Promise.all([
-        tx.posOrder.findMany({ where, include: orderInclude, orderBy: { openedAt: 'desc' }, skip: pg.skip, take: pg.take }),
-        tx.posOrder.count({ where }),
-      ]);
+      const [rows, total] = await inSeries(
+        () => tx.posOrder.findMany({ where, include: orderInclude, orderBy: { openedAt: 'desc' }, skip: pg.skip, take: pg.take }),
+        () => tx.posOrder.count({ where }),
+      );
       const comps = new Map<string, TaxComponent[]>();
       const items = [];
       for (const o of rows) {

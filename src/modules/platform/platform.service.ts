@@ -42,6 +42,7 @@ import type {
   UpdatePlanDto,
   UpdateTenantSubscriptionDto,
 } from './platform.dto.js';
+import { inSeries } from '../../common/utils/in-series.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const LAGOS_OFFSET_MS = 60 * 60 * 1000; // Africa/Lagos is UTC+1, no DST
@@ -500,7 +501,7 @@ export class PlatformService {
 
   private async slugTaken(slug: string): Promise<boolean> {
     const hits = await this.db.systemAll((tx) =>
-      Promise.all([tx.tenant.count({ where: { slug } }), tx.property.count({ where: { slug } })]),
+      inSeries(() => tx.tenant.count({ where: { slug } }), () => tx.property.count({ where: { slug } })),
     );
     return hits.some(([a, b]) => a + b > 0);
   }

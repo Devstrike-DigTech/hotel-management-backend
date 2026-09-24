@@ -9,6 +9,7 @@ import { AuditService, userActor } from '../audit/audit.service.js';
 import { GuardService } from '../guard/guard.service.js';
 import { appError, Err, k, paginate, primaryProperty } from '../ops/ops.helpers.js';
 import { stockVariance } from './pos.logic.js';
+import { inSeries } from '../../common/utils/in-series.js';
 
 const num = (d: Prisma.Decimal | number | null | undefined) => (d === null || d === undefined ? 0 : Number(d));
 const q3 = (x: number) => Math.round(x * 1000) / 1000;
@@ -291,10 +292,10 @@ export class StockService {
   counts(user: AuthUser, page = 1, pageSize = 20) {
     const pg = paginate(page, pageSize);
     return this.db.tenant(user.tenantId, async (tx) => {
-      const [rows, total] = await Promise.all([
-        tx.stockCount.findMany({ where: { tenantId: user.tenantId }, orderBy: { countedAt: 'desc' }, skip: pg.skip, take: pg.take }),
-        tx.stockCount.count({ where: { tenantId: user.tenantId } }),
-      ]);
+      const [rows, total] = await inSeries(
+        () => tx.stockCount.findMany({ where: { tenantId: user.tenantId }, orderBy: { countedAt: 'desc' }, skip: pg.skip, take: pg.take }),
+        () => tx.stockCount.count({ where: { tenantId: user.tenantId } }),
+      );
       return { items: rows.map((c) => this.countView(c)), total, page: pg.page, pageSize: pg.pageSize };
     });
   }
@@ -310,10 +311,10 @@ export class StockService {
           createdAt: { ...(q.from && { gte: lagosStartOfDay(q.from) }), ...(q.to && { lt: lagosStartOfDay(addDays(q.to, 1)) }) },
         }),
       };
-      const [rows, total] = await Promise.all([
-        tx.stockMovement.findMany({ where, orderBy: { createdAt: 'desc' }, skip: pg.skip, take: pg.take, include: { stockItem: { select: { name: true } } } }),
-        tx.stockMovement.count({ where }),
-      ]);
+      const [rows, total] = await inSeries(
+        () => tx.stockMovement.findMany({ where, orderBy: { createdAt: 'desc' }, skip: pg.skip, take: pg.take, include: { stockItem: { select: { name: true } } } }),
+        () => tx.stockMovement.count({ where }),
+      );
       return { items: rows.map((m) => this.movementView(m, m.stockItem.name)), total, page: pg.page, pageSize: pg.pageSize };
     });
   }

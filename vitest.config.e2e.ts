@@ -60,6 +60,7 @@ export default defineConfig({
     root: './',
     include: ['test/**/*.e2e-spec.ts'],
     globalSetup: ['./test/global-setup.ts'],
+    setupFiles: ['./test/setup-pg-guard.ts'],
     fileParallelism: false,
     testTimeout: 30_000,
     hookTimeout: 120_000,

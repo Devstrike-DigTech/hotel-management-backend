@@ -14,6 +14,7 @@ import { appError, Err, k, paginate, primaryProperty } from '../ops/ops.helpers.
 import { buildCityLedgerDocument, invoiceListView } from './city-ledger.document.js';
 import { agingBucket, allocateOldestFirst, creditCheck, emptyAging, invoiceStatus, type AgingBucket } from './city-ledger.logic.js';
 import type { CorporateAccountDto, CreateStatementDto, LedgerPaymentDto, LedgerQueryDto, UpdateCorporateAccountDto } from './corporate.dto.js';
+import { inSeries } from '../../common/utils/in-series.js';
 
 export interface AccountBalance {
   outstandingKobo: number;
@@ -74,11 +75,11 @@ export class CorporateService {
   private async accountView(tx: Tx, a: CorporateAccount & { ratePlan: { id: string; code: string; name: string } | null }, bal?: AccountBalance) {
     const b = bal ?? (await this.balances(tx, a.tenantId, [a.id])).get(a.id)!;
     const now = new Date();
-    const [upcoming, inHouse, recent] = await Promise.all([
-      tx.reservation.count({ where: { corporateAccountId: a.id, status: { in: ['PENDING', 'CONFIRMED'] }, arrivalAt: { gte: now } } }),
-      tx.reservation.count({ where: { corporateAccountId: a.id, status: 'CHECKED_IN' } }),
-      tx.reservation.count({ where: { corporateAccountId: a.id, status: 'CHECKED_OUT', checkedOutAt: { gte: new Date(now.getTime() - 90 * 86_400_000) } } }),
-    ]);
+    const [upcoming, inHouse, recent] = await inSeries(
+      () => tx.reservation.count({ where: { corporateAccountId: a.id, status: { in: ['PENDING', 'CONFIRMED'] }, arrivalAt: { gte: now } } }),
+      () => tx.reservation.count({ where: { corporateAccountId: a.id, status: 'CHECKED_IN' } }),
+      () => tx.reservation.count({ where: { corporateAccountId: a.id, status: 'CHECKED_OUT', checkedOutAt: { gte: new Date(now.getTime() - 90 * 86_400_000) } } }),
+    );
     const limit = k(a.creditLimitKobo);
     return {
       id: a.id,

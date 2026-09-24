@@ -26,6 +26,7 @@ import {
   type RestrictionValue,
 } from './channel-provider.js';
 import { buildIcs, nightsToRanges } from './ical.js';
+import { inSeries, mapInSeries } from '../../common/utils/in-series.js';
 
 export const DEFAULT_COMMISSION_BPS: Record<OtaChannel, number> = {
   BOOKING_COM: 1500,
@@ -167,11 +168,11 @@ export class ChannelsService {
   }
 
   async connectionView(tx: Tx, c: ChannelConnection) {
-    const [mappings, totalRoomTypes, bookings30d] = await Promise.all([
-      tx.channelMapping.findMany({ where: { connectionId: c.id }, select: { roomTypeId: true, externalRatePlanId: true } }),
-      tx.roomType.count({ where: { tenantId: c.tenantId, propertyId: c.propertyId } }),
-      tx.channelBooking.count({ where: { connectionId: c.id, receivedAt: { gte: new Date(Date.now() - 30 * 86_400_000) } } }),
-    ]);
+    const [mappings, totalRoomTypes, bookings30d] = await inSeries(
+      () => tx.channelMapping.findMany({ where: { connectionId: c.id }, select: { roomTypeId: true, externalRatePlanId: true } }),
+      () => tx.roomType.count({ where: { tenantId: c.tenantId, propertyId: c.propertyId } }),
+      () => tx.channelBooking.count({ where: { connectionId: c.id, receivedAt: { gte: new Date(Date.now() - 30 * 86_400_000) } } }),
+    );
     const feeds = c.provider === 'ICAL' ? await tx.icalFeed.findMany({ where: { connectionId: c.id }, select: { roomTypeId: true } }) : [];
     const mappedTypes = new Set(c.provider === 'ICAL' ? feeds.map((f) => f.roomTypeId) : mappings.map((m) => m.roomTypeId));
     const s = settingsOf(c);
@@ -207,7 +208,7 @@ export class ChannelsService {
   list(user: AuthUser) {
     return this.db.tenant(user.tenantId, async (tx) => {
       const rows = await tx.channelConnection.findMany({ where: { tenantId: user.tenantId }, orderBy: { createdAt: 'asc' } });
-      return Promise.all(rows.map((c) => this.connectionView(tx, c)));
+      return mapInSeries(rows, (c) => this.connectionView(tx, c));
     });
   }
 
@@ -716,7 +717,7 @@ export class ChannelsService {
         ...(q.connectionId && { connectionId: q.connectionId }),
         ...(q.status && { status: q.status as SyncStatus }),
       };
-      const [rows, total] = await Promise.all([tx.channelSyncLog.findMany({ where, orderBy: { startedAt: 'desc' }, skip: pg.skip, take: pg.take }), tx.channelSyncLog.count({ where })]);
+      const [rows, total] = await inSeries(() => tx.channelSyncLog.findMany({ where, orderBy: { startedAt: 'desc' }, skip: pg.skip, take: pg.take }), () => tx.channelSyncLog.count({ where }));
       return {
         items: rows.map((l) => ({ id: l.id, connectionId: l.connectionId, direction: l.direction, kind: l.kind, status: l.status, summary: l.summary, items: l.items, error: l.error, startedAt: l.startedAt.toISOString(), finishedAt: l.finishedAt?.toISOString() ?? null })),
         total,
@@ -739,7 +740,7 @@ export class ChannelsService {
         ...(q.status && { status: q.status as 'NEW' | 'MODIFIED' | 'CANCELLED' }),
         ...(resIds && { reservationId: { in: resIds } }),
       };
-      const [rows, total] = await Promise.all([tx.channelBooking.findMany({ where, orderBy: { receivedAt: 'desc' }, skip: pg.skip, take: pg.take }), tx.channelBooking.count({ where })]);
+      const [rows, total] = await inSeries(() => tx.channelBooking.findMany({ where, orderBy: { receivedAt: 'desc' }, skip: pg.skip, take: pg.take }), () => tx.channelBooking.count({ where }));
       const res = await tx.reservation.findMany({ where: { id: { in: rows.map((r) => r.reservationId).filter((x): x is string => !!x) } }, include: { guest: { select: { fullName: true } }, room: { select: { number: true } } } });
       const byId = new Map(res.map((r) => [r.id, r]));
       return {
@@ -839,7 +840,7 @@ export class ChannelsService {
   summary(user: AuthUser) {
     return this.db.tenant(user.tenantId, async (tx) => {
       const rows = await tx.channelConnection.findMany({ where: { tenantId: user.tenantId }, orderBy: { createdAt: 'asc' } });
-      const connections = await Promise.all(rows.map((c) => this.connectionView(tx, c)));
+      const connections = await mapInSeries(rows, (c) => this.connectionView(tx, c));
       const since = new Date(Date.now() - 30 * 86_400_000);
       const bookings = await tx.reservation.findMany({
         where: { tenantId: user.tenantId, source: 'OTA', createdAt: { gte: since }, status: { notIn: ['CANCELLED'] } },

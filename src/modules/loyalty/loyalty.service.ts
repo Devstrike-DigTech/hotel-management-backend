@@ -20,6 +20,7 @@ import { ProJobsService } from '../jobs/pro-jobs.service.js';
 import { NotificationService } from '../notifications/notification.service.js';
 import { appError, Err, paginate, primaryProperty, userNames, userRef } from '../ops/ops.helpers.js';
 import { addMonths, defaultMemberPrefix, earnPoints, maxRedeemable, memberNumber, nextTier, redeemProblem, spreadDiscount, tierFor } from './loyalty.logic.js';
+import { inSeries } from '../../common/utils/in-series.js';
 
 const FEATURE = 'loyalty';
 const CODE_TTL_MS = 10 * 60_000;
@@ -299,10 +300,10 @@ export class LoyaltyService implements OnModuleInit {
           ],
         }),
       };
-      const [rows, total] = await Promise.all([
-        tx.loyaltyMember.findMany({ where, include: { tier: true }, orderBy: [{ points: 'desc' }, { enrolledAt: 'asc' }], skip: pg.skip, take: pg.take }),
-        tx.loyaltyMember.count({ where }),
-      ]);
+      const [rows, total] = await inSeries(
+        () => tx.loyaltyMember.findMany({ where, include: { tier: true }, orderBy: [{ points: 'desc' }, { enrolledAt: 'asc' }], skip: pg.skip, take: pg.take }),
+        () => tx.loyaltyMember.count({ where }),
+      );
       return { items: await this.memberViews(tx, rows), total, page: pg.page, pageSize: pg.pageSize };
     });
   }
@@ -333,10 +334,10 @@ export class LoyaltyService implements OnModuleInit {
     const pg = paginate(q.page, q.pageSize);
     return this.db.tenant(user.tenantId, async (tx) => {
       const m = await this.loadMember(tx, user.tenantId, id);
-      const [rows, total] = await Promise.all([
-        tx.loyaltyTransaction.findMany({ where: { memberId: m.id }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: pg.skip, take: pg.take }),
-        tx.loyaltyTransaction.count({ where: { memberId: m.id } }),
-      ]);
+      const [rows, total] = await inSeries(
+        () => tx.loyaltyTransaction.findMany({ where: { memberId: m.id }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: pg.skip, take: pg.take }),
+        () => tx.loyaltyTransaction.count({ where: { memberId: m.id } }),
+      );
       return { items: await this.txnViews(tx, rows), total, page: pg.page, pageSize: pg.pageSize };
     });
   }
