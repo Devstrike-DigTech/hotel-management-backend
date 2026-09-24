@@ -1,4 +1,7 @@
-import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable, Logger } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+import { ImageRejected, sanitizeImage, type ImageKind } from '../../../common/utils/image-sanitize.js';
+import { OBJECT_STORAGE, type ObjectStorage } from '../../storage/object-storage.js';
 import { randomBytes } from 'node:crypto';
 import type { EmailDomain, Prisma, SmsSenderRequest, StaffPortalDomain, WhiteLabelSetting } from '../../../generated/prisma/client.js';
 import type { AuthUser, PlatformPrincipal } from '../../../common/auth-types.js';
@@ -47,6 +50,7 @@ export class WhiteLabelService {
     private readonly config: AppConfigService,
     private readonly brands: BrandingRegistry,
     private readonly entitlements: EntitlementsService,
+    @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage,
   ) {
     const kind = config.get('DNS_PROVIDER') ?? (config.get('NODE_ENV') === 'production' ? 'system' : 'mock');
     this.dns = kind === 'system' ? new SystemDnsResolver() : new MockDnsResolver();
@@ -179,7 +183,7 @@ export class WhiteLabelService {
     }
     for (const k of ['logoUrl', 'faviconUrl'] as const) {
       const v = dto[k];
-      if (v && !isHttpsUrl(v)) throw Err.validation(k, 'Use an https:// URL');
+      if (v && !isHttpsUrl(v) && !v.startsWith(this.assetBase(u.tenantId))) throw Err.validation(k, 'Use an https:// URL or upload the image');
     }
     if (dto.footerLinks) {
       if (dto.footerLinks.length > 8) throw Err.validation('footerLinks', 'At most 8 links');
@@ -205,8 +209,60 @@ export class WhiteLabelService {
         metadata: { changes: Object.keys(dto) }, ip,
       });
     });
-    await this.brands.reload();
+    await this.brands.changed();
     return this.get(u);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Uploaded logo and favicon (served by the API, no external host needed)
+  // ---------------------------------------------------------------------------
+
+  private assetBase(tenantId: string) {
+    return `${this.config.get('API_PUBLIC_URL').replace(/\/$/, '')}/api/v1/public/brand-assets/${tenantId}/`;
+  }
+
+  static readonly ASSET_RULES: Record<'logo' | 'favicon', { allowed: ImageKind[]; maxBytes: number; maxSide: number; minSide: number }> = {
+    logo: { allowed: ['png', 'jpeg', 'webp'], maxBytes: 2 * 1024 * 1024, maxSide: 2048, minSide: 32 },
+    favicon: { allowed: ['png', 'ico'], maxBytes: 256 * 1024, maxSide: 512, minSide: 16 },
+  };
+
+  /** Validates (type sniffed from the bytes, size, dimensions), strips metadata, stores and sets the URL. */
+  async uploadAsset(u: AuthUser, kind: 'logo' | 'favicon', file: { buffer: Buffer; size: number } | undefined, ip?: string) {
+    if (!file?.buffer?.length) throw Err.validation('file', 'Attach the image as form field "file"');
+    let img;
+    try {
+      img = sanitizeImage(file.buffer, WhiteLabelService.ASSET_RULES[kind]);
+    } catch (e) {
+      if (e instanceof ImageRejected) throw Err.validation('file', e.message);
+      throw e;
+    }
+    const name = `${kind}-${randomUUID()}.${img.kind === 'jpeg' ? 'jpg' : img.kind}`;
+    await this.storage.put(`tenants/${u.tenantId}/branding/${name}`, img.body, img.contentType);
+    const url = `${this.assetBase(u.tenantId)}${name}`;
+    const field = kind === 'logo' ? 'logoUrl' : 'faviconUrl';
+    const before = await this.db.control(u.tenantId, (tx) => tx.whiteLabelSetting.findUnique({ where: { tenantId: u.tenantId } }));
+    await this.db.control(u.tenantId, async (tx) => {
+      await tx.whiteLabelSetting.upsert({ where: { tenantId: u.tenantId }, create: { tenantId: u.tenantId, [field]: url }, update: { [field]: url } });
+      await this.audit.recordControl(tx, {
+        tenantId: u.tenantId, actor: userActor(u), action: `white_label.${kind}_uploaded`, entityType: 'white_label', entityId: u.tenantId, propertyId: null,
+        metadata: { width: img.width, height: img.height, bytes: img.body.length, strippedBytes: img.stripped, contentType: img.contentType }, ip,
+      });
+    });
+    // The previous uploaded file is removed (external URLs are left alone).
+    const old = before?.[field];
+    if (old?.startsWith(this.assetBase(u.tenantId))) {
+      await this.storage.delete(`tenants/${u.tenantId}/branding/${old.slice(this.assetBase(u.tenantId).length)}`).catch(() => undefined);
+    }
+    await this.brands.changed();
+    return { kind, url, contentType: img.contentType, width: img.width, height: img.height, bytes: img.body.length, strippedBytes: img.stripped };
+  }
+
+  /** GET /public/brand-assets/:tenantId/:file */
+  async readAsset(tenantId: string, file: string) {
+    if (!/^[0-9a-f-]{36}$/.test(tenantId) || !/^(logo|favicon)-[0-9a-f-]{36}\.(png|jpg|webp|ico)$/.test(file)) throw AppException.notFound('Image');
+    const o = await this.storage.get(`tenants/${tenantId}/branding/${file}`);
+    if (!o) throw AppException.notFound('Image');
+    return o;
   }
 
   // ---------------------------------------------------------------------------
@@ -284,7 +340,7 @@ export class WhiteLabelService {
       });
       return d;
     });
-    await this.brands.reload();
+    await this.brands.changed();
     return this.emailView(row);
   }
 
@@ -317,7 +373,7 @@ export class WhiteLabelService {
         data: { status, records: records as unknown as Prisma.InputJsonValue, lastCheckedAt: now, verifiedAt: status === 'VERIFIED' ? (d.verifiedAt ?? now) : null },
       }),
     );
-    if (status !== d.status) await this.brands.reload();
+    if (status !== d.status) await this.brands.changed();
     return this.emailView(updated);
   }
 
@@ -330,7 +386,7 @@ export class WhiteLabelService {
     const updated = await this.db.control(tenantId, (tx) =>
       tx.emailDomain.update({ where: { id: d.id }, data: { status: 'VERIFIED', records: records as unknown as Prisma.InputJsonValue, lastCheckedAt: now, verifiedAt: now } }),
     );
-    await this.brands.reload();
+    await this.brands.changed();
     return this.emailView(updated);
   }
 
@@ -344,7 +400,7 @@ export class WhiteLabelService {
         metadata: { domain: d.domain }, ip,
       });
     });
-    await this.brands.reload();
+    await this.brands.changed();
     return { success: true };
   }
 
@@ -388,7 +444,7 @@ export class WhiteLabelService {
       });
       return r;
     });
-    await this.brands.reload();
+    await this.brands.changed();
     return this.smsView(row);
   }
 
@@ -413,7 +469,7 @@ export class WhiteLabelService {
       });
       return row;
     });
-    await this.brands.reload();
+    await this.brands.changed();
     const t = await this.db.system((tx) => tx.tenant.findUnique({ where: { id: r.tenantId }, select: { id: true, name: true, slug: true } }));
     return { ...this.smsView(updated), tenant: t ?? { id: r.tenantId, name: '', slug: '' } };
   }

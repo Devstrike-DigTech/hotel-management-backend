@@ -91,6 +91,7 @@ export class MockOidcService {
 
   /** Issues a code for `email` and returns the redirect URL. */
   authorize(q: Record<string, string | undefined>, email: string): string {
+    if (typeof email !== 'string' || !/^[^@\s]+@[^@\s]+$/.test(email.trim())) throw new AppException(HttpStatus.BAD_REQUEST, 'BAD_REQUEST', 'login_hint must be an email address');
     if (q.response_type !== 'code') throw new AppException(HttpStatus.BAD_REQUEST, 'BAD_REQUEST', 'response_type must be code');
     if (q.client_id !== MOCK_CLIENT_ID) throw new AppException(HttpStatus.BAD_REQUEST, 'BAD_REQUEST', 'Unknown client_id');
     if (!q.redirect_uri) throw new AppException(HttpStatus.BAD_REQUEST, 'BAD_REQUEST', 'redirect_uri is required');
@@ -116,11 +117,11 @@ export class MockOidcService {
       .filter(([k, v]) => v !== undefined && k !== 'login_hint')
       .map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(v!)}">`)
       .join('');
-    const buttons = emails.map((e) => `<button name="login_hint" value="${esc(e)}">${esc(e)}</button>`).join('');
+    const buttons = emails.map((e) => `<button type="submit" name="login_hint" value="${esc(e)}">${esc(e)}</button>`).join('');
     return `<!doctype html><html><head><meta charset="utf-8"><title>Development sign-in</title>
 <style>body{font-family:system-ui,sans-serif;max-width:420px;margin:48px auto;padding:0 16px;color:#1b1b1b}button{display:block;width:100%;margin:6px 0;padding:10px;text-align:left;border:1px solid #ccc;background:#fff;border-radius:6px;cursor:pointer}input[type=email]{width:100%;padding:10px;box-sizing:border-box}</style></head>
 <body><h1>Development identity provider</h1><p>Not for production. Choose an account to sign in as.</p>
-<form method="get" action="authorize">${hidden}${buttons}<p>Or any email:</p><input type="email" name="login_hint" placeholder="name@yourhotel.com"><button type="submit">Continue</button></form></body></html>`;
+<form method="get" action="authorize">${hidden}${buttons}</form><form method="get" action="authorize">${hidden}<p>Or any email:</p><input type="email" name="login_hint" placeholder="name@yourhotel.com" required><button type="submit">Continue</button></form></body></html>`;
   }
 
   private signJwt(claims: Record<string, unknown>): string {

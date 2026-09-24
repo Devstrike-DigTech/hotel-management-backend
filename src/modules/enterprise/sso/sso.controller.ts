@@ -30,6 +30,12 @@ export class SsoDiscoverDto {
   @IsEmail() @MaxLength(254) email!: string;
 }
 
+/** First non-empty string of a query value (repeated parameters arrive as arrays). */
+export function firstParam(v: unknown): string | undefined {
+  const list = (Array.isArray(v) ? v : [v]).filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
+  return list[0]?.trim();
+}
+
 const meta = (req: AppRequest) => ({ ip: req.ip, userAgent: req.headers['user-agent'] });
 
 @ApiTags('SSO')
@@ -69,8 +75,8 @@ export class SsoAuthController {
   constructor(private readonly sso: SsoService) {}
 
   @Get('start')
-  async start(@Query('tenant') tenant: string, @Query('returnTo') returnTo: string | undefined, @Res() res: Response) {
-    res.redirect(302, await this.sso.start(String(tenant ?? ''), typeof returnTo === 'string' ? returnTo : undefined));
+  async start(@Query() q: Record<string, unknown>, @Res() res: Response) {
+    res.redirect(302, await this.sso.start(firstParam(q.tenant) ?? '', firstParam(q.returnTo), firstParam(q.login_hint) ?? firstParam(q.loginHint)));
   }
 
   @Post('discover')
@@ -113,10 +119,13 @@ export class MockOidcController {
   }
 
   @Get('authorize')
-  async authorize(@Query() q: Record<string, string | undefined>, @Res() res: Response) {
+  async authorize(@Query() raw: Record<string, unknown>, @Res() res: Response) {
     this.mock.assertEnabled();
-    if (q.login_hint) {
-      res.redirect(302, this.mock.authorize(q, q.login_hint));
+    // Repeated parameters (a button and the email field both named login_hint) arrive as arrays.
+    const q = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, firstParam(v)]));
+    const hint = firstParam(raw.login_hint);
+    if (hint) {
+      res.redirect(302, this.mock.authorize(q, hint));
       return;
     }
     res.setHeader('Content-Type', 'text/html; charset=utf-8');

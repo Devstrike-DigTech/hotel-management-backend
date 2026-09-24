@@ -6,6 +6,7 @@
 import type { INestApplication } from '@nestjs/common';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { crc32, deflateSync } from 'node:zlib';
 import request from 'supertest';
 import { SecretBox } from '../src/common/crypto/secret-box.js';
 import { connect, copyTable, createDatabase, databaseExists, syncMirror, tenantTables, withDatabase } from '../src/modules/dedicated-db/engine.js';
@@ -266,6 +267,12 @@ describe('API keys and the partner API', () => {
     expect(doc.body.components.schemas.RoomStatusChangedEvent).toBeTruthy();
   });
 
+  it('shows the rate limit in the developer quick-start', async () => {
+    const q = await http().get(`${API}/developers/quickstart`).set(owner).expect(200);
+    expect(q.body.rateLimit).toEqual({ perMinute: 600, perSecond: 50, policy: '600;w=60, 50;w=1' });
+    expect(q.body.openApiUrl).toContain('/api/partner/v1/openapi.json');
+  });
+
   it('meters usage per key', async () => {
     await new Promise((r) => setTimeout(r, 200));
     const usage = await http().get(`${API}/api-keys/usage`).set(owner).expect(200);
@@ -391,6 +398,47 @@ describe('white-label', () => {
     expect((await http().get(`${API}/public/resolve-host?host=book.harmattanhotels.com`).expect(200)).body.kind).toBe('PROPERTY');
   });
 
+  it('uploads a logo: type sniffed, metadata stripped, served by the API', async () => {
+    const chunk = (type: string, data: Buffer) => {
+      const len = Buffer.alloc(4);
+      len.writeUInt32BE(data.length);
+      const td = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+      const crc = Buffer.alloc(4);
+      crc.writeUInt32BE(crc32(td) >>> 0);
+      return Buffer.concat([len, td, crc]);
+    };
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(64, 0);
+    ihdr.writeUInt32BE(40, 4);
+    ihdr[8] = 8;
+    ihdr[9] = 2;
+    const png = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      chunk('IHDR', ihdr),
+      chunk('tEXt', Buffer.from('Comment\0secret location')),
+      chunk('IDAT', deflateSync(Buffer.alloc((64 * 3 + 1) * 40))),
+      chunk('IEND', Buffer.alloc(0)),
+    ]);
+    const gm = await hotelLogin('gm@harmattanhotels.com');
+    const up = await http().post(`${API}/white-label/assets/logo`).set(gm).attach('file', png, { filename: 'logo.jpg', contentType: 'image/jpeg' }).expect(201);
+    expect(up.body).toMatchObject({ kind: 'logo', contentType: 'image/png', width: 64, height: 40 });
+    expect(up.body.strippedBytes).toBeGreaterThan(0);
+    const wl = await http().get(`${API}/white-label`).set(gm).expect(200);
+    expect(wl.body.logoUrl).toBe(up.body.url);
+    const served = await http().get(new URL(up.body.url).pathname).buffer(true).parse((res, cb) => {
+      const parts: Buffer[] = [];
+      res.on('data', (c: Buffer) => parts.push(c));
+      res.on('end', () => cb(null, Buffer.concat(parts)));
+    }).expect(200);
+    expect(served.headers['content-type']).toBe('image/png');
+    expect(served.headers['x-content-type-options']).toBe('nosniff');
+    expect((served.body as Buffer).includes(Buffer.from('secret location'))).toBe(false);
+    const svg = await http().post(`${API}/white-label/assets/logo`).set(gm).attach('file', Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'), { filename: 'x.png', contentType: 'image/png' }).expect(400);
+    expect(svg.body.code).toBe('VALIDATION_ERROR');
+    await http().post(`${API}/white-label/assets/favicon`).set(gm).attach('file', png, 'favicon.png').expect(201);
+    await http().post(`${API}/white-label/assets/banner`).set(gm).attach('file', png, 'b.png').expect(404);
+  });
+
   it('validates settings and verifies a mock email domain', async () => {
     const bad = await http().put(`${API}/white-label`).set(owner).send({ primaryColor: 'red', headingFont: 'Comic Sans' }).expect(400);
     expect(bad.body.code).toBe('VALIDATION_ERROR');
@@ -434,6 +482,17 @@ describe('single sign-on (development OIDC provider)', () => {
     expect(outsider).toContain('sso_error=SSO_DOMAIN_NOT_ALLOWED');
     const state = await http().get(`${API}/auth/sso/callback?code=x&state=forged`).expect(302);
     expect(state.headers.location).toContain('sso_error=SSO_STATE_INVALID');
+  });
+
+  it('forwards login_hint and copes with repeated parameters at the dev provider', async () => {
+    const start = await http().get(`${API}/auth/sso/start?tenant=harmattan&login_hint=gm@harmattanhotels.com`).expect(302);
+    const authorize = new URL(start.headers.location!);
+    expect(authorize.searchParams.get('login_hint')).toBe('gm@harmattanhotels.com');
+    // The sign-in page's button and email field both send login_hint: an array must not break it.
+    const twice = await http().get(`${authorize.pathname}${authorize.search}&login_hint=`).expect(302);
+    expect(new URL(twice.headers.location!).searchParams.get('code')).toBeTruthy();
+    const page = await http().get(`${authorize.pathname}?${[...authorize.searchParams].filter(([k]) => k !== 'login_hint').map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&')}`).expect(200);
+    expect(page.text).toContain('gm@harmattanhotels.com');
   });
 
   it('enforces SSO-only except for the break-glass owner', async () => {

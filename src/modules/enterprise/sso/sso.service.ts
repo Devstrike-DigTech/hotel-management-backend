@@ -235,7 +235,7 @@ export class SsoService {
   // Sign-in flow
   // ---------------------------------------------------------------------------
 
-  private async authorizeUrl(c: SsoConfig, o: { returnBase: string; returnPath: string; test: boolean }) {
+  private async authorizeUrl(c: SsoConfig, o: { returnBase: string; returnPath: string; test: boolean; loginHint?: string }) {
     const d = await this.discover(c.issuer);
     const state = randomToken();
     const nonce = randomToken();
@@ -251,6 +251,7 @@ export class SsoService {
     url.searchParams.set('nonce', nonce);
     url.searchParams.set('code_challenge', challenge);
     url.searchParams.set('code_challenge_method', 'S256');
+    if (o.loginHint) url.searchParams.set('login_hint', o.loginHint);
     return url.toString();
   }
 
@@ -272,14 +273,15 @@ export class SsoService {
   }
 
   /** GET /auth/sso/start: the IdP URL to redirect to. */
-  async start(tenantSlug: string, returnTo?: string): Promise<string> {
+  async start(tenantSlug: string, returnTo?: string, loginHint?: string): Promise<string> {
     const tenant = await this.db.system((tx) => tx.tenant.findUnique({ where: { slug: tenantSlug.toLowerCase() }, select: { id: true } }));
     const c = tenant ? await this.load(tenant.id) : null;
     if (!tenant || !c?.enabled) return `${this.adminBase}/login?sso_error=SSO_DISABLED`;
     const ent = await this.entitlements.getEntitlements(tenant.id).catch(() => null);
     if (!ent?.features.includes('sso')) return `${this.adminBase}/login?sso_error=SSO_DISABLED`;
     const target = await this.returnTarget(tenant.id, returnTo);
-    return this.authorizeUrl(c, { returnBase: target.base, returnPath: target.path, test: false });
+    const hint = loginHint?.trim().toLowerCase();
+    return this.authorizeUrl(c, { returnBase: target.base, returnPath: target.path, test: false, loginHint: hint && /^[^@\s]{1,64}@[^@\s]{1,190}$/.test(hint) ? hint : undefined });
   }
 
   async discoverByEmail(email: string) {

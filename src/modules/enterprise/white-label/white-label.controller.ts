@@ -1,4 +1,6 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, NotFoundException, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Put, Query, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsOptional, IsString, MaxLength, MinLength, ValidateIf, ValidateNested } from 'class-validator';
@@ -80,6 +82,13 @@ export class WhiteLabelController {
     return this.wl.put(u, dto, ip);
   }
 
+  @Post('assets/:kind') @RequirePermission('whitelabel.manage')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 2 * 1024 * 1024, files: 1 } }))
+  upload(@CurrentUser() u: AuthUser, @Param('kind') kind: string, @UploadedFile() file: { buffer: Buffer; size: number } | undefined, @ClientIp() ip?: string) {
+    if (kind !== 'logo' && kind !== 'favicon') throw new NotFoundException();
+    return this.wl.uploadAsset(u, kind, file, ip);
+  }
+
   @Post('email-domain') @RequirePermission('whitelabel.manage')
   emailDomain(@CurrentUser() u: AuthUser, @Body() dto: EmailDomainDto, @ClientIp() ip?: string) {
     return this.wl.createEmailDomain(u, dto, ip);
@@ -128,6 +137,24 @@ export class WhiteLabelController {
   @Delete('staff-portal') @RequirePermission('whitelabel.manage')
   removePortal(@CurrentUser() u: AuthUser, @ClientIp() ip?: string) {
     return this.wl.removePortal(u, ip);
+  }
+}
+
+@ApiTags('Public')
+@Public()
+@Controller('public/brand-assets')
+export class PublicBrandAssetsController {
+  constructor(private readonly wl: WhiteLabelService) {}
+
+  @Get(':tenantId/:file')
+  async get(@Param('tenantId') tenantId: string, @Param('file') file: string, @Res() res: Response) {
+    const o = await this.wl.readAsset(tenantId, file);
+    res.setHeader('Content-Type', o.contentType ?? 'application/octet-stream');
+    res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "default-src 'none'");
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.send(o.body);
   }
 }
 

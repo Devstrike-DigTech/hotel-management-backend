@@ -33,6 +33,7 @@ import { CouponsService } from './console/coupons.service.js';
 import { ImpersonationService } from './console/impersonation.service.js';
 import { OffboardingService } from './console/offboarding.service.js';
 import { SystemHealthService } from './console/system-health.service.js';
+import { BrandingRegistry } from '../enterprise/white-label/branding.registry.js';
 import { PlatformAuditService } from './security/platform-audit.service.js';
 import type {
   CreateTenantDto,
@@ -139,6 +140,7 @@ export class PlatformService {
     private readonly coupons: CouponsService,
     private readonly impersonation: ImpersonationService,
     private readonly platformAudit: PlatformAuditService,
+    private readonly brands: BrandingRegistry,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -610,6 +612,8 @@ export class PlatformService {
   private async afterControlChange(tenantId: string) {
     await this.mirror.sync(tenantId);
     this.listings.schedule(tenantId, 0);
+    // Plan, status and overrides decide whether white-label is active.
+    await this.brands.changed().catch(() => undefined);
   }
 
   async updateSubscription(actor: PlatformPrincipal, id: string, dto: UpdateTenantSubscriptionDto, ip?: string) {

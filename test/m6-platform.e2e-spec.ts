@@ -249,6 +249,14 @@ describe('support desk and announcements', () => {
     expect(seen.body.status).toBe('WAITING_ON_HOTEL');
     expect(seen.body.firstRespondedAt).not.toBeNull();
     expect(seen.body.messages.some((m: { internal: boolean }) => m.internal)).toBe(false);
+    // Several statuses at once, or a state.
+    const many = await http().get(`${API}/support/requests?status=OPEN,WAITING`).set(hotel.auth).expect(200);
+    expect(many.body.items.map((r: { id: string }) => r.id)).toContain(created.body.id);
+    expect((await http().get(`${API}/support/requests?state=open`).set(hotel.auth).expect(200)).body.total).toBe(1);
+    expect((await http().get(`${API}/support/requests?state=resolved`).set(hotel.auth).expect(200)).body.total).toBe(0);
+    await http().get(`${API}/support/requests?status=NOPE`).set(hotel.auth).expect(400);
+    const me = await http().get(`${API}/me`).set(hotel.auth).expect(200);
+    expect(me.body.permissions).toContain('support.request');
   });
 
   it('publishes a targeted announcement that hotels can dismiss', async () => {

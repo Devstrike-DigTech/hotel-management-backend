@@ -1,7 +1,7 @@
 import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Query, Req, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength, ValidateIf, ValidateNested } from 'class-validator';
 import type { Response } from 'express';
 import type { AppRequest, AuthUser, PlatformPrincipal } from '../../../common/auth-types.js';
@@ -33,8 +33,15 @@ export class PlatformSupportMessageDto extends SupportMessageDto {
   @IsOptional() @IsBoolean() internal?: boolean;
 }
 
+/** `status=OPEN,WAITING` (comma list or repeated; WAITING = WAITING_ON_HOTEL). */
+const statusList = ({ value }: { value: unknown }) => {
+  const raw = (Array.isArray(value) ? value : [value]).flatMap((v) => String(v).split(',')).map((s) => s.trim().toUpperCase()).filter(Boolean);
+  return [...new Set(raw.map((s) => (s === 'WAITING' ? 'WAITING_ON_HOTEL' : s)))];
+};
+
 export class SupportListQueryDto {
-  @IsOptional() @IsIn(SUPPORT_STATUSES as unknown as string[]) status?: string;
+  @IsOptional() @Transform(statusList) @IsArray() @ArrayMaxSize(5) @IsIn(SUPPORT_STATUSES as unknown as string[], { each: true }) status?: string[];
+  @IsOptional() @IsIn(['open', 'resolved', 'all']) state?: 'open' | 'resolved' | 'all';
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) page?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) pageSize?: number;
 }

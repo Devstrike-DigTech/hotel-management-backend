@@ -1,5 +1,10 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Redis } from 'ioredis';
+import { AppConfigService } from '../../../config/app-config.service.js';
 import { DbService } from '../../../prisma/db.service.js';
+
+/** Redis channel: white-label state changed somewhere (another instance, the seed). */
+export const BRANDING_CHANNEL = 'hotel:branding-changed';
 
 export interface TenantBrand {
   /** White-label is switched on and the plan includes it. */
@@ -27,17 +32,48 @@ export interface TenantBrand {
  * every minute and at once after a change on this instance.
  */
 @Injectable()
-export class BrandingRegistry implements OnModuleInit {
+export class BrandingRegistry implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(BrandingRegistry.name);
   private brands = new Map<string, TenantBrand>();
   private timer: NodeJS.Timeout | null = null;
+  private sub: Redis | null = null;
+  private pub: Redis | null = null;
 
-  constructor(private readonly db: DbService) {}
+  constructor(
+    private readonly db: DbService,
+    private readonly config: AppConfigService,
+  ) {}
 
   async onModuleInit(): Promise<void> {
     await this.reload().catch((e: Error) => this.logger.warn(`White-label registry not loaded: ${e.message}`));
     this.timer = setInterval(() => void this.reload().catch(() => undefined), 60_000);
     this.timer.unref();
+    // Changes made elsewhere apply at once, not after the next minute.
+    try {
+      const url = this.config.get('REDIS_URL');
+      this.sub = new Redis(url, { lazyConnect: true, maxRetriesPerRequest: 1 });
+      this.pub = new Redis(url, { lazyConnect: true, maxRetriesPerRequest: 1 });
+      this.sub.on('error', () => undefined);
+      this.pub.on('error', () => undefined);
+      await this.sub.connect();
+      await this.pub.connect();
+      await this.sub.subscribe(BRANDING_CHANNEL);
+      this.sub.on('message', () => void this.reload().catch(() => undefined));
+    } catch (e) {
+      this.logger.warn(`White-label change notifications off: ${(e as Error).message}`);
+    }
+  }
+
+  onModuleDestroy(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.sub?.disconnect();
+    this.pub?.disconnect();
+  }
+
+  /** Reloads here and tells every other instance to reload. */
+  async changed(): Promise<void> {
+    await this.reload();
+    await this.pub?.publish(BRANDING_CHANNEL, String(Date.now())).catch(() => undefined);
   }
 
   get(tenantId: string | null | undefined): TenantBrand | null {

@@ -3,7 +3,7 @@ import { RoomsModule } from '../rooms/rooms.module.js';
 import { ExportsController, PlatformExportsController, PublicExportsController } from './exports/exports.controller.js';
 import { ExportsService } from './exports/exports.service.js';
 import { BrandingRegistry } from './white-label/branding.registry.js';
-import { PlatformSmsSendersController, PublicStaffPortalController, WhiteLabelController } from './white-label/white-label.controller.js';
+import { PlatformSmsSendersController, PublicBrandAssetsController, PublicStaffPortalController, WhiteLabelController } from './white-label/white-label.controller.js';
 import { WhiteLabelService } from './white-label/white-label.service.js';
 import { MockOidcController, SsoAuthController, SsoConfigController } from './sso/sso.controller.js';
 import { MockOidcService } from './sso/mock-oidc.service.js';
@@ -37,6 +37,7 @@ import { WebhooksService } from './webhooks/webhooks.service.js';
     PartnerController,
     WhiteLabelController,
     PublicStaffPortalController,
+    PublicBrandAssetsController,
     PlatformSmsSendersController,
     SsoConfigController,
     SsoAuthController,

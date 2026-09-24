@@ -19,7 +19,8 @@ import { PlatformAuditService } from '../../src/modules/platform/security/platfo
 import { DbService } from '../../src/prisma/db.service.js';
 import { PlatformPrismaService } from '../../src/prisma/platform-prisma.service.js';
 import { PrismaService } from '../../src/prisma/prisma.service.js';
-import { TenantDbRouter } from '../../src/prisma/tenant-db-router.js';
+import { ROUTING_CHANNEL, TenantDbRouter } from '../../src/prisma/tenant-db-router.js';
+import { BRANDING_CHANNEL } from '../../src/modules/enterprise/white-label/branding.registry.js';
 
 function config(): AppConfigService {
   const env = validateEnv(process.env);
@@ -53,6 +54,17 @@ export async function provisionDedicated(tenantId: string, slug: string): Promis
     await router.onModuleDestroy();
     await prisma.$disconnect();
     await platform.$disconnect();
+  }
+}
+
+/** Tells running API instances to reload white-label and routing state (Redis pub/sub). */
+export async function announceChanges(): Promise<void> {
+  const redis = new Redis(redisConnection(config().get('REDIS_URL')));
+  try {
+    await redis.publish(BRANDING_CHANNEL, String(Date.now()));
+    await redis.publish(ROUTING_CHANNEL, String(Date.now()));
+  } finally {
+    redis.disconnect();
   }
 }
 

@@ -26,6 +26,16 @@ const ATTACHMENT_TYPES: Record<string, string> = {
   'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'application/pdf': 'pdf', 'text/plain': 'txt', 'text/csv': 'csv',
 };
 const OPEN_STATUSES: SupportStatus[] = ['NEW', 'OPEN', 'WAITING_ON_HOTEL'];
+const RESOLVED_STATUSES: SupportStatus[] = ['RESOLVED', 'CLOSED'];
+
+/** Status filter: a list of statuses (`status=OPEN,WAITING`) and/or `state=open|resolved|all`. */
+export function statusFilter(status: string[] | undefined, state: string | undefined, fallback: SupportStatus[] | null): Prisma.SupportRequestWhereInput {
+  const byState = state === 'open' ? OPEN_STATUSES : state === 'resolved' ? RESOLVED_STATUSES : null;
+  let list: string[] | null = status?.length ? status : null;
+  if (list && byState) list = list.filter((s) => (byState as string[]).includes(s));
+  const chosen = list ?? byState ?? (state === 'all' ? null : fallback);
+  return chosen ? { status: { in: chosen } } : {};
+}
 
 export type SlaState = 'ON_TRACK' | 'DUE_SOON' | 'BREACHED' | 'MET' | 'MISSED';
 
@@ -219,10 +229,10 @@ export class SupportService {
     return this.db.system((tx) => this.claim(tx, keys, { kind: 'HOTEL', id: u.userId }, messageId));
   }
 
-  async list(u: AuthUser, q: { status?: string; page?: number; pageSize?: number }) {
+  async list(u: AuthUser, q: { status?: string[]; state?: string; page?: number; pageSize?: number }) {
     const page = q.page ?? 1;
     const pageSize = Math.min(q.pageSize ?? 20, 100);
-    const where: Prisma.SupportRequestWhereInput = { ...this.hotelWhere(u), ...(q.status && { status: q.status }) };
+    const where: Prisma.SupportRequestWhereInput = { ...this.hotelWhere(u), ...statusFilter(q.status, q.state, null) };
     const [rows, total] = await this.db.control(u.tenantId, async (tx) => [
       await tx.supportRequest.findMany({ where, orderBy: { lastMessageAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize, include: { _count: { select: { messages: { where: { internal: false } } } } } }),
       await tx.supportRequest.count({ where }),
@@ -284,12 +294,12 @@ export class SupportService {
   // Platform side
   // ---------------------------------------------------------------------------
 
-  async platformList(p: PlatformPrincipal, q: { status?: string; category?: string; priority?: string; assigneeId?: string; tenantId?: string; sla?: string; q?: string; page?: number; pageSize?: number }) {
+  async platformList(p: PlatformPrincipal, q: { status?: string[]; state?: string; category?: string; priority?: string; assigneeId?: string; tenantId?: string; sla?: string; q?: string; page?: number; pageSize?: number }) {
     const page = q.page ?? 1;
     const pageSize = Math.min(q.pageSize ?? 20, 100);
     const now = new Date();
     const where: Prisma.SupportRequestWhereInput = {
-      ...(q.status ? { status: q.status } : { status: { in: OPEN_STATUSES } }),
+      ...statusFilter(q.status, q.state, OPEN_STATUSES),
       ...(q.category && { category: q.category }),
       ...(q.priority && { priority: q.priority }),
       ...(q.tenantId && { tenantId: q.tenantId }),

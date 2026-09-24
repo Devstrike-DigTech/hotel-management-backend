@@ -10,7 +10,8 @@ import { AuditService, userActor } from '../../audit/audit.service.js';
 import { Err } from '../../ops/ops.helpers.js';
 import { isValidCidr } from '../../platform/security/cidr.js';
 import { PlatformJobsService } from '../../platform/console/platform-jobs.service.js';
-import { API_SCOPES, SCOPE_CODES, displayKey, formatApiKey, keyStatus, parseApiKey, type KeyEnvironment } from './api-keys.logic.js';
+import { EntitlementsService } from '../../entitlements/entitlements.service.js';
+import { API_SCOPES, SCOPE_CODES, displayKey, formatApiKey, keyStatus, parseApiKey, rateLimitsFor, type KeyEnvironment } from './api-keys.logic.js';
 
 const ROTATION_OVERLAP_MS = 24 * 3_600_000;
 
@@ -53,6 +54,7 @@ export class ApiKeysService implements OnModuleInit, OnModuleDestroy {
     private readonly db: DbService,
     private readonly audit: AuditService,
     private readonly config: AppConfigService,
+    private readonly entitlements: EntitlementsService,
   ) {
     PlatformJobsService.register('api-usage-flush', async (refs) => refs.get(ApiKeysService, { strict: false }).flush());
   }
@@ -426,12 +428,16 @@ export class ApiKeysService implements OnModuleInit, OnModuleDestroy {
       this.db.withAllProperties(u.tenantId, () => tx.property.findMany({ where: { tenantId: u.tenantId }, select: { id: true, name: true }, orderBy: { createdAt: 'asc' } })),
     );
     const baseUrl = `${base}/api/partner/v1`;
+    const ent = await this.entitlements.getEntitlements(u.tenantId);
+    const limits = rateLimitsFor(ent.subscription.planCode, this.config.get('PARTNER_RATE_LIMIT_ENTERPRISE'), this.config.get('PARTNER_RATE_LIMIT_DEFAULT'));
     const pid = properties[0]?.id ?? '<property id>';
     return {
       baseUrl,
       docsUrl: `${web}/developers`,
       openApiUrl: `${baseUrl}/openapi.json`,
       propertyIds: properties,
+      /** Per key (every key of the hotel has the same limits). */
+      rateLimit: { perMinute: limits.perMinute, perSecond: limits.perSecond, policy: `${limits.perMinute};w=60, ${limits.perSecond};w=1` },
       sampleCurl: `curl -s "${baseUrl}/availability?propertyId=${pid}&from=${lagosDate()}&to=${addDays(lagosDate(), 7)}" \\\n  -H "Authorization: Bearer hk_live_..."`,
     };
   }

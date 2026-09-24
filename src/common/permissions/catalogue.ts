@@ -256,6 +256,7 @@ export const PERMISSION_GROUPS: PermissionGroupDef[] = [
     group: 'support',
     label: 'Platform support',
     permissions: [
+      p('support.request', 'Contact platform support', 'Open support requests and reply to them (every built-in role has it).'),
       p('support.view_all', 'See every support request', 'See the support requests of the whole hotel group.'),
       p('support.sessions.view', 'See support sessions', 'See when platform support signed in as a staff member, and end a session.'),
     ],
@@ -303,8 +304,11 @@ export interface SystemRoleDef {
   permissions: readonly string[];
 }
 
+/** M6: permissions every built-in role has. */
+const EVERY_ROLE = ['support.request'];
+
 /** Built-in roles, in display order. Read-only and not deletable. */
-export const SYSTEM_ROLES: SystemRoleDef[] = [
+export const SYSTEM_ROLES: SystemRoleDef[] = ([
   { key: 'OWNER', name: 'Owner', description: 'Everything, always. Only an owner can add or change another owner.', permissions: ALL_PERMISSIONS },
   {
     key: 'MANAGER',
@@ -347,7 +351,7 @@ export const SYSTEM_ROLES: SystemRoleDef[] = [
     description: 'Works the kitchen display: prepares and bumps tickets.',
     permissions: ['kds.view', 'pos.view', 'stock.view'],
   },
-];
+] as SystemRoleDef[]).map((r) => ({ ...r, permissions: [...new Set([...r.permissions, ...EVERY_ROLE])] }));
 
 const SYSTEM_BY_KEY = new Map(SYSTEM_ROLES.map((r) => [r.key, r]));
 

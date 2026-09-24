@@ -18,7 +18,7 @@ import { prepareProTenant } from './seed-data/pro.js';
 import { seedPro } from './seed-data/pro-data.js';
 import { seedPlatformUsers } from './seed-data/platform-users.js';
 import { HARMATTAN, seedConsole, seedHarmattan, seedHarmattanControl } from './seed-data/enterprise.js';
-import { provisionDedicated, seedFailedJobs } from './seed-data/provision.js';
+import { announceChanges, provisionDedicated, seedFailedJobs } from './seed-data/provision.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const NAIRA = 100;
@@ -354,6 +354,8 @@ async function main() {
     return 0;
   });
   console.log('  %s failedJobs=%d', Object.entries(consoleData).map(([k, v]) => `${k}=${v}`).join(' '), jobs);
+  // A running API reloads white-label and routing state now instead of within the next minute.
+  await announceChanges().catch((e: Error) => console.log('  (no running API notified: %s)', e.message));
   console.log('Done. Hotel logins use password "%s"; demo owner: %s', HOTEL_PASSWORD, DEMO_HOTEL.owner.email);
 }
 
