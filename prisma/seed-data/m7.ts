@@ -151,7 +151,7 @@ const LAGOS_VEHICLES: VehicleOption[] = [
 const POINTS_LAGOS: PointSeed[] = [
   { name: 'Murtala Muhammed International Airport', shortName: 'MMIA', kind: 'AIRPORT', city: 'Lagos', address: 'Ikeja, Lagos', priceKobo: 25_000 * NAIRA, dropOffPriceKobo: 22_000 * NAIRA, vehicles: LAGOS_VEHICLES, leadTimeHours: 6, notesForGuest: 'Your driver waits at the arrivals exit holding a board with your name. Allow 60 to 90 minutes to Lekki.' },
   { name: 'Murtala Muhammed Airport Terminal 2 (domestic)', shortName: 'MMA2', kind: 'AIRPORT', city: 'Lagos', address: 'Ikeja, Lagos', priceKobo: 22_000 * NAIRA, dropOffPriceKobo: 20_000 * NAIRA, vehicles: LAGOS_VEHICLES, leadTimeHours: 6, notesForGuest: 'Meet your driver by the MMA2 car park exit.' },
-  { name: 'Jibowu Motor Park', shortName: 'Jibowu', kind: 'MOTOR_PARK', city: 'Lagos', address: 'Ikorodu Road, Jibowu, Yaba', priceKobo: 15_000 * NAIRA, vehicles: LAGOS_VEHICLES.slice(0, 2), leadTimeHours: 4, operatingHours: { open: '06:00', close: '21:00' }, notesForGuest: 'Call the driver when your bus reaches Ojota so he can meet you at the gate.' },
+  { name: 'Jibowu Motor Park', shortName: 'Jibowu', kind: 'MOTOR_PARK', city: 'Lagos', address: 'Ikorodu Road, Jibowu, Yaba', priceKobo: 15_000 * NAIRA, vehicles: LAGOS_VEHICLES.slice(0, 2), leadTimeHours: 4, operatingHours: { open: '06:00', close: '21:00' }, notesForGuest: 'Call the driver when your bus passes Ojota, about 20 minutes out, so he is at the Jibowu gate when you get in.' },
   { name: 'Ojota New Garage', shortName: 'Ojota', kind: 'MOTOR_PARK', city: 'Lagos', address: 'Ojota Interchange, Lagos', priceKobo: 18_000 * NAIRA, vehicles: LAGOS_VEHICLES.slice(0, 2), leadTimeHours: 4, operatingHours: { open: '06:00', close: '20:00' } },
   { name: 'Mobolaji Johnson Station, Ebute Metta', shortName: 'Ebute Metta station', kind: 'TRAIN_STATION', city: 'Lagos', address: 'Ebute Metta, Lagos', priceKobo: 15_000 * NAIRA, vehicles: LAGOS_VEHICLES.slice(0, 2), leadTimeHours: 6, operatingHours: { open: '07:00', close: '20:00' } },
   { name: 'Maza-Maza Park', shortName: 'Maza-Maza', kind: 'MOTOR_PARK', city: 'Lagos', address: 'Old Ojo Road, Maza-Maza', priceKobo: 20_000 * NAIRA, vehicles: LAGOS_VEHICLES.slice(0, 2), leadTimeHours: 6, operatingHours: { open: '06:00', close: '19:00' } },
@@ -313,8 +313,8 @@ function consentLast(list: FormField[]): FormField[] {
   return consent ? [...list.filter((f) => f !== consent), consent] : list;
 }
 
-function pickupAsAirport(list: FormField[]): FormField[] {
-  return list.map((f) => (f.key === 'arrivalPickup' ? { ...f, label: 'Airport pickup', helpText: 'We can meet you at the airport, a motor park, the train station or the jetty. Priced per pickup point.' } : f));
+function withPickupWording(list: FormField[]): FormField[] {
+  return list.map((f) => (f.key === 'arrivalPickup' ? { ...f, label: 'Pickup when you arrive', helpText: 'We can meet you at the airport, a motor park, the train station or the jetty. Priced per pickup point.' } : f));
 }
 
 async function seedForm(prisma: PrismaClient, tenantId: string, propertyId: string, presetId: PresetId, features: string[], steps: FormStep[], by: string): Promise<string> {
@@ -529,7 +529,7 @@ export async function seedM7(prisma: PrismaClient): Promise<Record<string, numbe
     ], boutique, 'Tunde Bakare');
     counts.themes++;
     const v1 = buildPreset('boutique', features, formLimit).fields;
-    const v2 = withEdits(v1, (list) => consentLast(pickupAsAirport([
+    const v2 = withEdits(v1, (list) => consentLast(withPickupWording([
       ...list,
       ...buildPreset('business', features, formLimit).fields.filter((f) => f.key === 'arrivalPickup'),
       {
@@ -539,7 +539,7 @@ export async function seedM7(prisma: PrismaClient): Promise<Record<string, numbe
     ])));
     const versionId = await seedForm(prisma, lekki.tenantId, lekki.id, 'boutique', features, [
       { note: 'Boutique preset', fields: v1, daysAgo: 45 },
-      { note: 'Airport pickup and occasion details', fields: v2, daysAgo: 12 },
+      { note: 'Arrival pickup and occasion details', fields: v2, daysAgo: 12 },
     ], 'Tunde Bakare');
     counts.forms++;
     const extras = await upsertExtras(prisma, lekki.tenantId, lekki.id, ['breakfast', 'early', 'late', 'cake', 'wine', 'laundry']);
@@ -570,7 +570,7 @@ export async function seedM7(prisma: PrismaClient): Promise<Record<string, numbe
     const d = draftFor('business', { primary: '#1D3557', secondary: '#B4452A', logoUrl: ikoyi.logoUrl, fontPairingId: 'spacegrotesk-plexsans' }, { colourMode: 'LIGHT' });
     await seedTheme(prisma, ikoyi.tenantId, ikoyi.id, [{ note: 'Business template for Ikoyi', draft: d, daysAgo: 30 }], d, 'Tunde Bakare');
     counts.themes++;
-    const fields = withEdits(buildPreset('business', features, formLimit).fields, (l) => pickupAsAirport(l));
+    const fields = withEdits(buildPreset('business', features, formLimit).fields, (l) => withPickupWording(l));
     const versionId = await seedForm(prisma, ikoyi.tenantId, ikoyi.id, 'business', features, [{ note: 'Business hotel preset', fields, daysAgo: 30 }], 'Tunde Bakare');
     counts.forms++;
     const extras = await upsertExtras(prisma, ikoyi.tenantId, ikoyi.id, ['breakfastPerPerson', 'late', 'laundry']);
@@ -593,7 +593,7 @@ export async function seedM7(prisma: PrismaClient): Promise<Record<string, numbe
     const d = draftFor('resort', { primary: '#0E7490', secondary: '#F4A259', logoUrl: eko.logoUrl }, { colourMode: 'LIGHT' });
     await seedTheme(prisma, eko.tenantId, eko.id, [{ note: 'Resort template', draft: d, daysAgo: 18 }], d, 'Babajide Olatunji');
     counts.themes++;
-    const fields = withEdits(buildPreset('resort', features, formLimit).fields, (l) => pickupAsAirport(l));
+    const fields = withEdits(buildPreset('resort', features, formLimit).fields, (l) => withPickupWording(l));
     const versionId = await seedForm(prisma, eko.tenantId, eko.id, 'resort', features, [{ note: 'Resort preset', fields, daysAgo: 18 }], 'Babajide Olatunji');
     counts.forms++;
     const extras = await upsertExtras(prisma, eko.tenantId, eko.id, ['breakfastPerPerson', 'early', 'cake', 'spa']);
@@ -668,7 +668,7 @@ export async function seedM7Harmattan(prisma: PrismaClient, tenantId: string): P
   }
   const abuja = props.find((p) => p.slug === 'harmattan-abuja');
   if (!abuja) return counts;
-  const fields = withEdits(buildPreset('event_venue', features, formLimit).fields, (l) => consentLast(pickupAsAirport([...l, ...buildPreset('business', features, formLimit).fields.filter((f) => f.libraryKey === 'company' || f.key === 'purposeOfVisit')])));
+  const fields = withEdits(buildPreset('event_venue', features, formLimit).fields, (l) => consentLast(withPickupWording([...l, ...buildPreset('business', features, formLimit).fields.filter((f) => f.libraryKey === 'company' || f.key === 'purposeOfVisit')])));
   const versionId = await seedForm(prisma, tenantId, abuja.id, 'event_venue', features, [{ note: 'Events and business guests', fields, daysAgo: 35 }], 'Amina Danjuma');
   counts.forms++;
   const extras = await upsertExtras(prisma, tenantId, abuja.id, ['breakfastPerPerson', 'early', 'late', 'cake', 'laundry']);
