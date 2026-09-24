@@ -169,6 +169,59 @@ export const envSchema = z.object({
   /** Set to false to switch off the Redis rate limits on public endpoints. */
   PUBLIC_RATE_LIMITS: bool.default(true),
 
+  // --- M6: Enterprise tier and the platform console --------------------------
+  /** Browser origins allowed on /api/v1/platform/* (the platform console only). */
+  PLATFORM_ORIGINS: z
+    .string()
+    .default('http://localhost:3002')
+    .transform((v) =>
+      v
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+  /** Base URL of the platform console (invitation links). Default: the first PLATFORM_ORIGINS entry. */
+  PLATFORM_APP_URL: z.url().optional(),
+  /**
+   * Key material for platform secrets at rest (TOTP secrets, dedicated DB URLs,
+   * SSO client secrets, webhook signing secrets). Default: derived from
+   * GUEST_DATA_KEY. Rotating it makes those values unreadable.
+   */
+  PLATFORM_DATA_KEY: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim().length > 0 ? v.trim() : undefined))
+    .refine((v) => v === undefined || v.length >= 32, { message: 'PLATFORM_DATA_KEY must be at least 32 characters' }),
+  /**
+   * Owner-role URL with CREATEDB used to create and fill dedicated tenant
+   * databases (and by `pnpm db:migrate:all`). Default outside production:
+   * DATABASE_MIGRATION_URL. Empty in production = dedicated databases must be
+   * created by an operator and pasted as a URL.
+   */
+  DATABASE_ADMIN_URL: z.url().optional(),
+  /** Name prefix of dedicated tenant databases created by the API. */
+  DEDICATED_DB_PREFIX: z
+    .string()
+    .regex(/^[a-z_][a-z0-9_]{0,30}$/)
+    .default('hotel_t_'),
+  /** Most dedicated databases with an open connection pool at once (least recently used are closed). */
+  DEDICATED_DB_MAX_CLIENTS: z.coerce.number().int().min(1).max(500).default(20),
+  /** Pool size per dedicated database and role. */
+  DEDICATED_DB_POOL_MAX: z.coerce.number().int().min(1).max(50).default(3),
+  /** Days the shared copy of a tenant is kept after its cutover to a dedicated database. */
+  DEDICATED_SHARED_RETENTION_DAYS: z.coerce.number().int().min(0).max(90).default(7),
+  /** CNAME target of white-label staff portal domains (default portal.<APP_DOMAIN>). */
+  STAFF_PORTAL_TARGET: z.string().optional().transform((v) => v || undefined),
+  /** Serve the development OIDC provider at /api/v1/dev/oidc (default: on outside production; never in production). */
+  OIDC_MOCK_ENABLED: bool.optional(),
+  /** Outbound webhook request timeout. */
+  WEBHOOK_TIMEOUT_MS: z.coerce.number().int().min(1000).max(30_000).default(10_000),
+  /** Partner API requests per minute per key: Enterprise plan / plans with an api_access add-on. */
+  PARTNER_RATE_LIMIT_ENTERPRISE: z.coerce.number().int().positive().default(600),
+  PARTNER_RATE_LIMIT_DEFAULT: z.coerce.number().int().positive().default(120),
+  /** Days before offboarded tenants are deleted (NDPA grace). */
+  OFFBOARDING_GRACE_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+
   /** Requests per minute per IP on the auth endpoints. */
   AUTH_RATE_LIMIT: z.coerce.number().int().positive().default(20),
   /** Disable BullMQ workers and repeatable jobs (tests, one-off scripts). */
@@ -201,6 +254,7 @@ export function validateEnv(raw: Record<string, unknown>): Env {
     throw new Error(`Invalid environment configuration:\n${problems}`);
   }
   const extra = [...checkStorage(parsed.data), ...checkOutbound(parsed.data)];
+  if (parsed.data.NODE_ENV === 'production' && parsed.data.OIDC_MOCK_ENABLED) extra.push('  - OIDC_MOCK_ENABLED: must be off in production');
   if (extra.length) {
     throw new Error(`Invalid environment configuration:\n${extra.join('\n')}`);
   }

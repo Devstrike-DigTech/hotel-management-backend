@@ -16,15 +16,11 @@ import { DEMO_PINS, seedOperations } from './seed-data/operations.js';
 import { seedGrowth, seedRatePlansEverywhere } from './seed-data/growth.js';
 import { prepareProTenant } from './seed-data/pro.js';
 import { seedPro } from './seed-data/pro-data.js';
+import { seedPlatformUsers } from './seed-data/platform-users.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const NAIRA = 100;
 
-const PLATFORM_ADMIN = {
-  email: 'admin@devstrike.ng',
-  password: 'Admin1234!',
-  fullName: 'Devstrike Admin',
-};
 const HOTEL_PASSWORD = 'Demo1234!';
 
 const argonOptions = {
@@ -72,21 +68,6 @@ async function seedCatalogue() {
     });
   }
   console.log(`  features: ${FEATURES.length}, plans: ${PLANS.length}`);
-}
-
-async function seedPlatformAdmin() {
-  const passwordHash = await argon2.hash(PLATFORM_ADMIN.password, argonOptions);
-  await prisma.platformUser.upsert({
-    where: { email: PLATFORM_ADMIN.email },
-    create: {
-      email: PLATFORM_ADMIN.email,
-      fullName: PLATFORM_ADMIN.fullName,
-      passwordHash,
-      role: 'SUPER_ADMIN',
-    },
-    update: { fullName: PLATFORM_ADMIN.fullName, passwordHash, isActive: true },
-  });
-  console.log(`  platform admin: ${PLATFORM_ADMIN.email}`);
 }
 
 async function seedHotel(h: HotelSeed, passwordHash: string) {
@@ -325,7 +306,7 @@ async function seedAuditHistory(
 async function main() {
   console.log('Seeding catalogue...');
   await seedCatalogue();
-  await seedPlatformAdmin();
+  await seedPlatformUsers(prisma, argonOptions);
 
   console.log('Seeding hotels...');
   const passwordHash = await argon2.hash(HOTEL_PASSWORD, argonOptions);

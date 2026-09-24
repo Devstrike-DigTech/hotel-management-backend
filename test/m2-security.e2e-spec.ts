@@ -1,6 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { API, appRoleClient, createApp, platformRoleClient, setSignedTenant, signup, type SignedUp } from './helpers.js';
+import { API, appRoleClient, createApp, platformAuth, platformRoleClient, setSignedTenant, signup, type SignedUp } from './helpers.js';
 import { guestInput } from './m2-helpers.js';
 
 /**
@@ -106,11 +106,8 @@ describe('hotel_app cannot escalate across tenants (signed context, platform rol
   });
 
   it('the platform console still works through the new role', async () => {
-    const res = await request(app.getHttpServer())
-      .post(`${API}/platform/auth/login`)
-      .send({ email: 'admin@devstrike.ng', password: 'Admin1234!' })
-      .expect(200);
-    const t = await request(app.getHttpServer()).get(`${API}/platform/tenants/${a.tenantId}`).set('Authorization', `Bearer ${res.body.accessToken}`).expect(200);
+    const auth = await platformAuth(app);
+    const t = await request(app.getHttpServer()).get(`${API}/platform/tenants/${a.tenantId}`).set(auth).expect(200);
     expect(t.body.id).toBe(a.tenantId);
   });
 });

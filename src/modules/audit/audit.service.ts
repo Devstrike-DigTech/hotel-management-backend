@@ -6,6 +6,17 @@ import { addDays, diffDays, isIsoDate, lagosDate, lagosStartOfDay } from '../../
 import { markAriDirty } from '../channels/ari-signal.js';
 import { Err } from '../ops/ops.helpers.js';
 import { currentPropertyId } from '../../common/property-scope.js';
+import { apiKeyContext, impersonationContext } from '../../common/impersonation-context.js';
+
+/**
+ * M6: hooks run inside the audited transaction (outbound webhooks derive their
+ * events from audit entries). Registered at start-up by the webhooks module.
+ */
+export type AuditHook = (tx: Tx, entry: AuditEntry & { propertyId: string | null }) => Promise<void>;
+const auditHooks: AuditHook[] = [];
+export function registerAuditHook(hook: AuditHook): void {
+  if (!auditHooks.includes(hook)) auditHooks.push(hook);
+}
 
 export type AuditActor =
   | { kind: 'user'; id: string; name: string }
@@ -99,27 +110,43 @@ export class AuditService {
   }
 
   async record(tx: Tx, entry: AuditEntry): Promise<void> {
-    const a = entry.actor;
+    let a = entry.actor;
+    let metadata = entry.metadata ?? {};
+    // M6: support sessions and API keys are named in the trail.
+    const imp = impersonationContext.getStore();
+    if (imp && entry.tenantId && a?.kind === 'user') {
+      a = { ...a, name: `${a.name} (Devstrike support: ${imp.platformUserName})` };
+      metadata = { ...metadata, impersonation: { sessionId: imp.sessionId, platformUserId: imp.platformUserId, platformUserName: imp.platformUserName } };
+    }
+    const key = apiKeyContext.getStore();
+    if (key && entry.tenantId && a?.kind === 'user') {
+      a = { ...a, name: `API key ${key.name}` };
+      metadata = { ...metadata, apiKeyId: key.apiKeyId, apiKeyEnvironment: key.environment };
+    }
     // M5: anything that changes availability, rates or restrictions queues a
     // (debounced, diffed) push to the property's channel manager connection.
     const propertyId = entry.propertyId ?? (entry.tenantId ? currentPropertyId(entry.tenantId) : null);
     if (entry.tenantId && propertyId && ARI_ENTITIES.has(entry.entityType)) {
       await markAriDirty(tx, entry.tenantId, propertyId, lagosDate(), addDays(lagosDate(), 365));
     }
+    const auditPropertyId = entry.propertyId !== undefined ? entry.propertyId : entry.tenantId ? currentPropertyId(entry.tenantId) : null;
     await tx.auditLog.create({
       data: {
         tenantId: entry.tenantId,
-        propertyId: entry.propertyId !== undefined ? entry.propertyId : entry.tenantId ? currentPropertyId(entry.tenantId) : null,
+        propertyId: auditPropertyId,
         actorUserId: a?.kind === 'user' ? a.id : null,
         actorPlatformUserId: a?.kind === 'platform' ? a.id : null,
         actorName: a?.name ?? null,
         action: entry.action,
         entityType: entry.entityType,
         entityId: entry.entityId ?? null,
-        metadata: (entry.metadata ?? {}) as Prisma.InputJsonValue,
+        metadata: metadata as Prisma.InputJsonValue,
         ip: entry.ip ?? null,
       },
     });
+    if (entry.tenantId) {
+      for (const hook of auditHooks) await hook(tx, { ...entry, metadata, propertyId: auditPropertyId });
+    }
   }
 
   private where(tenantId: string, f: AuditFilter): Prisma.AuditLogWhereInput {

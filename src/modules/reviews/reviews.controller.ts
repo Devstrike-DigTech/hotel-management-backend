@@ -1,3 +1,4 @@
+import { PlatformPermissionRequired } from '../platform/security/platform-permissions.js';
 import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Put, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { AuthUser, PlatformPrincipal } from '../../common/auth-types.js';
@@ -75,6 +76,7 @@ export class HotelReviewsController {
 @ApiTags('Platform reviews')
 @ApiBearerAuth()
 @PlatformOnly()
+@PlatformPermissionRequired('reviews.moderate')
 @Controller('platform/reviews')
 export class PlatformReviewsController {
   constructor(private readonly svc: ReviewsService) {}

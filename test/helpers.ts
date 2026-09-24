@@ -3,6 +3,9 @@ import { Test } from '@nestjs/testing';
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';
 import request from 'supertest';
+import { Redis } from 'ioredis';
+import { totp } from '../src/modules/platform/security/totp.js';
+import { PLATFORM_USERS } from '../prisma/seed-data/platform-users.js';
 import { AppModule } from '../src/app.module.js';
 import { setupApp } from '../src/setup-app.js';
 import { signContext } from '../src/prisma/db.service.js';
@@ -71,12 +74,61 @@ export async function signup(app: INestApplication, name = 'Test Hotel'): Promis
   };
 }
 
-export async function platformAuth(app: INestApplication) {
-  const res = await request(app.getHttpServer())
-    .post(`${API}/platform/auth/login`)
-    .send({ email: 'admin@devstrike.ng', password: 'Admin1234!' })
-    .expect(200);
-  return { Authorization: `Bearer ${res.body.accessToken}` };
+/** Dev TOTP secrets of the seeded platform users (see prisma/seed-data/platform-users.ts). */
+export const PLATFORM_TOTP: Record<string, string> = Object.fromEntries(PLATFORM_USERS.map((u) => [u.email, u.totpSecret]));
+
+const platformCache = new WeakMap<INestApplication, Map<string, PlatformSession>>();
+
+export interface PlatformSession {
+  Authorization: string;
+  accessToken: string;
+  refreshToken: string;
+  userId: string;
+  sessionId: string;
+}
+
+/**
+ * Clears the TOTP replay guard of a platform user (Redis), so a test can use
+ * the current code again. Production never does this.
+ */
+export async function resetTotpReplay(userId: string): Promise<void> {
+  const redis = new Redis(process.env.REDIS_URL!);
+  try {
+    const used = await redis.keys(`platform:totp-used:${userId}:*`);
+    if (used.length) await redis.del(...used);
+  } finally {
+    redis.disconnect();
+  }
+}
+
+/** Current TOTP code for a seeded platform user. */
+export function platformCode(email = 'admin@devstrike.ng', at = new Date()): string {
+  return totp(PLATFORM_TOTP[email]!, at);
+}
+
+/** Password + TOTP sign-in of a seeded platform user (fresh session every call). */
+export async function platformLogin(app: INestApplication, email = 'admin@devstrike.ng', password = 'Admin1234!'): Promise<PlatformSession> {
+  const server = app.getHttpServer();
+  const step1 = await request(server).post(`${API}/platform/auth/login`).send({ email, password }).expect(200);
+  const sub = JSON.parse(Buffer.from(String(step1.body.mfaToken).split('.')[1]!, 'base64url').toString('utf8')).sub as string;
+  await resetTotpReplay(sub);
+  const res = await request(server).post(`${API}/platform/auth/mfa/verify`).send({ mfaToken: step1.body.mfaToken, code: platformCode(email) }).expect(200);
+  return {
+    Authorization: `Bearer ${res.body.accessToken}`,
+    accessToken: res.body.accessToken,
+    refreshToken: res.body.refreshToken,
+    userId: res.body.user.id,
+    sessionId: res.body.user.session.id,
+  };
+}
+
+/** Authorization header of the platform super admin (one session per app instance). */
+export async function platformAuth(app: INestApplication, email = 'admin@devstrike.ng') {
+  let byEmail = platformCache.get(app);
+  if (!byEmail) platformCache.set(app, (byEmail = new Map()));
+  let s = byEmail.get(email);
+  if (!s) byEmail.set(email, (s = await platformLogin(app, email)));
+  return { Authorization: s.Authorization };
 }
 
 export async function createRoomType(app: INestApplication, auth: { Authorization: string }) {

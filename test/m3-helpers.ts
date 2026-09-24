@@ -2,7 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import { createHmac, randomInt } from 'node:crypto';
 import http from 'node:http';
 import request from 'supertest';
-import { API, signup, uniq, type SignedUp } from './helpers.js';
+import { API, platformAuth, signup, uniq, type SignedUp } from './helpers.js';
 import { lagosDay } from './m2-helpers.js';
 
 export type Auth = { Authorization: string };
@@ -166,8 +166,7 @@ export function postWebhook(app: INestApplication, raw: string, signature = sign
 }
 
 export async function platformToken(app: INestApplication): Promise<Auth> {
-  const res = await request(app.getHttpServer()).post(`${API}/platform/auth/login`).send({ email: 'admin@devstrike.ng', password: 'Admin1234!' }).expect(200);
-  return { Authorization: `Bearer ${res.body.accessToken}` };
+  return platformAuth(app);
 }
 
 /** Signs a guest in with the OTP from the dev outbox. */

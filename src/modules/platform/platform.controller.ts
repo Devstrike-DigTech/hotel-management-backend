@@ -10,11 +10,13 @@ import {
   Post,
   Put,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { TrustedThrottlerGuard } from '../../common/guards/trusted-throttler.guard.js';
-import type { PlatformPrincipal } from '../../common/auth-types.js';
+import type { AppRequest, PlatformPrincipal } from '../../common/auth-types.js';
+import { PLATFORM_PERMISSIONS, PLATFORM_ROLES, PlatformPermissionRequired, RequireStepUp } from './security/platform-permissions.js';
 import {
   ClientIp,
   CurrentPlatformUser,
@@ -23,6 +25,15 @@ import {
 } from '../../common/decorators/index.js';
 import { DunningService } from '../billing/dunning.service.js';
 import {
+  AcceptInviteDto,
+  ChangePasswordDto,
+  DevTotpQueryDto,
+  IpAllowlistDto,
+  MfaCodeDto,
+  MfaTokenDto,
+  MfaVerifyDto,
+  PlatformRefreshDto,
+  StepUpDto,
   PlatformLoginDto,
   SetFeatureOverrideDto,
   TenantListQueryDto,
@@ -41,8 +52,70 @@ export class PlatformAuthController {
   @Public()
   @UseGuards(TrustedThrottlerGuard)
   @HttpCode(200)
-  login(@Body() dto: PlatformLoginDto, @ClientIp() ip?: string) {
-    return this.auth.login(dto.email, dto.password, ip);
+  @ApiOperation({ summary: 'Password step: returns an MFA challenge (TOTP or enrolment), never a token' })
+  login(@Body() dto: PlatformLoginDto, @Req() req: AppRequest) {
+    return this.auth.login(dto.email, dto.password, meta(req));
+  }
+
+  @Post('mfa/enrol/start')
+  @Public()
+  @UseGuards(TrustedThrottlerGuard)
+  @HttpCode(200)
+  enrolStart(@Body() dto: MfaTokenDto) {
+    return this.auth.enrolStart(dto.mfaToken);
+  }
+
+  @Post('mfa/enrol/verify')
+  @Public()
+  @UseGuards(TrustedThrottlerGuard)
+  @HttpCode(200)
+  enrolVerify(@Body() dto: MfaCodeDto, @Req() req: AppRequest) {
+    return this.auth.enrolVerify(dto.mfaToken, dto.code, meta(req));
+  }
+
+  @Post('mfa/verify')
+  @Public()
+  @UseGuards(TrustedThrottlerGuard)
+  @HttpCode(200)
+  verify(@Body() dto: MfaVerifyDto, @Req() req: AppRequest) {
+    return this.auth.verify(dto.mfaToken, { code: dto.code, recoveryCode: dto.recoveryCode }, meta(req));
+  }
+
+  @Post('refresh')
+  @Public()
+  @UseGuards(TrustedThrottlerGuard)
+  @HttpCode(200)
+  refresh(@Body() dto: PlatformRefreshDto, @Req() req: AppRequest) {
+    return this.auth.refresh(dto.refreshToken, meta(req));
+  }
+
+  @Get('invite/:token')
+  @Public()
+  invite(@Param('token') token: string) {
+    return this.auth.invite(token);
+  }
+
+  @Post('invite/accept')
+  @Public()
+  @UseGuards(TrustedThrottlerGuard)
+  @HttpCode(200)
+  acceptInvite(@Body() dto: AcceptInviteDto, @Req() req: AppRequest) {
+    return this.auth.acceptInvite(dto.token, dto.password, dto.fullName, meta(req));
+  }
+
+  @Get('dev/totp')
+  @Public()
+  @ApiOperation({ summary: 'Development only: current TOTP code of an enrolled platform user (404 in production)' })
+  devTotp(@Query() q: DevTotpQueryDto) {
+    return this.auth.devTotp(q.email);
+  }
+
+  @Post('logout')
+  @PlatformOnly()
+  @ApiBearerAuth()
+  @HttpCode(200)
+  logout(@CurrentPlatformUser() p: PlatformPrincipal, @Req() req: AppRequest) {
+    return this.auth.logout(p, meta(req));
   }
 
   @Get('me')
@@ -50,6 +123,79 @@ export class PlatformAuthController {
   @ApiBearerAuth()
   me(@CurrentPlatformUser() p: PlatformPrincipal) {
     return this.auth.me(p);
+  }
+
+  @Post('step-up')
+  @PlatformOnly()
+  @ApiBearerAuth()
+  @HttpCode(200)
+  stepUp(@CurrentPlatformUser() p: PlatformPrincipal, @Body() dto: StepUpDto, @Req() req: AppRequest) {
+    return this.auth.stepUp(p, dto, meta(req));
+  }
+
+  @Get('sessions')
+  @PlatformOnly()
+  @ApiBearerAuth()
+  sessions(@CurrentPlatformUser() p: PlatformPrincipal) {
+    return this.auth.sessions(p);
+  }
+
+  @Post('sessions/revoke-others')
+  @PlatformOnly()
+  @ApiBearerAuth()
+  @HttpCode(200)
+  revokeOthers(@CurrentPlatformUser() p: PlatformPrincipal, @Req() req: AppRequest) {
+    return this.auth.revokeOthers(p, meta(req));
+  }
+
+  @Delete('sessions/:id')
+  @PlatformOnly()
+  @ApiBearerAuth()
+  revokeSession(@CurrentPlatformUser() p: PlatformPrincipal, @Param('id', ParseUUIDPipe) id: string, @Req() req: AppRequest) {
+    return this.auth.revokeSession(p, id, meta(req));
+  }
+
+  @Post('mfa/recovery-codes')
+  @PlatformOnly()
+  @RequireStepUp()
+  @ApiBearerAuth()
+  @HttpCode(200)
+  recoveryCodes(@CurrentPlatformUser() p: PlatformPrincipal, @Req() req: AppRequest) {
+    return this.auth.regenerateRecoveryCodes(p, meta(req));
+  }
+
+  @Post('password')
+  @PlatformOnly()
+  @RequireStepUp()
+  @ApiBearerAuth()
+  @HttpCode(200)
+  password(@CurrentPlatformUser() p: PlatformPrincipal, @Body() dto: ChangePasswordDto, @Req() req: AppRequest) {
+    return this.auth.changePassword(p, dto.currentPassword, dto.newPassword, meta(req));
+  }
+
+  @Put('ip-allowlist')
+  @PlatformOnly()
+  @RequireStepUp()
+  @ApiBearerAuth()
+  ipAllowlist(@CurrentPlatformUser() p: PlatformPrincipal, @Body() dto: IpAllowlistDto, @Req() req: AppRequest) {
+    return this.auth.setIpAllowlist(p, dto.cidrs, meta(req));
+  }
+}
+
+/** Client address and user agent of a request, for sessions and the audit log. */
+export function meta(req: AppRequest) {
+  const ua = req.headers['user-agent'];
+  return { ip: req.ip, userAgent: Array.isArray(ua) ? ua[0] : ua };
+}
+
+@ApiTags('Platform console')
+@ApiBearerAuth()
+@PlatformOnly()
+@Controller('platform')
+export class PlatformPermissionsController {
+  @Get('permissions')
+  permissions() {
+    return { permissions: PLATFORM_PERMISSIONS, roles: PLATFORM_ROLES };
   }
 }
 
@@ -64,21 +210,25 @@ export class PlatformController {
   ) {}
 
   @Get('metrics')
+  @PlatformPermissionRequired('tenants.view')
   metrics() {
     return this.platform.metrics();
   }
 
   @Get('tenants')
+  @PlatformPermissionRequired('tenants.view')
   tenants(@Query() q: TenantListQueryDto) {
     return this.platform.tenants(q);
   }
 
   @Get('tenants/:id')
+  @PlatformPermissionRequired('tenants.view')
   tenant(@Param('id', ParseUUIDPipe) id: string) {
     return this.platform.tenant(id);
   }
 
   @Patch('tenants/:id/subscription')
+  @PlatformPermissionRequired('tenants.manage')
   updateSubscription(
     @CurrentPlatformUser() p: PlatformPrincipal,
     @Param('id', ParseUUIDPipe) id: string,
@@ -89,6 +239,7 @@ export class PlatformController {
   }
 
   @Put('tenants/:id/features')
+  @PlatformPermissionRequired('tenants.manage')
   @ApiOperation({ summary: 'Grant (enabled=true) or revoke (false) a feature for one tenant' })
   setFeature(
     @CurrentPlatformUser() p: PlatformPrincipal,
@@ -100,6 +251,7 @@ export class PlatformController {
   }
 
   @Delete('tenants/:id/features/:featureCode')
+  @PlatformPermissionRequired('tenants.manage')
   @ApiOperation({ summary: 'Remove an override so the tenant falls back to its plan' })
   removeFeature(
     @CurrentPlatformUser() p: PlatformPrincipal,
@@ -111,11 +263,13 @@ export class PlatformController {
   }
 
   @Get('plans')
+  @PlatformPermissionRequired('tenants.view')
   plans() {
     return this.platform.plans();
   }
 
   @Patch('plans/:code')
+  @PlatformPermissionRequired('plans.manage')
   updatePlan(
     @CurrentPlatformUser() p: PlatformPrincipal,
     @Param('code') code: string,
@@ -126,6 +280,7 @@ export class PlatformController {
   }
 
   @Post('jobs/dunning/run')
+  @PlatformPermissionRequired('system.view')
   @HttpCode(200)
   @ApiOperation({ summary: 'Run the dunning job now (normally daily at 02:00 Lagos)' })
   runDunning() {

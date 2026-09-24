@@ -1,3 +1,4 @@
+import { PlatformPermissionRequired } from '../platform/security/platform-permissions.js';
 import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsOptional, IsString, IsUUID, Matches, MaxLength } from 'class-validator';
@@ -40,44 +41,52 @@ export class PlatformMarketplaceController {
   ) {}
 
   @Get('marketplace/summary')
+  @PlatformPermissionRequired('tenants.view')
   summary(@Query() q: SummaryQueryDto) {
     return this.svc.summary(q);
   }
 
   @Get('commission/receivables')
+  @PlatformPermissionRequired('billing.view')
   receivables(@Query() q: MonthQueryDto) {
     return this.svc.receivables(q.month);
   }
 
   @Post('commission/receivables/settle')
+  @PlatformPermissionRequired('commission.manage')
   @HttpCode(200)
   settle(@CurrentPlatformUser() p: PlatformPrincipal, @Body() dto: SettleDto, @ClientIp() ip?: string) {
     return this.svc.settle(p, dto, ip);
   }
 
   @Get('payments/orphaned')
+  @PlatformPermissionRequired('billing.view')
   orphaned(@Query() q: OrphanQueryDto) {
     return this.svc.orphaned(q);
   }
 
   @Post('payments/:id/retry-refund')
+  @PlatformPermissionRequired('billing.manage')
   @HttpCode(200)
   retryRefund(@CurrentPlatformUser() p: PlatformPrincipal, @Param('id', ParseUUIDPipe) id: string, @ClientIp() ip?: string) {
     return this.svc.retryRefund(p, id, ip);
   }
 
   @Get('notifications')
+  @PlatformPermissionRequired('system.view')
   notifications(@Query() q: NotificationQueryDto) {
     return this.svc.notifications(q);
   }
 
   @Post('jobs/holds/sweep')
+  @PlatformPermissionRequired('system.view')
   @HttpCode(200)
   sweepHolds() {
     return this.holds.sweep();
   }
 
   @Post('jobs/guest-notifications/run')
+  @PlatformPermissionRequired('system.view')
   @HttpCode(200)
   runGuestNotifications() {
     return this.guestJobs.sweep();

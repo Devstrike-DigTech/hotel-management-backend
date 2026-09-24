@@ -13,6 +13,10 @@ import {
 } from '../auth-types.js';
 import { IS_GUEST_KEY, IS_PLATFORM_KEY, IS_PUBLIC_KEY, OPTIONAL_GUEST_KEY } from '../decorators/index.js';
 import { AppException } from '../errors/app-exception.js';
+import { PlatformSessionService } from '../../modules/platform/security/platform-session.service.js';
+import { ImpersonationGate, impersonationReadOnly, READ_ONLY_ALLOWED_WRITES } from '../../modules/platform/security/impersonation-gate.js';
+
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 /**
  * Global authentication guard.
@@ -30,6 +34,8 @@ export class AuthGuard implements CanActivate {
     private readonly reflector: Reflector,
     private readonly jwt: JwtService,
     private readonly config: AppConfigService,
+    private readonly platformSessions: PlatformSessionService,
+    private readonly impersonation: ImpersonationGate,
   ) {}
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
@@ -65,35 +71,48 @@ export class AuthGuard implements CanActivate {
       targets,
     );
 
-    try {
-      if (platform) {
-        const p = await this.jwt.verifyAsync<PlatformTokenPayload>(token, {
+    if (platform) {
+      let p: PlatformTokenPayload;
+      try {
+        p = await this.jwt.verifyAsync<PlatformTokenPayload>(token, {
           secret: this.config.get('JWT_PLATFORM_SECRET'),
           audience: PLATFORM_AUDIENCE,
           issuer: this.config.get('APP_DOMAIN'),
         });
-        req.platformUser = {
-          platformUserId: p.sub,
-          email: p.email,
-          role: p.role,
-          fullName: p.name,
-        };
-      } else {
-        const p = await this.jwt.verifyAsync<StaffTokenPayload>(token, {
-          secret: this.config.get('JWT_ACCESS_SECRET'),
-          audience: STAFF_AUDIENCE,
-          issuer: this.config.get('APP_DOMAIN'),
-        });
-        req.user = {
-          userId: p.sub,
-          tenantId: p.tid,
-          role: p.role,
-          email: p.email,
-          fullName: p.name,
-        };
+      } catch {
+        throw AppException.unauthorized('Invalid or expired access token');
       }
+      // M6: the session behind the token must still be live (revocable,
+      // idle timeout) and the request must come from an allowed network.
+      req.platformUser = await this.platformSessions.validate(p.sid, p.sub, req.ip);
+      return true;
+    }
+
+    let p: StaffTokenPayload;
+    try {
+      p = await this.jwt.verifyAsync<StaffTokenPayload>(token, {
+        secret: this.config.get('JWT_ACCESS_SECRET'),
+        audience: STAFF_AUDIENCE,
+        issuer: this.config.get('APP_DOMAIN'),
+      });
     } catch {
       throw AppException.unauthorized('Invalid or expired access token');
+    }
+    req.user = {
+      userId: p.sub,
+      tenantId: p.tid,
+      role: p.role,
+      email: p.email,
+      fullName: p.name,
+    };
+    if (p.imp) {
+      // M6: Devstrike support signed in as this staff member.
+      const s = await this.impersonation.check(p.imp, p.tid, p.sub);
+      req.user.impersonation = { sessionId: s.id, platformUserId: s.platformUserId, platformUserName: s.platformUserName, mode: s.mode, expiresAt: s.expiresAt };
+      const path = (req.originalUrl ?? req.url).split('?')[0] ?? '';
+      if (s.mode === 'READ_ONLY' && !SAFE_METHODS.has(req.method.toUpperCase()) && !READ_ONLY_ALLOWED_WRITES.some((re) => re.test(path))) {
+        throw impersonationReadOnly(s.id);
+      }
     }
     return true;
   }

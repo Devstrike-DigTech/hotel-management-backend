@@ -4,6 +4,7 @@ import {
   IsArray,
   IsBoolean,
   IsDateString,
+  IsEmail,
   IsEnum,
   IsIn,
   IsInt,
@@ -11,9 +12,11 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  Matches,
   Max,
   MaxLength,
   Min,
+  MinLength,
   ValidateIf,
 } from 'class-validator';
 import { SubscriptionStatus } from '../../generated/prisma/enums.js';
@@ -89,4 +92,68 @@ export class UpdatePlanDto {
 
   @IsOptional() @IsBoolean()
   highlighted?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// M6: platform authentication
+// ---------------------------------------------------------------------------
+
+export class MfaTokenDto {
+  @IsString() @IsNotEmpty() @MaxLength(2000)
+  mfaToken!: string;
+}
+
+export class MfaCodeDto extends MfaTokenDto {
+  @IsString() @Matches(/^\s*\d{3}\s?\d{3}\s*$/, { message: 'code must be the 6-digit code from your authenticator app' })
+  code!: string;
+}
+
+export class MfaVerifyDto extends MfaTokenDto {
+  @IsOptional() @IsString() @MaxLength(12)
+  code?: string;
+
+  @IsOptional() @IsString() @MaxLength(20)
+  recoveryCode?: string;
+}
+
+export class StepUpDto {
+  @IsOptional() @IsString() @MaxLength(12)
+  code?: string;
+
+  @IsOptional() @IsString() @MaxLength(20)
+  recoveryCode?: string;
+}
+
+export class PlatformRefreshDto {
+  @IsString() @IsNotEmpty() @MaxLength(200)
+  refreshToken!: string;
+}
+
+export class ChangePasswordDto {
+  @IsString() @IsNotEmpty() @MaxLength(200)
+  currentPassword!: string;
+
+  @IsString() @MinLength(10) @MaxLength(200)
+  newPassword!: string;
+}
+
+export class IpAllowlistDto {
+  @IsArray() @ArrayMaxSize(50) @IsString({ each: true }) @MaxLength(64, { each: true })
+  cidrs!: string[];
+}
+
+export class AcceptInviteDto {
+  @IsString() @IsNotEmpty() @MaxLength(200)
+  token!: string;
+
+  @IsString() @MinLength(10) @MaxLength(200)
+  password!: string;
+
+  @IsOptional() @IsString() @MinLength(2) @MaxLength(120)
+  fullName?: string;
+}
+
+export class DevTotpQueryDto {
+  @IsEmail()
+  email!: string;
 }

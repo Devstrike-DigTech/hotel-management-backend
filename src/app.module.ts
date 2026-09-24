@@ -39,6 +39,9 @@ import { InboxModule } from './modules/inbox/inbox.module.js';
 import { LoyaltyModule } from './modules/loyalty/loyalty.module.js';
 import { DomainsModule } from './modules/domains/domains.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
+import { PlatformSecurityModule } from './modules/platform/security/platform-security.module.js';
+import { PlatformPermissionGuard } from './modules/platform/security/platform-permission.guard.js';
+import { PlatformAuditInterceptor } from './modules/platform/security/platform-audit.interceptor.js';
 
 function jobsEnabled(): boolean {
   const v = process.env.JOBS_ENABLED;
@@ -57,6 +60,7 @@ function jobsEnabled(): boolean {
         { ttl: 60_000, limit: config.get('AUTH_RATE_LIMIT') },
       ],
     }),
+    PlatformSecurityModule,
     AuditModule,
     EntitlementsModule,
     HealthModule,
@@ -92,12 +96,16 @@ function jobsEnabled(): boolean {
     // the staff member's role), then block writes on read-only
     // subscriptions, then check features and limits.
     { provide: APP_GUARD, useClass: AuthGuard },
+    // M6: platform console permissions and step-up.
+    { provide: APP_GUARD, useClass: PlatformPermissionGuard },
     { provide: APP_GUARD, useClass: PermissionGuard },
     { provide: APP_GUARD, useExisting: SubscriptionGuard },
     { provide: APP_GUARD, useExisting: FeatureGuard },
     { provide: APP_GUARD, useExisting: LimitGuard },
     // M5: every staff request runs in its property scope.
     { provide: APP_INTERCEPTOR, useClass: PropertyScopeInterceptor },
+    // M6: every mutating platform request lands in the platform audit log.
+    { provide: APP_INTERCEPTOR, useClass: PlatformAuditInterceptor },
   ],
 })
 export class AppModule {}

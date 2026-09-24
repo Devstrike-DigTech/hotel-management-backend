@@ -2,12 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { createHmac, randomBytes } from 'node:crypto';
 import type { StaffRole } from '../../generated/prisma/enums.js';
-import {
-  PLATFORM_AUDIENCE,
-  STAFF_AUDIENCE,
-  type PlatformTokenPayload,
-  type StaffTokenPayload,
-} from '../../common/auth-types.js';
+import { STAFF_AUDIENCE, type StaffTokenPayload } from '../../common/auth-types.js';
 import { AppConfigService } from '../../config/app-config.service.js';
 
 /** Signs access tokens and derives refresh-token secrets and hashes. */
@@ -40,23 +35,18 @@ export class TokenService {
     });
   }
 
-  signPlatformAccess(user: {
-    id: string;
-    email: string;
-    role: string;
-    fullName: string;
-  }): Promise<string> {
-    const payload: PlatformTokenPayload = {
-      sub: user.id,
-      email: user.email,
-      role: user.role,
-      name: user.fullName,
-    };
+  /**
+   * M6: access token for a support session (Devstrike staff signed in as a
+   * hotel user). Same audience and secret as a staff token plus the `imp`
+   * claim; it expires with the session and has no refresh token.
+   */
+  signImpersonation(user: { id: string; tenantId: string; role: StaffRole; email: string; fullName: string }, sessionId: string, expiresAt: Date): Promise<string> {
+    const payload: StaffTokenPayload = { sub: user.id, tid: user.tenantId, role: user.role, email: user.email, name: user.fullName, imp: sessionId };
     return this.jwt.signAsync(payload, {
-      secret: this.config.get('JWT_PLATFORM_SECRET'),
-      audience: PLATFORM_AUDIENCE,
+      secret: this.config.get('JWT_ACCESS_SECRET'),
+      audience: STAFF_AUDIENCE,
       issuer: this.config.get('APP_DOMAIN'),
-      expiresIn: '8h',
+      expiresIn: Math.max(1, Math.floor((expiresAt.getTime() - Date.now()) / 1000)),
     });
   }
 
