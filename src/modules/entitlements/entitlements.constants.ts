@@ -26,6 +26,9 @@ export const FEATURE_CODES = [
   'multi_property',
   'api_access',
   'dedicated_database',
+  // M6
+  'sso',
+  'data_export',
 ] as const;
 
 export type FeatureCode = (typeof FEATURE_CODES)[number];

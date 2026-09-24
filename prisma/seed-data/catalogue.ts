@@ -35,6 +35,8 @@ export const FEATURES: FeatureSeed[] = [
   { code: 'multi_property', name: 'Multi-property', category: 'Platform', description: 'Run several hotels from one account with shared reporting.' },
   { code: 'api_access', name: 'API access', category: 'Platform', description: 'Programmatic access for your own integrations.' },
   { code: 'dedicated_database', name: 'Dedicated database', category: 'Platform', description: 'Your data in an isolated database instance.' },
+  { code: 'sso', name: 'Single sign-on', category: 'Platform', description: 'Staff sign in with Google Workspace, Microsoft Entra ID or any OIDC provider.' },
+  { code: 'data_export', name: 'Full data export', category: 'Platform', description: 'Download every record of your hotel group as JSON and CSV, any time.' },
 ];
 
 const STARTER = [
@@ -51,7 +53,7 @@ const PRO = [
   'custom_domain', 'pos', 'channel_manager', 'dynamic_pricing',
   'whatsapp_messaging', 'loyalty', 'multi_property', 'audit_export',
 ];
-const ENTERPRISE = [...PRO, 'white_label', 'api_access', 'dedicated_database'];
+const ENTERPRISE = [...PRO, 'white_label', 'api_access', 'dedicated_database', 'sso', 'data_export'];
 
 export interface PlanSeed {
   code: string;

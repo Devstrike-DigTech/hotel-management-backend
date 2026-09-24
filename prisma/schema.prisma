@@ -63,6 +63,10 @@ enum InvoiceStatus {
 enum PlatformRole {
   SUPER_ADMIN
   SUPPORT
+  /// M6
+  OPERATIONS
+  FINANCE
+  SALES_READONLY
 }
 
 // ---------------------------------------------------------------------------
@@ -75,6 +79,9 @@ model Tenant {
   slug      String   @unique
   city      String
   state     String
+  /// M6: ACTIVE | OFFBOARDING | DELETED (tombstone after the NDPA deletion).
+  lifecycle String   @default("ACTIVE")
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -168,6 +175,10 @@ model Tenant {
   loyaltyTransactions    LoyaltyTransaction[]
   loyaltyChallenges      LoyaltyChallenge[]
   customDomains          CustomDomain[]
+  // M6
+  webhookEndpoints       WebhookEndpoint[]
+  webhookDeliveries      WebhookDelivery[]
+  apiKeys                ApiKey[]
 
   @@map("tenants")
 }
@@ -415,6 +426,24 @@ model PlatformUser {
   createdAt    DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt    DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
 
+  // M6: mandatory TOTP, lockout, IP allowlist, invitations.
+  /// AES-256-GCM (PLATFORM_DATA_KEY) of the base32 TOTP secret once enrolled.
+  totpSecretEnc        String?   @map("totp_secret_enc")
+  /// Secret shown during enrolment, before the first code confirms it.
+  totpPendingSecretEnc String?   @map("totp_pending_secret_enc")
+  mfaEnabledAt         DateTime? @map("mfa_enabled_at") @db.Timestamptz(3)
+  failedAttempts       Int       @default(0) @map("failed_attempts")
+  lockedUntil          DateTime? @map("locked_until") @db.Timestamptz(3)
+  /// CIDRs; empty = any address.
+  ipAllowlist          String[]  @default([]) @map("ip_allowlist")
+  passwordChangedAt    DateTime? @map("password_changed_at") @db.Timestamptz(3)
+  inviteTokenHash      String?   @unique @map("invite_token_hash")
+  inviteExpiresAt      DateTime? @map("invite_expires_at") @db.Timestamptz(3)
+  invitedById          String?   @map("invited_by_id") @db.Uuid
+
+  recoveryCodes PlatformRecoveryCode[]
+  sessions      PlatformSession[]
+
   @@map("platform_users")
 }
 
@@ -503,6 +532,11 @@ model Subscription {
   cancelledAt              DateTime?          @map("cancelled_at") @db.Timestamptz(3)
   paystackCustomerCode     String?            @map("paystack_customer_code")
   paystackSubscriptionCode String?            @map("paystack_subscription_code")
+  /// M6: Enterprise custom price per billing interval (null = plan price) and contract.
+  customPriceKobo          Int?               @map("custom_price_kobo")
+  contractStartAt          DateTime?          @map("contract_start_at") @db.Timestamptz(3)
+  contractEndAt            DateTime?          @map("contract_end_at") @db.Timestamptz(3)
+  contractNotes            String?            @map("contract_notes")
   createdAt                DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -526,6 +560,9 @@ model Invoice {
   interval         BillingInterval
   provider         String          @default("paystack")
   authorizationUrl String?         @map("authorization_url")
+  /// M6: coupon applied to this invoice.
+  couponCode       String?         @map("coupon_code")
+  discountKobo     Int             @default(0) @map("discount_kobo")
   paidAt           DateTime?       @map("paid_at") @db.Timestamptz(3)
   createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -607,6 +644,8 @@ enum ReservationSource {
   BOOKING_SITE
   CORPORATE
   OTA
+  /// M6: created through the partner API.
+  API
 }
 
 enum ReservationStatus {
@@ -3429,4 +3468,653 @@ model CustomDomain {
   @@index([propertyId])
   @@index([status])
   @@map("custom_domains")
+}
+
+// ===========================================================================
+// M6: Enterprise tier and the hardened platform console.
+//
+// "Control plane" tables live only in the shared (platform) database, even
+// for tenants with a dedicated database: platform users and sessions, the
+// platform audit log, coupons, announcements, support desk, impersonation,
+// offboarding, exports, API keys and usage, white-label settings, SSO, the
+// dedicated-database registry and the public listing projection.
+// Webhook endpoints and deliveries are tenant data ("data plane") and move
+// with the tenant. See the *_m6_enterprise migration for RLS and grants.
+// ===========================================================================
+
+model PlatformRecoveryCode {
+  id             String    @id @default(uuid()) @db.Uuid
+  platformUserId String    @map("platform_user_id") @db.Uuid
+  codeHash       String    @map("code_hash")
+  usedAt         DateTime? @map("used_at") @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user PlatformUser @relation(fields: [platformUserId], references: [id], onDelete: Cascade)
+
+  @@index([platformUserId])
+  @@map("platform_recovery_codes")
+}
+
+model PlatformSession {
+  id             String    @id @default(uuid()) @db.Uuid
+  platformUserId String    @map("platform_user_id") @db.Uuid
+  ip             String?
+  userAgent      String?   @map("user_agent")
+  mfaMethod      String    @default("totp") @map("mfa_method")
+  stepUpAt       DateTime? @map("step_up_at") @db.Timestamptz(3)
+  lastSeenAt     DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  expiresAt      DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt      DateTime? @map("revoked_at") @db.Timestamptz(3)
+  revokeReason   String?   @map("revoke_reason")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user          PlatformUser           @relation(fields: [platformUserId], references: [id], onDelete: Cascade)
+  refreshTokens PlatformRefreshToken[]
+
+  @@index([platformUserId, createdAt(sort: Desc)])
+  @@map("platform_sessions")
+}
+
+/// Opaque rotating refresh tokens of a platform session (HMAC stored).
+model PlatformRefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  sessionId String    @map("session_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  rotatedAt DateTime? @map("rotated_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  session PlatformSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("platform_refresh_tokens")
+}
+
+/// Append-only log of every platform action (triggers refuse UPDATE / DELETE).
+model PlatformAuditLog {
+  id                  String   @id @default(uuid()) @db.Uuid
+  actorPlatformUserId String?  @map("actor_platform_user_id") @db.Uuid
+  actorName           String?  @map("actor_name")
+  actorRole           String?  @map("actor_role")
+  action              String
+  targetType          String?  @map("target_type")
+  targetId            String?  @map("target_id")
+  /// Tenant the action concerned (no FK: tenants may be purged, history stays).
+  tenantId            String?  @map("tenant_id") @db.Uuid
+  method              String?
+  path                String?
+  statusCode          Int?     @map("status_code")
+  ip                  String?
+  userAgent           String?  @map("user_agent")
+  sessionId           String?  @map("session_id") @db.Uuid
+  metadata            Json     @default("{}")
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([createdAt(sort: Desc)])
+  @@index([actorPlatformUserId, createdAt(sort: Desc)])
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@map("platform_audit_logs")
+}
+
+model Coupon {
+  id             String    @id @default(uuid()) @db.Uuid
+  code           String    @unique
+  name           String
+  percentOff     Int?      @map("percent_off")
+  amountOffKobo  Int?      @map("amount_off_kobo")
+  durationMonths Int?      @map("duration_months")
+  planCodes      String[]  @default([]) @map("plan_codes")
+  intervals      String[]  @default([])
+  maxRedemptions Int?      @map("max_redemptions")
+  redemptions    Int       @default(0)
+  validFrom      DateTime? @map("valid_from") @db.Timestamptz(3)
+  validUntil     DateTime? @map("valid_until") @db.Timestamptz(3)
+  active         Boolean   @default(true)
+  createdById    String?   @map("created_by_id") @db.Uuid
+  createdByName  String?   @map("created_by_name")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenantRedemptions CouponRedemption[]
+
+  @@map("coupons")
+}
+
+/// A coupon applied to a tenant's subscription (one active per tenant).
+model CouponRedemption {
+  id              String    @id @default(uuid()) @db.Uuid
+  tenantId        String    @map("tenant_id") @db.Uuid
+  couponId        String    @map("coupon_id") @db.Uuid
+  /// Billing months still discounted (null = forever).
+  monthsRemaining Int?      @map("months_remaining")
+  active          Boolean   @default(true)
+  appliedAt       DateTime  @default(now()) @map("applied_at") @db.Timestamptz(3)
+  endedAt         DateTime? @map("ended_at") @db.Timestamptz(3)
+
+  coupon Coupon @relation(fields: [couponId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([couponId])
+  @@map("coupon_redemptions")
+}
+
+model Announcement {
+  id              String    @id @default(uuid()) @db.Uuid
+  title           String
+  body            String
+  severity        String    @default("INFO")
+  /// { kind: ALL | PLANS | CITIES | TENANTS, planCodes?, cities?, tenantIds? }
+  audience        Json      @default("{\"kind\":\"ALL\"}")
+  inApp           Boolean   @default(true) @map("in_app")
+  email           Boolean   @default(false)
+  startsAt        DateTime  @map("starts_at") @db.Timestamptz(3)
+  endsAt          DateTime? @map("ends_at") @db.Timestamptz(3)
+  dismissible     Boolean   @default(true)
+  linkLabel       String?   @map("link_label")
+  linkUrl         String?   @map("link_url")
+  publishedAt     DateTime? @map("published_at") @db.Timestamptz(3)
+  endedAt         DateTime? @map("ended_at") @db.Timestamptz(3)
+  archivedAt      DateTime? @map("archived_at") @db.Timestamptz(3)
+  emailedAt       DateTime? @map("emailed_at") @db.Timestamptz(3)
+  targetedTenants Int       @default(0) @map("targeted_tenants")
+  emailsSent      Int       @default(0) @map("emails_sent")
+  createdById     String?   @map("created_by_id") @db.Uuid
+  createdByName   String?   @map("created_by_name")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  receipts AnnouncementReceipt[]
+
+  @@index([startsAt])
+  @@map("announcements")
+}
+
+/// Per staff member: seen / dismissed.
+model AnnouncementReceipt {
+  id             String    @id @default(uuid()) @db.Uuid
+  announcementId String    @map("announcement_id") @db.Uuid
+  tenantId       String    @map("tenant_id") @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  seenAt         DateTime? @map("seen_at") @db.Timestamptz(3)
+  dismissedAt    DateTime? @map("dismissed_at") @db.Timestamptz(3)
+
+  announcement Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+
+  @@unique([announcementId, userId])
+  @@index([tenantId])
+  @@map("announcement_receipts")
+}
+
+model SupportRequest {
+  id                String    @id @default(uuid()) @db.Uuid
+  seq               Int       @unique @default(autoincrement())
+  tenantId          String    @map("tenant_id") @db.Uuid
+  propertyId        String?   @map("property_id") @db.Uuid
+  propertyName      String?   @map("property_name")
+  openedById        String    @map("opened_by_id") @db.Uuid
+  openedByName      String    @map("opened_by_name")
+  openedByEmail     String    @map("opened_by_email")
+  openedByRole      String    @map("opened_by_role")
+  subject           String
+  category          String
+  priority          String    @default("NORMAL")
+  status            String    @default("NEW")
+  planCode          String    @map("plan_code")
+  slaHours          Int       @map("sla_hours")
+  firstResponseDue  DateTime  @map("first_response_due") @db.Timestamptz(3)
+  firstRespondedAt  DateTime? @map("first_responded_at") @db.Timestamptz(3)
+  assigneeId        String?   @map("assignee_id") @db.Uuid
+  assigneeName      String?   @map("assignee_name")
+  context           Json      @default("{}")
+  lastMessageAt     DateTime  @default(now()) @map("last_message_at") @db.Timestamptz(3)
+  hotelReadAt       DateTime? @map("hotel_read_at") @db.Timestamptz(3)
+  platformReadAt    DateTime? @map("platform_read_at") @db.Timestamptz(3)
+  lastHotelMsgAt    DateTime? @map("last_hotel_msg_at") @db.Timestamptz(3)
+  lastPlatformMsgAt DateTime? @map("last_platform_msg_at") @db.Timestamptz(3)
+  resolvedAt        DateTime? @map("resolved_at") @db.Timestamptz(3)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  messages SupportMessage[]
+
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@index([status, firstResponseDue])
+  @@map("support_requests")
+}
+
+model SupportMessage {
+  id          String   @id @default(uuid()) @db.Uuid
+  requestId   String   @map("request_id") @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  authorKind  String   @map("author_kind")
+  authorId    String   @map("author_id") @db.Uuid
+  authorName  String   @map("author_name")
+  body        String
+  internal    Boolean  @default(false)
+  /// [{ key, name, size, contentType }]
+  attachments Json     @default("[]")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  request SupportRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, createdAt])
+  @@map("support_messages")
+}
+
+/// Uploaded files waiting to be attached to a support message.
+model SupportAttachment {
+  key            String    @id
+  tenantId       String?   @map("tenant_id") @db.Uuid
+  uploadedByKind String    @map("uploaded_by_kind")
+  uploadedById   String    @map("uploaded_by_id") @db.Uuid
+  name           String
+  size           Int
+  contentType    String    @map("content_type")
+  messageId      String?   @map("message_id") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([tenantId])
+  @@map("support_attachments")
+}
+
+model ImpersonationSession {
+  id               String    @id @default(uuid()) @db.Uuid
+  tenantId         String    @map("tenant_id") @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  userName         String    @map("user_name")
+  userEmail        String    @map("user_email")
+  userRole         String    @map("user_role")
+  platformUserId   String    @map("platform_user_id") @db.Uuid
+  platformUserName String    @map("platform_user_name")
+  platformUserEmail String   @map("platform_user_email")
+  reason           String
+  writeReason      String?   @map("write_reason")
+  mode             String    @default("READ_ONLY")
+  startedAt        DateTime  @default(now()) @map("started_at") @db.Timestamptz(3)
+  expiresAt        DateTime  @map("expires_at") @db.Timestamptz(3)
+  endedAt          DateTime? @map("ended_at") @db.Timestamptz(3)
+  endedBy          String?   @map("ended_by")
+  supportRequestId String?   @map("support_request_id") @db.Uuid
+  handoffCodeHash  String?   @unique @map("handoff_code_hash")
+  handoffExpiresAt DateTime? @map("handoff_expires_at") @db.Timestamptz(3)
+  handoffUsedAt    DateTime? @map("handoff_used_at") @db.Timestamptz(3)
+  requests         Int       @default(0)
+  writes           Int       @default(0)
+
+  @@index([tenantId, startedAt(sort: Desc)])
+  @@index([platformUserId, startedAt(sort: Desc)])
+  @@map("impersonation_sessions")
+}
+
+model TenantOffboarding {
+  id              String    @id @default(uuid()) @db.Uuid
+  tenantId        String    @map("tenant_id") @db.Uuid
+  tenantName      String    @map("tenant_name")
+  tenantSlug      String    @map("tenant_slug")
+  status          String    @default("EXPORTING")
+  reason          String
+  previousStatus  String?   @map("previous_status")
+  requestedById   String?   @map("requested_by_id") @db.Uuid
+  requestedByName String    @map("requested_by_name")
+  requestedByEmail String?  @map("requested_by_email")
+  requestedAt     DateTime  @default(now()) @map("requested_at") @db.Timestamptz(3)
+  exportId        String?   @map("export_id") @db.Uuid
+  deleteAfter     DateTime? @map("delete_after") @db.Timestamptz(3)
+  deletedAt       DateTime? @map("deleted_at") @db.Timestamptz(3)
+  cancelledAt     DateTime? @map("cancelled_at") @db.Timestamptz(3)
+  cancelledById   String?   @map("cancelled_by_id") @db.Uuid
+  cancelledByName String?   @map("cancelled_by_name")
+  summary         Json?
+  error           String?
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([tenantId])
+  @@index([status, deleteAfter])
+  @@map("tenant_offboardings")
+}
+
+model DataExport {
+  id              String    @id @default(uuid()) @db.Uuid
+  tenantId        String    @map("tenant_id") @db.Uuid
+  status          String    @default("QUEUED")
+  reason          String    @default("REQUEST")
+  requestedByKind String    @map("requested_by_kind")
+  requestedById   String    @map("requested_by_id") @db.Uuid
+  requestedByName String    @map("requested_by_name")
+  formats         String[]  @default(["json", "csv"])
+  progressPct     Int       @default(0) @map("progress_pct")
+  entities        Json      @default("[]")
+  sizeBytes       Int?      @map("size_bytes")
+  fileKey         String?   @map("file_key")
+  fileName        String?   @map("file_name")
+  linkExpiresAt   DateTime? @map("link_expires_at") @db.Timestamptz(3)
+  deleteFileAfter DateTime? @map("delete_file_after") @db.Timestamptz(3)
+  finishedAt      DateTime? @map("finished_at") @db.Timestamptz(3)
+  error           String?
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@map("data_exports")
+}
+
+/// Where a tenant's data lives. No row (or mode SHARED) = the shared database.
+model TenantDatabase {
+  id              String    @id @default(uuid()) @db.Uuid
+  tenantId        String    @unique @map("tenant_id") @db.Uuid
+  mode            String    @default("SHARED")
+  status          String?
+  /// AES-256-GCM (PLATFORM_DATA_KEY) of the owner-role URL.
+  urlEnc          String?   @map("url_enc")
+  /// Optional explicit runtime URLs; default: DATABASE_URL / DATABASE_PLATFORM_URL with this host and database.
+  appUrlEnc       String?   @map("app_url_enc")
+  platformUrlEnc  String?   @map("platform_url_enc")
+  dbName          String?   @map("db_name")
+  host            String?
+  createdByUs     Boolean   @default(false) @map("created_by_us")
+  version         String?
+  lastMigratedAt  DateTime? @map("last_migrated_at") @db.Timestamptz(3)
+  activatedAt     DateTime? @map("activated_at") @db.Timestamptz(3)
+  readOnlyUntil   DateTime? @map("read_only_until") @db.Timestamptz(3)
+  sharedPurgeAfter DateTime? @map("shared_purge_after") @db.Timestamptz(3)
+  sharedPurgedAt  DateTime? @map("shared_purged_at") @db.Timestamptz(3)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("tenant_databases")
+}
+
+model DbProvisioning {
+  id               String    @id @default(uuid()) @db.Uuid
+  tenantId         String    @map("tenant_id") @db.Uuid
+  kind             String    @default("PROVISION")
+  status           String    @default("PROVISIONING")
+  step             String    @default("CREATE_DATABASE")
+  progressPct      Int       @default(0) @map("progress_pct")
+  source           String    @default("AUTO")
+  requestedById    String?   @map("requested_by_id") @db.Uuid
+  requestedByName  String?   @map("requested_by_name")
+  readOnlyStartedAt DateTime? @map("read_only_started_at") @db.Timestamptz(3)
+  readOnlyEndedAt  DateTime? @map("read_only_ended_at") @db.Timestamptz(3)
+  tables           Json      @default("[]")
+  logs             Json      @default("[]")
+  error            String?
+  startedAt        DateTime  @default(now()) @map("started_at") @db.Timestamptz(3)
+  finishedAt       DateTime? @map("finished_at") @db.Timestamptz(3)
+
+  @@index([tenantId, startedAt(sort: Desc)])
+  @@map("db_provisionings")
+}
+
+/// Marketplace projection of every property, wherever its tenant's data lives.
+model PublicListing {
+  propertyId           String   @id @map("property_id") @db.Uuid
+  tenantId             String   @map("tenant_id") @db.Uuid
+  tenantSlug           String   @map("tenant_slug")
+  tenantName           String   @map("tenant_name")
+  slug                 String   @unique
+  name                 String
+  city                 String
+  state                String
+  area                 String   @default("")
+  tagline              String   @default("")
+  coverImageUrl        String?  @map("cover_image_url")
+  listed               Boolean  @default(true)
+  suspended            Boolean  @default(false)
+  dedicated            Boolean  @default(false)
+  customDomain         String?  @unique @map("custom_domain")
+  customDomainVerified Boolean  @default(false) @map("custom_domain_verified")
+  startingRateKobo     Int?     @map("starting_rate_kobo")
+  rating               Float?
+  reviewCount          Int      @default(0) @map("review_count")
+  featured             Boolean  @default(false)
+  propertyCreatedAt    DateTime @map("property_created_at") @db.Timestamptz(3)
+  updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([tenantId])
+  @@index([city])
+  @@map("public_listings")
+}
+
+/// Latest run of each scheduled job (system health).
+model JobRun {
+  job            String    @id
+  queue          String
+  lastRunAt      DateTime? @map("last_run_at") @db.Timestamptz(3)
+  lastFinishedAt DateTime? @map("last_finished_at") @db.Timestamptz(3)
+  lastStatus     String?   @map("last_status")
+  lastDurationMs Int?      @map("last_duration_ms")
+  lastError      String?   @map("last_error")
+  runs           Int       @default(0)
+  failures       Int       @default(0)
+
+  @@map("job_runs")
+}
+
+/// One-time links: owner password setup (enterprise onboarding), impersonation handoff, SSO completion.
+model OwnerSetupToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  tenantId  String    @map("tenant_id") @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  email     String
+  fullName  String    @map("full_name")
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([tenantId])
+  @@map("owner_setup_tokens")
+}
+
+model ApiKey {
+  id                String    @id @default(uuid()) @db.Uuid
+  tenantId          String    @map("tenant_id") @db.Uuid
+  name              String
+  environment       String    @default("LIVE")
+  prefix            String    @unique
+  secretHash        String    @map("secret_hash")
+  last4             String
+  previousSecretHash String?  @map("previous_secret_hash")
+  previousLast4     String?   @map("previous_last4")
+  previousExpiresAt DateTime? @map("previous_expires_at") @db.Timestamptz(3)
+  scopes            String[]  @default([])
+  /// Empty = every property of the tenant.
+  propertyIds       String[]  @default([]) @map("property_ids")
+  ipAllowlist       String[]  @default([]) @map("ip_allowlist")
+  expiresAt         DateTime? @map("expires_at") @db.Timestamptz(3)
+  revokedAt         DateTime? @map("revoked_at") @db.Timestamptz(3)
+  createdById       String?   @map("created_by_id") @db.Uuid
+  createdByName     String?   @map("created_by_name")
+  lastUsedAt        DateTime? @map("last_used_at") @db.Timestamptz(3)
+  lastUsedIp        String?   @map("last_used_ip")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("api_keys")
+}
+
+model ApiUsageDaily {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  apiKeyId    String   @map("api_key_id") @db.Uuid
+  date        DateTime @db.Date
+  requests    Int      @default(0)
+  errors      Int      @default(0)
+  writes      Int      @default(0)
+  rateLimited Int      @default(0) @map("rate_limited")
+
+  @@unique([apiKeyId, date])
+  @@index([tenantId, date])
+  @@map("api_usage_daily")
+}
+
+model WhiteLabelSetting {
+  tenantId      String   @id @map("tenant_id") @db.Uuid
+  enabled       Boolean  @default(false)
+  brandName     String?  @map("brand_name")
+  logoUrl       String?  @map("logo_url")
+  faviconUrl    String?  @map("favicon_url")
+  primaryColor  String?  @map("primary_color")
+  accentColor   String?  @map("accent_color")
+  headingFont   String?  @map("heading_font")
+  bodyFont      String?  @map("body_font")
+  /// [{ label, url }]
+  footerLinks   Json     @default("[]") @map("footer_links")
+  hidePoweredBy Boolean  @default(true) @map("hide_powered_by")
+  emailFromName String?  @map("email_from_name")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("white_label_settings")
+}
+
+model EmailDomain {
+  id               String    @id @default(uuid()) @db.Uuid
+  tenantId         String    @unique @map("tenant_id") @db.Uuid
+  domain           String    @unique
+  fromLocalPart    String    @default("reservations") @map("from_local_part")
+  provider         String    @default("mock")
+  providerDomainId String?   @map("provider_domain_id")
+  status           String    @default("NOT_STARTED")
+  records          Json      @default("[]")
+  lastCheckedAt    DateTime? @map("last_checked_at") @db.Timestamptz(3)
+  verifiedAt       DateTime? @map("verified_at") @db.Timestamptz(3)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("email_domains")
+}
+
+model SmsSenderRequest {
+  id            String    @id @default(uuid()) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  senderId      String    @map("sender_id")
+  useCase       String    @map("use_case")
+  status        String    @default("REQUESTED")
+  note          String?
+  provider      String    @default("mock")
+  providerRef   String?   @map("provider_ref")
+  current       Boolean   @default(true)
+  requestedAt   DateTime  @default(now()) @map("requested_at") @db.Timestamptz(3)
+  decidedAt     DateTime? @map("decided_at") @db.Timestamptz(3)
+  decidedByName String?   @map("decided_by_name")
+
+  @@index([tenantId])
+  @@index([status])
+  @@map("sms_sender_requests")
+}
+
+model StaffPortalDomain {
+  id            String    @id @default(uuid()) @db.Uuid
+  tenantId      String    @unique @map("tenant_id") @db.Uuid
+  domain        String    @unique
+  status        String    @default("PENDING")
+  token         String
+  failures      String[]  @default([])
+  txtOk         Boolean?  @map("txt_ok")
+  cnameOk       Boolean?  @map("cname_ok")
+  checkCount    Int       @default(0) @map("check_count")
+  lastCheckedAt DateTime? @map("last_checked_at") @db.Timestamptz(3)
+  verifiedAt    DateTime? @map("verified_at") @db.Timestamptz(3)
+  failingSince  DateTime? @map("failing_since") @db.Timestamptz(3)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("staff_portal_domains")
+}
+
+model SsoConfig {
+  tenantId          String    @id @map("tenant_id") @db.Uuid
+  enabled           Boolean   @default(false)
+  provider          String    @default("OIDC")
+  issuer            String
+  clientId          String    @map("client_id")
+  clientSecretEnc   String?   @map("client_secret_enc")
+  clientSecretLast4 String?   @map("client_secret_last4")
+  allowedDomains    String[]  @default([]) @map("allowed_domains")
+  provisioning      String    @default("EXISTING_ONLY")
+  defaultRole       String    @default("FRONT_DESK") @map("default_role")
+  enforced          Boolean   @default(false)
+  breakGlassUserId  String?   @map("break_glass_user_id") @db.Uuid
+  lastTestAt        DateTime? @map("last_test_at") @db.Timestamptz(3)
+  lastTestOk        Boolean?  @map("last_test_ok")
+  lastTestMessage   String?   @map("last_test_message")
+  lastTestEmail     String?   @map("last_test_email")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("sso_configs")
+}
+
+// ---- data plane: moves with the tenant ------------------------------------
+
+model WebhookEndpoint {
+  id                      String    @id @default(uuid()) @db.Uuid
+  tenantId                String    @map("tenant_id") @db.Uuid
+  url                     String
+  description             String?
+  events                  String[]  @default([])
+  /// Empty = every property.
+  propertyIds             String[]  @default([]) @map("property_ids")
+  status                  String    @default("ACTIVE")
+  disabledReason          String?   @map("disabled_reason")
+  disabledAt              DateTime? @map("disabled_at") @db.Timestamptz(3)
+  secretEnc               String    @map("secret_enc")
+  secretLast4             String    @map("secret_last4")
+  previousSecretEnc       String?   @map("previous_secret_enc")
+  previousSecretExpiresAt DateTime? @map("previous_secret_expires_at") @db.Timestamptz(3)
+  secretRotatedAt         DateTime? @map("secret_rotated_at") @db.Timestamptz(3)
+  failingSince            DateTime? @map("failing_since") @db.Timestamptz(3)
+  consecutiveFailures     Int       @default(0) @map("consecutive_failures")
+  lastSuccessAt           DateTime? @map("last_success_at") @db.Timestamptz(3)
+  lastFailureAt           DateTime? @map("last_failure_at") @db.Timestamptz(3)
+  createdById             String?   @map("created_by_id") @db.Uuid
+  createdByName           String?   @map("created_by_name")
+  apiKeyId                String?   @map("api_key_id") @db.Uuid
+  createdAt               DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  deliveries WebhookDelivery[]
+
+  @@index([tenantId])
+  @@map("webhook_endpoints")
+}
+
+model WebhookDelivery {
+  id              String    @id @default(uuid()) @db.Uuid
+  tenantId        String    @map("tenant_id") @db.Uuid
+  endpointId      String    @map("endpoint_id") @db.Uuid
+  eventId         String    @map("event_id")
+  eventType       String    @map("event_type")
+  propertyId      String?   @map("property_id") @db.Uuid
+  payload         Json
+  status          String    @default("PENDING")
+  attempts        Int       @default(0)
+  nextAttemptAt   DateTime? @map("next_attempt_at") @db.Timestamptz(3)
+  lastAttemptAt   DateTime? @map("last_attempt_at") @db.Timestamptz(3)
+  lockedUntil     DateTime? @map("locked_until") @db.Timestamptz(3)
+  responseStatus  Int?      @map("response_status")
+  durationMs      Int?      @map("duration_ms")
+  error           String?
+  requestHeaders  Json?     @map("request_headers")
+  responseHeaders Json?     @map("response_headers")
+  responseBody    String?   @map("response_body")
+  attemptLog      Json      @default("[]") @map("attempt_log")
+  isTest          Boolean   @default(false) @map("is_test")
+  replayOf        String?   @map("replay_of") @db.Uuid
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  endpoint WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+
+  @@index([endpointId, createdAt(sort: Desc)])
+  @@index([status, nextAttemptAt])
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@map("webhook_deliveries")
 }

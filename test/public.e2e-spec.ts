@@ -41,9 +41,9 @@ describe('Public API', () => {
     expect(res.body[3]).toMatchObject({ priceMonthlyKobo: null, commissionBps: null, limits: { max_rooms: -1 } });
   });
 
-  it('GET /public/features lists 27 features in the five categories', async () => {
+  it('GET /public/features lists 29 features in the five categories', async () => {
     const res = await get('/public/features').expect(200);
-    expect(res.body).toHaveLength(27);
+    expect(res.body).toHaveLength(29);
     const cats = new Set<string>(res.body.map((f: { category: string }) => f.category));
     expect([...cats].sort((x, y) => x.localeCompare(y))).toEqual(['Growth', 'Guests', 'Operations', 'Platform', 'Revenue']);
   });
