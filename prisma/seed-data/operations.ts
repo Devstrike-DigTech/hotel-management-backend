@@ -62,6 +62,7 @@ export const DEMO_PINS: Record<string, string> = {
 type SeedReservation = Omit<
   Reservation,
   | 'paymentMode'
+  | 'externalRef'
   | 'guaranteeType'
   | 'holdExpiresAt'
   | 'commissionBps'

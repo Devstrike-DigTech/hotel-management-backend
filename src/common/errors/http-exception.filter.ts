@@ -31,7 +31,10 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 
   catch(exception: unknown, host: ArgumentsHost): void {
     const res = host.switchToHttp().getResponse<Response>();
-    const envelope = this.toEnvelope(exception);
+    const req = host.switchToHttp().getRequest<{ path?: string; requestId?: string }>();
+    const envelope: ErrorEnvelope & { requestId?: string } = this.toEnvelope(exception);
+    // M6: partner API errors carry the request id (support references it).
+    if (req?.path?.startsWith('/api/partner/') && req.requestId) envelope.requestId = req.requestId;
     if (envelope.statusCode >= 500) {
       this.logger.error(
         exception instanceof Error ? exception.stack : String(exception),

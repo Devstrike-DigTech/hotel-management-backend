@@ -59,7 +59,7 @@ import type {
   UpdateReservationDto,
 } from './reservations.dto.js';
 
-const include = {
+export const reservationInclude = {
   guest: true,
   room: true,
   roomType: true,
@@ -75,7 +75,8 @@ export function nightlyOf(r: { nightlyRates: unknown }): NightlyRate[] {
   return Array.isArray(r.nightlyRates) ? (r.nightlyRates as NightlyRate[]) : [];
 }
 
-type ResRow = Prisma.ReservationGetPayload<{ include: typeof include }>;
+const include = reservationInclude;
+export type ResRow = Prisma.ReservationGetPayload<{ include: typeof include }>;
 
 const MAX_NIGHTS = 60;
 const MIN_DAY_USE_MS = 2 * 3_600_000;
@@ -163,6 +164,7 @@ export class ReservationsService {
       createdAt: r.createdAt.toISOString(),
       updatedAt: r.updatedAt.toISOString(),
       paymentMode: r.paymentMode,
+      externalRef: r.externalRef ?? null,
       holdExpiresAt: r.status === 'PENDING' && r.paymentMode === 'ONLINE' ? (r.holdExpiresAt?.toISOString() ?? null) : null,
     };
   }
@@ -403,6 +405,7 @@ export class ReservationsService {
             status,
             rateKobo: rate,
             notes: dto.notes ?? '',
+            externalRef: dto.externalRef ?? null,
             createdById: user.userId,
             clientCreatedAt,
             ratePlanId: pricing?.plan.id ?? null,
@@ -581,6 +584,7 @@ export class ReservationsService {
             ...(dto.children !== undefined && { children: dto.children }),
             ...(dto.source !== undefined && { source: dto.source }),
             ...(dto.notes !== undefined && { notes: dto.notes }),
+            ...(dto.externalRef !== undefined && { externalRef: dto.externalRef }),
             ...(dto.corporateAccountId !== undefined && { corporateAccountId: dto.corporateAccountId }),
             rateKobo: rate,
             ratePlanId,

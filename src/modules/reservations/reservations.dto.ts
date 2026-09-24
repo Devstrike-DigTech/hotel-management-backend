@@ -52,6 +52,8 @@ export class CreateReservationDto {
   @IsOptional() @IsString() @MaxLength(30) promoCode?: string;
   @IsOptional() @IsUUID() corporateAccountId?: string;
   @IsOptional() @IsArray() @ArrayMaxSize(60) @ValidateNested({ each: true }) @Type(() => NightPriceDto) nightlyRates?: NightPriceDto[];
+  /** M6: partner reference (partner API). */
+  @IsOptional() @IsString() @MaxLength(120) externalRef?: string;
 }
 
 export class UpdateReservationDto {
@@ -71,6 +73,8 @@ export class UpdateReservationDto {
   @IsOptional() @ValidateIf((_o, v) => v !== null) @IsString() @MaxLength(30) promoCode?: string | null;
   @IsOptional() @ValidateIf((_o, v) => v !== null) @IsUUID() corporateAccountId?: string | null;
   @IsOptional() @IsArray() @ArrayMaxSize(60) @ValidateNested({ each: true }) @Type(() => NightPriceDto) nightlyRates?: NightPriceDto[];
+  /** M6: partner reference (partner API). */
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @IsString() @MaxLength(120) externalRef?: string | null;
 }
 
 export class ReservationQueryDto extends PaginationQueryDto {

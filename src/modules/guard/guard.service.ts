@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { emitDomainEvent } from '../../common/domain-events.js';
 import type { GuardFlag, Prisma } from '../../generated/prisma/client.js';
 import type { GuardRule, GuardSeverity } from '../../generated/prisma/enums.js';
 import { DbService, type Tx } from '../../prisma/db.service.js';
@@ -82,6 +83,17 @@ export class GuardService {
       ],
       skipDuplicates: true,
     });
+    if (res.count) {
+      const raised = await tx.guardFlag.findFirst({ where: { tenantId, dedupeKey: f.dedupeKey }, orderBy: { createdAt: 'desc' } });
+      if (raised) {
+        await emitDomainEvent(tx, {
+          tenantId,
+          propertyId: raised.propertyId,
+          type: 'guard.flag_raised',
+          object: { id: raised.id, propertyId: raised.propertyId, rule: raised.rule, severity: raised.severity, title: raised.title, amountKobo: raised.amountKobo === null ? null : Number(raised.amountKobo), createdAt: raised.createdAt.toISOString() },
+        });
+      }
+    }
     if (res.count && severity === 'HIGH') {
       const flag = await tx.guardFlag.findFirst({ where: { tenantId, dedupeKey: f.dedupeKey }, orderBy: { createdAt: 'desc' } });
       if (flag) {

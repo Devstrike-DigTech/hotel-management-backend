@@ -181,7 +181,7 @@ export async function vetUrl(raw: string, o: SafeFetchOptions): Promise<{ url: U
   return { url, pinned: addresses[0]! };
 }
 
-function requestOnce(url: URL, pinned: ResolvedAddress, o: Required<Pick<SafeFetchOptions, 'maxBytes'>> & { signal: AbortSignal; headers: Record<string, string> }): Promise<{ res: IncomingMessage; body: () => Promise<Buffer> }> {
+function requestOnce(url: URL, pinned: ResolvedAddress, o: Required<Pick<SafeFetchOptions, 'maxBytes'>> & { signal: AbortSignal; headers: Record<string, string>; method?: string; payload?: string | Buffer }): Promise<{ res: IncomingMessage; body: () => Promise<Buffer> }> {
   const lookup: LookupFunction = (_hostname, options, cb) => {
     if ((options as { all?: boolean }).all) (cb as unknown as (e: null, a: { address: string; family: number }[]) => void)(null, [{ address: pinned.address, family: pinned.family }]);
     else cb(null, pinned.address, pinned.family);
@@ -190,7 +190,7 @@ function requestOnce(url: URL, pinned: ResolvedAddress, o: Required<Pick<SafeFet
   return new Promise((resolve, reject) => {
     const req = mod.request(
       url,
-      { method: 'GET', headers: o.headers, lookup, signal: o.signal, agent: false },
+      { method: o.method ?? 'GET', headers: o.headers, lookup, signal: o.signal, agent: false },
       (res) => {
         resolve({
           res,
@@ -214,8 +214,52 @@ function requestOnce(url: URL, pinned: ResolvedAddress, o: Required<Pick<SafeFet
       },
     );
     req.on('error', reject);
-    req.end();
+    req.end(o.payload);
   });
+}
+
+export interface SafeResponse {
+  status: number;
+  headers: Record<string, string>;
+  /** Response body (truncated to maxBytes; never throws for size). */
+  body: string;
+  durationMs: number;
+}
+
+/**
+ * One request (webhook deliveries, OIDC token calls) under the same guards:
+ * vetted and pinned address, no redirects followed (a 3xx is returned as
+ * is), timeout. The body is read up to `maxBytes` and truncated silently.
+ */
+export async function safeRequest(
+  raw: string,
+  req: { method: 'GET' | 'POST'; headers?: Record<string, string>; body?: string },
+  opts: SafeFetchOptions,
+): Promise<SafeResponse> {
+  const o = { maxBytes: 64 * 1024, timeoutMs: 10_000, ...opts };
+  const signal = AbortSignal.timeout(o.timeoutMs);
+  const started = Date.now();
+  const { url, pinned } = await vetUrl(raw, o);
+  const headers = { ...(req.headers ?? {}), ...(req.body !== undefined && { 'content-length': String(Buffer.byteLength(req.body)) }) };
+  try {
+    const { res } = await requestOnce(url, pinned, { maxBytes: o.maxBytes, signal, headers, method: req.method, payload: req.body });
+    const chunks: Buffer[] = [];
+    let size = 0;
+    await new Promise<void>((ok, fail) => {
+      res.on('data', (c: Buffer) => {
+        if (size < o.maxBytes) chunks.push(c.subarray(0, o.maxBytes - size));
+        size += c.length;
+      });
+      res.on('end', () => ok());
+      res.on('error', fail);
+    });
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(res.headers)) if (v !== undefined) out[k] = Array.isArray(v) ? v.join(', ') : String(v);
+    return { status: res.statusCode ?? 0, headers: out, body: Buffer.concat(chunks).toString('utf8'), durationMs: Date.now() - started };
+  } catch (e) {
+    if (signal.aborted) throw new UnsafeUrlError('TIMEOUT', `No complete answer within ${Math.round(o.timeoutMs / 1000)} s`);
+    throw e;
+  }
 }
 
 /** GETs a user-supplied URL as text under the guards above. */

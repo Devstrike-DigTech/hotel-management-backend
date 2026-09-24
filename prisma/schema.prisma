@@ -891,6 +891,8 @@ model Reservation {
   status          ReservationStatus @default(CONFIRMED)
   rateKobo        BigInt            @map("rate_kobo")
   notes           String            @default("")
+  /// M6: the partner system's own id for this booking (partner API).
+  externalRef     String?           @map("external_ref")
   createdById     String?           @map("created_by_id") @db.Uuid
   checkedInAt     DateTime?         @map("checked_in_at") @db.Timestamptz(3)
   checkedInById   String?           @map("checked_in_by_id") @db.Uuid

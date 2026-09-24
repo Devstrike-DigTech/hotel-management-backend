@@ -156,9 +156,16 @@ export class DbService {
     }
     const id = tenantId.toLowerCase();
     const sig = signContext(this.secret, `tenant:${id}`);
+    const dry = dryRunContext.getStore();
     return activePropertyFilter.run(null, () => this.scoped.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.tenant_id', ${id}, true), set_config('app.context_sig', ${sig}, true)`;
-      return fn(tx);
+      const result = await fn(tx);
+      if (dry && dry.tenantId.toLowerCase() === id) {
+        // Test API keys: control-plane writes (webhook endpoints) roll back too.
+        const [w] = await tx.$queryRaw<{ wrote: boolean }[]>`SELECT txid_current_if_assigned() IS NOT NULL AS wrote`;
+        if (w?.wrote) throw new DryRunRollback(result);
+      }
+      return result;
     }, TX_OPTIONS));
   }
 

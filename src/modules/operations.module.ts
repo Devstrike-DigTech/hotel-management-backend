@@ -92,6 +92,7 @@ import { objectStorageProvider } from './storage/storage.provider.js';
   exports: [
     GuardService,
     GroupReportsService,
+    ReportsService,
     ShiftsService,
     FrontDeskService,
     NightAuditService,
