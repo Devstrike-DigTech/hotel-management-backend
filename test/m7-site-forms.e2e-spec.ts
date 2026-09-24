@@ -128,7 +128,7 @@ describe('M7: Brand Studio, booking forms, extras, pickups and transfers', () =>
       expect(locked.body).toMatchObject({ code: 'FEATURE_LOCKED', details: { feature: 'site_templates_all', requiredPlan: 'growth' } });
       const fonts = await request(server()).put(`${API}/site/theme/draft`).set(h.owner.auth).send({ brand: { fontPairingId: 'cormorant-manrope' } }).expect(403);
       expect(fonts.body.details).toMatchObject({ feature: 'site_fonts', requiredPlan: 'pro' });
-      await request(server()).put(`${API}/site/theme/draft`).set(h.owner.auth).send({ templateId: 'essentials', brand: { primary: '#7C3AED' } }).expect(200);
+      await request(server()).put(`${API}/site/theme/draft`).set(h.owner.auth).send({ templateId: 'essentials', brand: { primary: '#8A4B1F' } }).expect(200);
       await request(server()).post(`${API}/site/theme/publish`).set(h.owner.auth).send({}).expect(200);
       const gates = await request(server()).get(`${API}/site/gates`).set(h.owner.auth).expect(200);
       expect(gates.body.features).toMatchObject({ brand_kit: true, site_templates_all: false, site_fonts: false, paid_extras: false });
@@ -297,6 +297,28 @@ describe('M7: Brand Studio, booking forms, extras, pickups and transfers', () =>
       const tampered = await publicBook(`${forged}.${sig}`, { answers: { arrivalPickup: pickup } });
       expect(tampered.status).toBe(400);
       expect(tampered.body.code).toBe('QUOTE_INVALID');
+    });
+
+    it('re-checks extra lead times and availability windows at booking, not only at quote time', async () => {
+      const d = lagosDay(3);
+      const lateCake = (await request(server()).post(`${API}/extras`).set(h.owner.auth).send({ name: `Anniversary flowers ${uniq()}`, category: 'CELEBRATION', pricing: 'PER_STAY', priceKobo: 2_000_000, leadTimeHours: 24 }).expect(201)).body.id;
+      const q1 = await publicQuote(h, { checkIn: d, extras: [{ extraId: lateCake }] });
+      expect(q1.status).toBe(200);
+      // Time passes (modelled by a longer lead time): the signed quote no longer carries the extra through.
+      await request(server()).patch(`${API}/extras/${lateCake}`).set(h.owner.auth).send({ leadTimeHours: 168 }).expect(200);
+      const late = await publicBook(q1.body.quoteToken);
+      expect(late.status).toBe(400);
+      expect(late.body.details.issues).toEqual([expect.objectContaining({ path: 'extras[0]', code: 'LEAD_TIME' })]);
+
+      await request(server()).patch(`${API}/extras/${lateCake}`).set(h.owner.auth).send({ leadTimeHours: 0 }).expect(200);
+      const q2 = await publicQuote(h, { checkIn: d, extras: [{ extraId: lateCake }] });
+      await request(server()).patch(`${API}/extras/${lateCake}`).set(h.owner.auth).send({ availability: { validTo: lagosDay(1) } }).expect(200);
+      const window = await publicBook(q2.body.quoteToken);
+      expect(window.status).toBe(400);
+      expect(window.body.details.issues).toEqual([expect.objectContaining({ path: 'extras[0]', code: 'OUT_OF_WINDOW' })]);
+
+      await request(server()).patch(`${API}/extras/${lateCake}`).set(h.owner.auth).send({ availability: {} }).expect(200);
+      expect((await publicBook((await publicQuote(h, { checkIn: d, extras: [{ extraId: lateCake }] })).body.quoteToken)).status).toBe(201);
     });
 
     it('validates pickups by kind, lead time, vehicle size and operating hours', async () => {

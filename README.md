@@ -1382,6 +1382,11 @@ ask for the transport company (a platform list plus the hotel's own) and the
 departure city; train stations ask for the route (Lagos - Ibadan, Abuja -
 Kaduna, Warri - Itakpe, the Lagos Red and Blue lines, Abuja light rail).
 
+Booking re-checks every extra's rules against the current settings and the
+clock (active, channel, validity window, weekdays, minimum nights, lead time,
+daily cap), not only at quote time: a signed quote cannot carry an extra
+whose lead time has passed since.
+
 ### Setup wizard
 
 New hotels get a server-side checklist (hotel type, brand, rooms, booking
@@ -1591,6 +1596,15 @@ Conventions:
 ---
 
 ## Testing
+
+Database connections: a transaction runs all its queries on one pg
+connection. `src/common/pg-concurrency-guard.ts` (installed by `main.ts`,
+the seed and the e2e setup) chains queries per connection, because Prisma
+loads `include` relations in parallel and pg 9 refuses overlapping queries;
+application code uses `inSeries` / `mapInSeries` instead of `Promise.all`
+over a `tx` (a unit test scans for it), and the e2e run fails on pg's
+"already executing a query" warning. `PG_CONCURRENCY_GUARD=throw` makes any
+overlap fail with `PG_CONCURRENT_QUERY` to find its caller; `off` disables it.
 
 ```bash
 pnpm test        # unit (Vitest): tax maths, availability, guard rules, shift variance,

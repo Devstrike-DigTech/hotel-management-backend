@@ -763,7 +763,9 @@ export class PublicBookingService {
           stay,
           roomTypeId: rt.id,
           comps: q.tax,
-          enforceLeadTime: false,
+          // Extras: lead times, windows and caps again at booking (time has passed since the quote).
+          enforceLeadTime: true,
+          transferLeadTime: false,
           pickupAllowed: true,
           lock: true,
           frozenExtraAmounts: (q.ex ?? []).map((e) => e[2]),

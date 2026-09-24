@@ -144,6 +144,8 @@ export class AddOnsService {
       comps: TaxComponent[];
       now?: Date;
       enforceLeadTime: boolean;
+      /** Pickup lead times (default: enforceLeadTime). Booking time checks them with the PICKUP answer instead. */
+      transferLeadTime?: boolean;
       pickupAllowed: boolean;
       /** Lock capped extras (booking time). */
       lock?: boolean;
@@ -230,7 +232,7 @@ export class AddOnsService {
         }
         dirs.add(sel.direction);
         const p = byId.get(sel.pickupPointId) ?? null;
-        const r = quoteTransfer(p ? pointLike(p) : null, sel, input.stay, input.comps, path, now, { enforceLeadTime: input.enforceLeadTime, hotelPhone: property.phone || null });
+        const r = quoteTransfer(p ? pointLike(p) : null, sel, input.stay, input.comps, path, now, { enforceLeadTime: input.transferLeadTime ?? input.enforceLeadTime, hotelPhone: property.phone || null });
         if (!r.quoted) {
           out.issues.push(...r.issues);
           continue;
