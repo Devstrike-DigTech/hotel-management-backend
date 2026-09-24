@@ -169,9 +169,8 @@ export class PlatformAuthService {
     if (!user.totpPendingSecretEnc) throw Err.validation('code', 'Start the enrolment first');
     const secret = this.secrets.open(user.totpPendingSecretEnc, `${TOTP_PURPOSE}:${user.id}`);
     const step = verifyTotp(secret, code);
-    if (step === null || !(await this.freshStep(user.id, step))) {
-      throw await this.registerFailure(user, 'totp', meta);
-    }
+    if (step === null) throw await this.registerFailure(user, 'totp', meta);
+    if (!(await this.freshStep(user.id, step))) throw await this.replayed(user, meta);
     await this.consume(payload.jti);
     const recoveryCodes = newRecoveryCodes();
     const result = await this.db.system(async (tx) => {
@@ -201,7 +200,12 @@ export class PlatformAuthService {
     if (input.code) {
       const secret = this.secrets.open(user.totpSecretEnc, `${TOTP_PURPOSE}:${user.id}`);
       const step = verifyTotp(secret, input.code);
-      if (step !== null && (await this.freshStep(user.id, step))) return 'totp';
+      if (step !== null) {
+        if (await this.freshStep(user.id, step)) return 'totp';
+        // A correct code seen before (replay, double submit): refused, but it
+        // is not a guessing attempt, so it does not count toward the lockout.
+        throw await this.replayed(user, meta);
+      }
       throw await this.registerFailure(user, 'totp', meta);
     }
     const hash = this.hashRecovery(input.recoveryCode!);
@@ -213,6 +217,11 @@ export class PlatformAuthService {
       return 'recovery_code';
     }
     throw await this.registerFailure(user, 'recovery_code', meta);
+  }
+
+  private async replayed(user: PlatformUser, meta: RequestMeta): Promise<AppException> {
+    await this.audit.record({ actor: this.actorOf(user), action: 'auth.totp_replayed', targetType: 'platform_user', targetId: user.id, ip: meta.ip, userAgent: meta.userAgent });
+    return new AppException(HttpStatus.UNAUTHORIZED, 'MFA_CODE_ALREADY_USED', 'That code was already used. Wait for the next one.', { secondsLeft: totpSecondsLeft() });
   }
 
   /** A TOTP time step may be used once per user (replay protection). */

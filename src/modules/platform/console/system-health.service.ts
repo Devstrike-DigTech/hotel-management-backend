@@ -21,6 +21,7 @@ export const PLATFORM_JOBS = {
   mirrorSync: { name: 'mirror-sync', scheduler: 'mirror-sync-5m', cron: '*/5 * * * *' },
   exportsCleanup: { name: 'exports-cleanup', scheduler: 'exports-cleanup-hourly', cron: '50 * * * *' },
   whiteLabelChecks: { name: 'white-label-checks', scheduler: 'white-label-checks-10m', cron: '*/10 * * * *' },
+  provisioningReconcile: { name: 'provisioning-reconcile', scheduler: 'provisioning-reconcile-5m', cron: '*/5 * * * *' },
 } as const;
 
 /** Every scheduled job with its queue and cron, for the cron table. */

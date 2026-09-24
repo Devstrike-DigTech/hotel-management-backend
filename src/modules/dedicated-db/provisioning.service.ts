@@ -1,4 +1,5 @@
-import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger, OnApplicationBootstrap, Optional } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import type pg from 'pg';
 import type { DbProvisioning, Prisma, TenantDatabase } from '../../generated/prisma/client.js';
 import type { PlatformPrincipal } from '../../common/auth-types.js';
@@ -20,6 +21,14 @@ import { migrateDatabase } from './migrate.js';
 
 type Step = 'CREATE_DATABASE' | 'MIGRATE' | 'COPY' | 'READ_ONLY_DELTA' | 'VERIFY' | 'CUTOVER' | 'DONE' | 'ROLLBACK';
 const RUNNING = ['PROVISIONING', 'MIGRATING', 'COPYING', 'CUTOVER'];
+/** A run interrupted more often than this (crashes, deploys) ends FAILED instead of resuming again. */
+export const MAX_RESUMES = 3;
+export const PROVISION_JOB = 'dedicated-provision';
+
+function jobsEnabled(): boolean {
+  const v = process.env.JOBS_ENABLED;
+  return v === undefined || v === 'true' || v === '1';
+}
 
 export interface TableRow {
   table: string;
@@ -68,7 +77,7 @@ export function provisioningView(p: DbProvisioning, tenant: { id: string; name: 
  * on the shared database.
  */
 @Injectable()
-export class ProvisioningService {
+export class ProvisioningService implements OnApplicationBootstrap {
   private readonly logger = new Logger(ProvisioningService.name);
   private readonly running = new Map<string, Promise<void>>();
 
@@ -81,7 +90,68 @@ export class ProvisioningService {
     private readonly listings: ListingsService,
     private readonly audit: AuditService,
     private readonly platformAudit: PlatformAuditService,
+    @Optional() private readonly refs?: ModuleRef,
   ) {}
+
+  /**
+   * Start-up reconciler: provisionings and rollbacks left in a running state
+   * (the API restarted mid-run) are resumed from their last checkpoint.
+   */
+  onApplicationBootstrap(): void {
+    if (process.env.NODE_ENV === 'test') return;
+    setTimeout(() => void this.reconcile().catch((e: Error) => this.logger.warn(`Provisioning reconcile failed: ${e.message}`)), 3_000).unref();
+  }
+
+  /** Resumes every running provisioning no instance is executing (advisory lock). */
+  async reconcile(): Promise<{ resumed: number }> {
+    const open = await this.db.system((tx) => tx.dbProvisioning.findMany({ where: { status: { in: RUNNING }, finishedAt: null }, select: { id: true } }));
+    let resumed = 0;
+    for (const p of open) {
+      if (this.running.has(p.id)) continue;
+      await this.dispatch(p.id);
+      resumed++;
+    }
+    return { resumed };
+  }
+
+  /**
+   * Runs a provisioning durably: as a BullMQ job on the platform queue when
+   * workers run (a stalled job after a crash is picked up again), in-process
+   * otherwise (tests, the seed). Execution is guarded by an advisory lock, so
+   * a run is never executed twice at the same time.
+   */
+  private async dispatch(id: string): Promise<void> {
+    if (this.refs && jobsEnabled()) {
+      try {
+        const { SystemHealthService } = await import('../platform/console/system-health.service.js');
+        const queue = this.refs.get(SystemHealthService, { strict: false }).queue('platform');
+        await queue.add(PROVISION_JOB, { id }, { jobId: `${PROVISION_JOB}-${id}-${Date.now()}`, attempts: 1, removeOnComplete: 50, removeOnFail: 100 });
+        return;
+      } catch (e) {
+        this.logger.warn(`Queue unavailable, provisioning ${id} runs in-process: ${(e as Error).message}`);
+      }
+    }
+    const job = this.execute(id).finally(() => this.running.delete(id));
+    this.running.set(id, job);
+  }
+
+  /** Executes (or resumes) a provisioning or rollback; a no-op if another runner holds it. */
+  async execute(id: string): Promise<void> {
+    const lock = await connect(this.config.get('DATABASE_PLATFORM_URL'));
+    try {
+      const { rows } = await lock.query<{ ok: boolean }>('SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS ok', [`provisioning:${id}`]);
+      if (!rows[0]?.ok) return;
+      const prov = await this.db.system((tx) => tx.dbProvisioning.findUnique({ where: { id } }));
+      if (!prov || !RUNNING.includes(prov.status) || prov.finishedAt) return;
+      if (prov.kind === 'ROLLBACK') {
+        const reg = await this.db.system((tx) => tx.tenantDatabase.findUniqueOrThrow({ where: { tenantId: prov.tenantId } }));
+        return await this.runRollback(id, reg);
+      }
+      return await this.run(id);
+    } finally {
+      await lock.end().catch(() => undefined);
+    }
+  }
 
   private adminUrl(): string | undefined {
     return this.config.get('DATABASE_ADMIN_URL') ?? (this.config.isProduction ? undefined : this.config.get('DATABASE_MIGRATION_URL'));
@@ -147,8 +217,14 @@ export class ProvisioningService {
   }
 
   /** Resolves when a provisioning or rollback started by this instance has finished. */
-  async wait(id: string): Promise<void> {
+  async wait(id: string, timeoutMs = 600_000): Promise<void> {
     await this.running.get(id);
+    const until = Date.now() + timeoutMs;
+    while (Date.now() < until) {
+      const p = await this.db.system((tx) => tx.dbProvisioning.findUnique({ where: { id }, select: { status: true, finishedAt: true } }));
+      if (!p || p.finishedAt || !RUNNING.includes(p.status)) return;
+      await new Promise((r) => setTimeout(r, 500));
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -199,8 +275,7 @@ export class ProvisioningService {
     if (actor) {
       await this.platformAudit.record({ actor, action: 'dedicated_db.provision_started', targetType: 'tenant', targetId: tenantId, tenantId, ip, metadata: { source: dto.source, dbName } });
     }
-    const job = this.run(prov.id).finally(() => this.running.delete(prov.id));
-    this.running.set(prov.id, job);
+    await this.dispatch(prov.id);
     return provisioningView(prov, tenant);
   }
 
@@ -239,18 +314,49 @@ export class ProvisioningService {
     const reg = await this.db.system((tx) => tx.tenantDatabase.findUniqueOrThrow({ where: { tenantId } }));
     const urls = this.router.urlsOf(reg);
     const dbName = reg.dbName!;
+    const logs = (prov.logs as unknown as { message: string }[]) ?? [];
+    // Checkpoints: a run with log entries was started before and interrupted.
+    const resumed = logs.length > 0;
     let created = false;
     let flipped = false;
     let src: pg.Client | null = null;
     let dst: pg.Client | null = null;
     const started = Date.now();
     try {
+      if (resumed) {
+        const resumes = logs.filter((l) => l.message.startsWith('Resuming')).length;
+        if (reg.mode === 'DEDICATED' && reg.status === 'ACTIVE') {
+          // Interrupted after the routing flip: only the bookkeeping is left.
+          flipped = true;
+          await this.log(id, 'info', 'Resuming after an interruption: the cutover had completed');
+          await this.step(id, 'DONE', 100, 'ACTIVE', { readOnlyEndedAt: new Date(), finishedAt: new Date() });
+          await this.listings.refreshTenant(tenantId).catch(() => undefined);
+          return;
+        }
+        if (reg.createdByUs) created = true; // our database: dropped if the resumed run fails
+        if (resumes >= MAX_RESUMES) throw new Error(`Interrupted ${resumes + 1} times (last at step ${prov.step}); giving up. Start a new provisioning.`);
+        await this.log(id, 'warn', `Resuming after an interruption at step ${prov.step}; the copy restarts from a clean target`);
+        // Writes were refused during the read-only window: reopen them while the copy runs again.
+        if (reg.status === 'CUTOVER') await this.setRegistry(tenantId, { status: 'COPYING' });
+      }
       // 1. Create the database.
       if (reg.createdByUs) {
         const admin = this.adminUrl() ?? urls.admin;
-        if (await databaseExists(admin, dbName)) throw new Error(`Database ${dbName} already exists; drop it or choose another`);
-        await this.log(id, 'info', `Creating database ${dbName}`);
-        await createDatabase(admin, dbName);
+        let exists = await databaseExists(admin, dbName);
+        if (exists && resumed && ['CREATE_DATABASE', 'MIGRATE'].includes(prov.step)) {
+          // Interrupted while migrating: a half-applied migration cannot be resumed; start the database again.
+          await this.router.release(dbName);
+          await dropDatabase(admin, dbName);
+          await this.log(id, 'info', `Dropped ${dbName}: it was interrupted while being migrated`);
+          exists = false;
+        }
+        if (exists) {
+          if (!resumed) throw new Error(`Database ${dbName} already exists; drop it or choose another`);
+          await this.log(id, 'info', `Reusing ${dbName} created before the interruption`);
+        } else {
+          await this.log(id, 'info', `Creating database ${dbName}`);
+          await createDatabase(admin, dbName);
+        }
         created = true;
       } else {
         await this.log(id, 'info', `Using the operator-provided database ${dbName}`);
@@ -270,6 +376,29 @@ export class ProvisioningService {
       dst = await connect(urls.platform);
       await dst.query('SELECT app_install_context_key($1)', [this.config.get('DB_CONTEXT_SECRET')]);
       const tables = await tenantTables(src);
+      if (resumed) {
+        // Rows copied before the interruption are removed; the copy runs again.
+        // The purge authorisation needs a registry row in this database: a
+        // marker is written and removed inside the same transaction.
+        const owner = await connect(urls.admin);
+        try {
+          await owner.query('BEGIN');
+          await owner.query(
+            `INSERT INTO tenant_databases (id, tenant_id, mode, status, created_at, updated_at) VALUES (gen_random_uuid(), $1::uuid, 'DEDICATED', 'ACTIVE', now(), now()) ON CONFLICT (tenant_id) DO UPDATE SET mode = 'DEDICATED', status = 'ACTIVE'`,
+            [tenantId],
+          );
+          await owner.query('SELECT app_begin_tenant_purge($1::uuid)', [tenantId]);
+          const removed = await purgeTenantRows(owner, tables, tenantId);
+          await owner.query('DELETE FROM tenant_databases WHERE tenant_id = $1::uuid', [tenantId]);
+          await owner.query('COMMIT');
+          if (removed) await this.log(id, 'info', `Removed ${removed} rows copied before the interruption`);
+        } catch (err) {
+          await owner.query('ROLLBACK').catch(() => undefined);
+          throw err;
+        } finally {
+          await owner.end();
+        }
+      }
       for (const t of tables) {
         if ((await countRows(dst, t.name, tenantId)) > 0) throw new Error(`The target database already holds rows of this tenant in ${t.name}`);
       }
@@ -384,8 +513,7 @@ export class ProvisioningService {
       data: { tenantId, kind: 'ROLLBACK', status: 'CUTOVER', step: 'ROLLBACK', source: 'ROLLBACK', requestedById: actor.platformUserId, requestedByName: actor.fullName },
     }));
     await this.platformAudit.record({ actor, action: 'dedicated_db.rollback_started', targetType: 'tenant', targetId: tenantId, tenantId, ip });
-    const job = this.runRollback(prov.id, reg).finally(() => this.running.delete(prov.id));
-    this.running.set(prov.id, job);
+    await this.dispatch(prov.id);
     return provisioningView(prov, tenant);
   }
 

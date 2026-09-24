@@ -349,7 +349,7 @@ async function main() {
   }
   console.log('Seeding platform console data...');
   const consoleData = await seedConsole(prisma);
-  const jobs = await seedFailedJobs().catch((e: Error) => {
+  const jobs = process.env.NODE_ENV === 'test' ? 0 : await seedFailedJobs().catch((e: Error) => {
     console.log('  failed jobs skipped (Redis: %s)', e.message);
     return 0;
   });

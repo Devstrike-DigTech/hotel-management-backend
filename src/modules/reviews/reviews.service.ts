@@ -324,7 +324,6 @@ export class ReviewsService {
       };
       // Default queue: flagged first (a CASE ordering is not expressible in Prisma, so two reads).
       const include = { ...withStay, property: { select: { name: true, slug: true } } };
-      let rows;
       let flagged: Awaited<ReturnType<typeof tx.review.findMany<{ include: typeof include }>>> = [];
       let rest: typeof flagged;
       if (q.status) {

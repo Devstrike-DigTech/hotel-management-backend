@@ -240,7 +240,7 @@ export async function safeRequest(
   const signal = AbortSignal.timeout(o.timeoutMs);
   const started = Date.now();
   const { url, pinned } = await vetUrl(raw, o);
-  const headers = { ...(req.headers ?? {}), ...(req.body !== undefined && { 'content-length': String(Buffer.byteLength(req.body)) }) };
+  const headers = { ...req.headers, ...(req.body !== undefined && { 'content-length': String(Buffer.byteLength(req.body)) }) };
   try {
     const { res } = await requestOnce(url, pinned, { maxBytes: o.maxBytes, signal, headers, method: req.method, payload: req.body });
     const chunks: Buffer[] = [];

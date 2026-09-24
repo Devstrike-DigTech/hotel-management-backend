@@ -40,6 +40,7 @@ export function fakeTx(state: FakeState): Tx {
     user: { count: async () => state.usage.staff },
     property: { count: async () => state.usage.properties },
     plan: { findMany: async () => CATALOGUE },
+    tenant: { findUnique: async () => ({ lifecycle: 'ACTIVE' }) },
   } as unknown as Tx;
 }
 

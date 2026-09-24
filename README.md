@@ -78,7 +78,10 @@ The migrations create missing roles `NOLOGIN`, so the grants still apply.
 
 | who | email | password |
 |---|---|---|
-| Platform console (Devstrike) | `admin@devstrike.ng` | `Admin1234!` |
+| Platform console (Devstrike), SUPER_ADMIN, TOTP secret `DEVSTRIKEADMINTOTPSECRET234567AB`, recovery codes `adm0-0001` ... `adm0-0010` | `admin@devstrike.ng` | `Admin1234!` |
+| Console OPERATIONS / SUPPORT / FINANCE / SALES_READONLY (TOTP secrets `DEVSTRIKEOPSTOTPSECRET234567ABCD`, `DEVSTRIKESUPPORTTOTPSECRET234567`, `DEVSTRIKEFINANCETOTPSECRET234567`, `DEVSTRIKESALESTOTPSECRET234567AB`) | `ops@`, `support@`, `finance@`, `sales@devstrike.ng` | `Admin1234!` |
+| Pending console invitation (SUPPORT) | `newhire@devstrike.ng`, token `dev-invite-newhire-0001` | set on acceptance |
+| Enterprise group, Harmattan Hotels & Suites (dedicated database `hotel_t_harmattan`, white-label, SSO): Abuja `HHA`, Lagos `HHL`, Port Harcourt `HHP` | `owner@harmattanhotels.com` (break-glass owner), `gm@` (manager), `frontdesk.abuja@harmattanhotels.com` | `Demo1234!` |
 | Demo group owner, The Palmwine House (Pro, ACTIVE): The Palmwine House (Lekki Phase 1, 24 rooms, prefix `PWH`) and Palmwine House Ikoyi (12 rooms, prefix `PWI`) | `demo@palmwine.ng` | `Demo1234!` |
 | Palmwine staff | `tunde@` (manager), `ngozi@` (front desk, morning), `chidinma@` (front desk, evening, Lekki only), `musa@` and `blessing@` (housekeeping), `grace@` (housekeeping supervisor), `emeka@` (maintenance), `seun@` (custom role "Night Auditor"), `funmi@palmwine.ng` (accountant) | `Demo1234!` |
 | Palmwine M5 staff | `kelechi@` (front desk, Ikoyi only), `yemi@` (waiter / cashier, Lekki), `bisi@palmwine.ng` (kitchen / bar, Lekki) | `Demo1234!` |
@@ -86,6 +89,18 @@ The migrations create missing roles `NOLOGIN`, so the grants still apply.
 | Starter hotel on trial (housekeeping is locked) | `owner@wusegarden.ng` | `Demo1234!` |
 | Starter hotel, PAST_DUE | `owner@marinacreek.ng` | `Demo1234!` |
 | Demo guest account (platform level) | phone `+2348030000001` (Adaeze Okafor) | sign in with an OTP; read the code from `GET /api/v1/public/dev/outbox` |
+
+Platform sign-in needs a TOTP code: add the secret to any authenticator app,
+run `oathtool --totp -b <secret>`, or (development only) call
+`GET /api/v1/platform/auth/dev/totp?email=admin@devstrike.ng`.
+
+Harmattan's development API keys (also written to `storage/dev-api-keys.txt`
+by the seed): `hk_live_hhchannel1_devHarmattanLiveKeyDoNotUseInProduction1`
+(Channel sync) and `hk_test_hhstaging1_devHarmattanTestKeyDoNotUseInProduction1`
+(Staging integration, dry-run writes). Its SSO uses the development OIDC
+provider (`/api/v1/dev/oidc`, pick any `@harmattanhotels.com` email). The
+white-label hosts `book.harmattanhotels.com` and `staff.harmattanhotels.com`
+are verified in the seed (send them as `?host=`).
 
 The other marketplace hotels are `ikoyi-lantern` (Pro), `eko-tides` (Growth),
 `maitama-court` (Enterprise), `garden-city-lodge` (Growth), `bodija-heights`
@@ -193,7 +208,8 @@ audit rows can never be updated or deleted.
 | `pnpm test:e2e` | end-to-end tests against a throwaway `hotel_test` database |
 | `pnpm db:migrate` | `prisma migrate deploy` (as `DATABASE_MIGRATION_URL`) |
 | `pnpm db:migrate:dev` | create or apply migrations in development |
-| `pnpm db:seed` | idempotent seed |
+| `pnpm db:migrate:all` | migrate the shared database and every dedicated tenant database (M6) |
+| `pnpm db:seed` | idempotent seed (also provisions Harmattan's dedicated database; `SEED_SKIP_DEDICATED=1` to skip) |
 | `pnpm db:reset` | drop, re-migrate and re-seed the dev database |
 | `pnpm prisma:generate` | regenerate the Prisma client into `src/generated/prisma` |
 | `pnpm images:verify` | check that every seed image URL returns HTTP 200 |
@@ -1073,6 +1089,190 @@ ones.
 
 ---
 
+## Enterprise tier and the platform console (M6)
+
+The full contract is `API-M6.md` (shared with the frontend repositories).
+Enterprise adds `white_label`, `api_access`, `dedicated_database`, `sso` and
+`data_export` on top of Pro.
+
+### Architecture: control plane and data plane
+
+Tables with a `tenant_id` are either **control plane** (subscriptions,
+invoices, feature overrides, API keys and their usage, white-label, SSO,
+support desk, impersonation sessions, exports, offboarding, the dedicated
+database registry, the public listing projection) or **data plane**
+(everything a hotel operates on: properties, rooms, reservations, folios,
+guests, POS, audit trail, webhook endpoints and deliveries, ...). The list is
+`CONTROL_TABLES` in `src/modules/dedicated-db/engine.ts`.
+
+- Control-plane rows always live in the shared database. They are read with
+  `db.control(tenantId, fn)` (hotel side, signed tenant context) or
+  `db.system(fn)` (console).
+- Data-plane rows live wherever the tenant is served: the shared database, or
+  its own dedicated database. `db.tenant(tenantId, fn)` asks the
+  `TenantDbRouter` and opens the transaction on the right database; every
+  hotel service already goes through it, so nothing else changes.
+- A dedicated database also holds a read-only **mirror** of the control rows
+  that operational queries join (the tenant row, plans, features,
+  subscription, feature overrides), kept in step by `ControlMirrorService`
+  after each console / billing change and every 5 minutes.
+- Cross-tenant reads (marketplace search, resolve-host, guest trips, platform
+  metrics, sweeps) fan out with `db.publicAll` / `db.systemAll`; each target
+  carries a `tenants` filter so the stale shared copy of a moved tenant is
+  never read twice. `public_listings` projects every listed property (slug,
+  custom domain, city) so a slug or host resolves to its database in one
+  lookup.
+- Each tenant transaction first calls `app_tenant_gate(tenant)` in the
+  database: it takes a shared advisory lock and answers `ok`, `read_only`
+  (cutover window: writes answer 409 `TENANT_MIGRATING { retryAfterSec }`) or
+  `moved` (another instance switched routing: reload and retry).
+
+### Dedicated database runbook
+
+Provision (console, `dedicated_db.manage` + step-up):
+`POST /platform/tenants/:id/database/provision { source: "AUTO" }` creates
+`<DEDICATED_DB_PREFIX><slug>` through `DATABASE_ADMIN_URL` (development: the
+owner role `hotel`), or `{ source: "URL", url }` uses an empty database an
+operator created. Steps, all visible in `GET /platform/provisionings/:id`:
+
+1. `CREATE_DATABASE`, `MIGRATE` (`prisma migrate deploy` on the new database,
+   installs the context key), roles `hotel_app` / `hotel_platform` connect with
+   their usual credentials.
+2. `COPY`: every data-plane table of the tenant in foreign-key order, batches
+   of 500 (the shared copy stays live meanwhile), plus the control mirror.
+3. `READ_ONLY_DELTA`: the gate turns read-only (a few seconds); rows inserted,
+   changed or deleted since the copy are applied.
+4. `VERIFY`: row counts and checksums per table, source vs target.
+5. `CUTOVER`: the registry flips to `ACTIVE`, every instance is told over
+   Redis (`hotel:tenant-db-routing`) and refreshes within 10 s at the latest.
+   A verification failure drops the target and ends `ROLLED_BACK` with the
+   failing tables; the tenant never left the shared database.
+
+After the cutover the shared copy is kept `DEDICATED_SHARED_RETENTION_DAYS`
+(7) days, then purged by the `dedicated-purge` job (or
+`POST .../database/purge-shared`). Until then
+`POST .../database/rollback` copies back rows changed since the cutover and
+routes the tenant to the shared database again.
+
+Migrations: run `pnpm db:migrate:all` on every deploy (shared first, then
+each dedicated database; exit code 1 if any failed). The console has the same
+action (`POST /platform/databases/migrate-all`, SUPER_ADMIN, step-up).
+Backups: a dedicated database is an ordinary Postgres database; include it
+in the backup schedule by its name (`GET /platform/dedicated-databases`).
+
+### Platform console security
+
+- **Roles**: SUPER_ADMIN, OPERATIONS, SUPPORT, FINANCE, SALES_READONLY with
+  permission sets (`GET /platform/permissions`, `platform-permissions.ts`);
+  a missing permission is 403 `PLATFORM_FORBIDDEN`.
+- **Mandatory TOTP** (RFC 6238, in-house, SHA-1, 6 digits, +-1 step, each code
+  once): the password step returns `MFA_REQUIRED` or
+  `MFA_ENROLMENT_REQUIRED`; enrolment shows a QR code and ten recovery codes
+  (stored hashed). Tokens carry a session id; each request re-checks the
+  session (revocable, 12 h absolute, 60 min idle) and the user's IP allowlist.
+  Refresh tokens rotate with reuse detection.
+- **Lockout**: 5 wrong passwords or codes in a row lock the account for 15
+  minutes (423 `ACCOUNT_LOCKED`); admins can unlock.
+- **Step-up**: sensitive routes (impersonation, write mode, offboarding,
+  provisioning, queue retries, MFA reset, recovery codes, password, IP
+  allowlist) need a code re-entered in the last 10 minutes.
+- **Origins**: `PLATFORM_ORIGINS` only on `/api/v1/platform/*`; the hotel
+  apps' origins are refused there (and the console's on hotel routes) with
+  403 `ORIGIN_NOT_ALLOWED` before any handler runs.
+- **Audit**: every non-GET platform request, sign-in event and sensitive read
+  lands in `platform_audit_logs` (append-only by trigger, bodies redacted);
+  `GET /platform/audit`, CSV/JSON export.
+- **Impersonation**: time-boxed (max 60 min), mandatory reason, read-only by
+  default (non-GET hotel requests answer 403 `IMPERSONATION_READ_ONLY`), write
+  mode needs a second reason and step-up; owners are impersonated only by
+  SUPER_ADMIN. The admin gets a one-time handoff code; the staff token carries
+  `imp` and dies with the session. Every write is in the tenant trail as
+  "<staff> (Devstrike support: <platform user>)" and mirrored in the platform
+  log; owners see and can end sessions (`/support-sessions`).
+
+### Partner API and API keys
+
+`/api/partner/v1` (outside the app prefix; no CORS), documented by
+`GET /api/partner/v1/openapi.json` (OpenAPI 3.1, hand-written in
+`src/modules/enterprise/partner/openapi.ts`).
+
+- Keys `hk_live_<prefix>_<secret>` / `hk_test_...`: the prefix is the lookup
+  key, only SHA-256 of the secret is stored. Scopes, optional property
+  restriction, IP allowlist and expiry; rotation keeps the old secret valid
+  for 24 hours; revocation is immediate.
+- `PartnerGuard` authenticates the key, checks the allowlist, the tenant's
+  `api_access`, the scope and the rate limits (Redis, per key: per minute and
+  per second, `RateLimit-*` headers, 429 with `Retry-After`), requires
+  `Idempotency-Key` on writes, and meters usage (buffered, flushed every 5 s
+  into `api_usage_daily`). Writes reuse the hotel services as a synthetic
+  staff principal with the scopes' permissions; the audit trail names
+  "API key <name>".
+- **Test keys** run writes inside `dryRunContext`: every tenant transaction
+  that wrote is rolled back (`DryRunRollback` carries the result), so
+  validation, availability and database constraints are real and nothing is
+  kept. Responses carry `dryRun: true`.
+- Lists are cursor-paginated over `(createdAt, id)`; errors carry the
+  `requestId`.
+
+### Outbound webhooks
+
+Events come from audit entries and domain events inside the business
+transaction (`registerAuditHook`, `onDomainEvent`): the delivery rows commit
+with the change (transactional outbox). A sweep (every minute, and right
+after a change on this instance) delivers them through `safeRequest` (the
+SSRF guard: https only in production, private / loopback / link-local /
+metadata addresses refused, DNS pinned, no redirects, 10 s timeout). Each
+request is signed `X-Signature: t=<unix>,v1=<HMAC-SHA256(secret,
+"<t>.<body>")>` (a second `v1` during a secret rotation). Retries after 1 min,
+5 min, 30 min, 2 h, 5 h, 10 h and 24 h; an endpoint failing for 24 hours with
+at least 10 failures is disabled and the owners are emailed. Deliveries keep
+request / response / attempt logs; replay and a test ping are one call away.
+
+### White-label
+
+Brand kit (logo, colours, curated Google fonts, footer links, "powered by"
+off) shown on the booking site only when the request host is the property's
+verified custom domain (`?host=` on `GET /public/hotels/:slug`). Guest email
+goes from the hotel's verified sending domain (Resend Domains API, or a mock
+without `RESEND_API_KEY`), SMS with the approved sender ID (request to
+Termii, or mock; the console approves), documents and emails drop the
+platform branding. The staff portal on the hotel's own domain is verified
+like custom domains (TXT + CNAME to `STAFF_PORTAL_TARGET`) and described by
+`GET /public/staff-portal?host=`.
+
+### Single sign-on (OIDC)
+
+Per tenant: issuer discovery through the SSRF guard, Authorization Code +
+PKCE (S256), `state` and `nonce` in Redis for 10 minutes, ID token verified
+against the JWKS (RS256, `iss`, `aud`, `exp`, `nonce`, `email_verified`,
+allowed domains), existing staff or just-in-time creation within `max_staff`.
+"SSO only" refuses password sign-in (403 `SSO_REQUIRED`) except for the
+break-glass owner and needs a successful test in the last 24 hours. The
+development provider at `/api/v1/dev/oidc` (client `dev-client`, secret
+`dev-secret`) is served in-process and refused in production.
+
+### Data export and offboarding (NDPA)
+
+`POST /exports` builds a zip (in-house writer) with JSON and CSV of every
+tenant entity (ID numbers decrypted and marked sensitive, no password
+hashes), a manifest and a README; the signed link lives 24 hours, files 7
+days, downloads are audited. Offboarding suspends the tenant (writes answer
+409 `TENANT_OFFBOARDING`, public pages disappear), makes that export and,
+after `OFFBOARDING_GRACE_DAYS` (30), deletes every row in the shared and
+dedicated database (the dedicated database is dropped), files and exports;
+the tenant row stays as a tombstone for the platform's own invoices.
+
+### Scheduled platform jobs (queue `platform`)
+
+`webhooks-deliver` and `announcements-email` every minute,
+`api-usage-flush` and `mirror-sync` every 5 minutes, `white-label-checks`
+every 10, `public-listings` every 15, `dedicated-purge` and
+`exports-cleanup` hourly, `offboarding` at 04:30. Every scheduled job records
+its last run in `job_runs` (the console's cron table flags overdue ones);
+`POST /platform/jobs/:name/run` runs one now.
+
+---
+
 ## Auth
 
 - **Staff**: `POST /auth/signup` creates a tenant, its primary property, an
@@ -1092,7 +1292,8 @@ ones.
     tokens.
 - **Platform console**: separate `platform_users` table, separate secret
   (`JWT_PLATFORM_SECRET`) and audience `platform`. The two kinds of token are
-  not interchangeable.
+  not interchangeable. Since M6 the password step returns an MFA challenge
+  only; see "Platform console security" below.
 - Login, signup and refresh are rate-limited per IP. Login verifies against
   a dummy hash when the email is unknown, so response timing does not reveal
   which emails are registered.

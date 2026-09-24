@@ -183,7 +183,7 @@ export class WhiteLabelService {
     }
     if (dto.footerLinks) {
       if (dto.footerLinks.length > 8) throw Err.validation('footerLinks', 'At most 8 links');
-      if (dto.footerLinks.some((l) => !isHttpsUrl(l.url) && !/^mailto:/.test(l.url))) throw Err.validation('footerLinks', 'Links must be https:// or mailto: URLs');
+      if (dto.footerLinks.some((l) => !isHttpsUrl(l.url) && !l.url.startsWith('mailto:'))) throw Err.validation('footerLinks', 'Links must be https:// or mailto: URLs');
     }
     const data = {
       ...(dto.enabled !== undefined && { enabled: dto.enabled }),
@@ -217,7 +217,7 @@ export class WhiteLabelService {
     const res = await fetch(`${this.config.get('RESEND_BASE_URL').replace(/\/$/, '')}${path}`, {
       method,
       headers: { authorization: `Bearer ${this.resendKey}`, 'content-type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      ...(body !== undefined && method !== 'GET' && { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(15_000),
     });
     const text = await res.text();

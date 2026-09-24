@@ -38,6 +38,7 @@ export async function provisionDedicated(tenantId: string, slug: string): Promis
   const secrets = new SecretBox(cfg);
   const prisma = new PrismaService(cfg);
   const platform = new PlatformPrismaService(cfg);
+  await platform.onModuleInit(); // installs the tenant context key (fresh databases)
   const router = new TenantDbRouter(platform, cfg, secrets);
   await router.onModuleInit();
   const db = new DbService(prisma, platform, cfg, router);

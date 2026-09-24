@@ -74,7 +74,7 @@ export class PlatformAnnouncementsController {
 
   @Post()
   create(@CurrentPlatformUser() p: PlatformPrincipal, @Body() dto: CreateAnnouncementDto) {
-    return this.announcements.create(p, { ...dto, audience: audienceOf(dto.audience) });
+    return this.announcements.create(p, Object.assign({}, dto, { audience: audienceOf(dto.audience) }));
   }
 
   @Post('audience-preview') @HttpCode(200)
@@ -84,7 +84,7 @@ export class PlatformAnnouncementsController {
 
   @Patch(':id')
   update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateAnnouncementDto) {
-    return this.announcements.update(id, { ...dto, audience: audienceOf(dto.audience) });
+    return this.announcements.update(id, Object.assign({}, dto, { audience: audienceOf(dto.audience) }));
   }
 
   @Post(':id/publish') @HttpCode(200)

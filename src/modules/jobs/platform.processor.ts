@@ -1,6 +1,7 @@
 import { InjectQueue, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import type { Job, Queue } from 'bullmq';
+import { PROVISION_JOB, ProvisioningService } from '../dedicated-db/provisioning.service.js';
 import { PlatformJobsService } from '../platform/console/platform-jobs.service.js';
 import { PLATFORM_JOBS, PLATFORM_QUEUE } from '../platform/console/system-health.service.js';
 import { DUNNING_TZ } from './jobs.constants.js';
@@ -8,11 +9,16 @@ import { DUNNING_TZ } from './jobs.constants.js';
 /** M6 platform jobs: webhook delivery, announcement emails, offboarding, dedicated-DB purge, listings, API usage. */
 @Processor(PLATFORM_QUEUE, { concurrency: 2 })
 export class PlatformProcessor extends WorkerHost {
-  constructor(private readonly jobs: PlatformJobsService) {
+  constructor(
+    private readonly jobs: PlatformJobsService,
+    private readonly provisioning: ProvisioningService,
+  ) {
     super();
   }
 
   process(job: Job): Promise<unknown> {
+    // Durable dedicated-database runs (resumed from their checkpoint if a worker died).
+    if (job.name === PROVISION_JOB) return this.provisioning.execute((job.data as { id: string }).id);
     return this.jobs.runScheduled(job.name);
   }
 }

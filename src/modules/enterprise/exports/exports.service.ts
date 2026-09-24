@@ -307,7 +307,7 @@ export function sanitise(table: string, rows: Record<string, unknown>[], decrypt
 export function toCsv(rows: Record<string, unknown>[]): string {
   if (!rows.length) return '';
   const cols = [...new Set(rows.flatMap((r) => Object.keys(r)))];
-  const cell = (v: unknown) => (v === null || v === undefined ? '' : csvCell(typeof v === 'object' ? JSON.stringify(v) : String(v)));
+  const cell = (v: unknown) => (v === null || v === undefined ? '' : csvCell(typeof v === 'object' ? JSON.stringify(v) : String(v as string | number | boolean | bigint)));
   return `${[cols.join(','), ...rows.map((r) => cols.map((c) => cell(r[c])).join(','))].join('\r\n')}\r\n`;
 }
 

@@ -11,7 +11,7 @@ import { AppException, ErrorCode } from '../../common/errors/app-exception.js';
 import { humanDate, lagosDate } from '../../common/time/lagos.js';
 import { randomSuffix, slugify } from '../../common/utils/slug.js';
 import { AppConfigService } from '../../config/app-config.service.js';
-import { DbService, type Tx } from '../../prisma/db.service.js';
+import { DbService } from '../../prisma/db.service.js';
 import {
   AuditService,
   platformActor,

@@ -51,7 +51,9 @@ export class CouponsService {
   async create(p: PlatformPrincipal, dto: CouponInput) {
     const code = dto.code.trim().toUpperCase();
     if (!/^[A-Z0-9_-]{3,32}$/.test(code)) throw Err.validation('code', 'Use 3 to 32 letters, digits, - or _');
-    if ((dto.percentOff ?? null) === null === ((dto.amountOffKobo ?? null) === null)) throw Err.validation('percentOff', 'Give either percentOff or amountOffKobo');
+    const hasPercent = (dto.percentOff ?? null) !== null;
+    const hasAmount = (dto.amountOffKobo ?? null) !== null;
+    if (hasPercent === hasAmount) throw Err.validation('percentOff', 'Give either percentOff or amountOffKobo');
     if (dto.validFrom && dto.validUntil && new Date(dto.validUntil) <= new Date(dto.validFrom)) throw Err.validation('validUntil', 'validUntil must be after validFrom');
     if (dto.planCodes?.length) {
       const known = await this.db.system((tx) => tx.plan.findMany({ where: { code: { in: dto.planCodes } }, select: { code: true } }));

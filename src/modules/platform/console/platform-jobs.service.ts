@@ -49,6 +49,7 @@ export class PlatformJobsService {
       },
     ],
     [PLATFORM_JOBS.dedicatedPurge.name, { queue: PLATFORM_QUEUE, run: (r) => get(r, ProvisioningService).purgeDue() }],
+    [PLATFORM_JOBS.provisioningReconcile.name, { queue: PLATFORM_QUEUE, run: (r) => get(r, ProvisioningService).reconcile() }],
     [PLATFORM_JOBS.publicListings.name, { queue: PLATFORM_QUEUE, run: (r) => get(r, ListingsService).refreshAll() }],
     [PLATFORM_JOBS.mirrorSync.name, { queue: PLATFORM_QUEUE, run: async (r) => ({ synced: await get(r, ControlMirrorService).syncAll() }) }],
     [PLATFORM_JOBS.exportsCleanup.name, { queue: PLATFORM_QUEUE, run: (r) => get(r, ExportsService).cleanup() }],

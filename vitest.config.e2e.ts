@@ -24,6 +24,9 @@ const env: Record<string, string> = {
   APP_NAME: 'HotelOS',
   CHANNEX_WEBHOOK_SECRET: 'e2e-channex-webhook-secret',
   DNS_PROVIDER: 'mock',
+  // M6: dedicated tenant databases of the e2e run (never the development ones).
+  DEDICATED_DB_PREFIX: 'hotel_e2e_t_',
+  PLATFORM_ORIGINS: 'http://localhost:3002',
   // iCal feed stubs listen on localhost; every other private address stays refused.
   OUTBOUND_ALLOW_PRIVATE_HOSTS: 'localhost',
   APP_DOMAIN: 'hotelos.test',

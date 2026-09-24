@@ -153,7 +153,7 @@ export class AnnouncementsService {
     if (dto.audience?.kind === 'TENANTS' && !dto.audience.tenantIds.length) throw Err.validation('audience', 'Choose at least one hotel');
     if (dto.audience?.kind === 'PLANS' && !dto.audience.planCodes.length) throw Err.validation('audience', 'Choose at least one plan');
     if (dto.audience?.kind === 'CITIES' && !dto.audience.cities.length) throw Err.validation('audience', 'Choose at least one city');
-    if (dto.link && !/^https:\/\//.test(dto.link.url)) throw Err.validation('link', 'Links must start with https://');
+    if (dto.link && !dto.link.url.startsWith('https://')) throw Err.validation('link', 'Links must start with https://');
   }
 
   private data(dto: AnnouncementInput): Prisma.AnnouncementUncheckedUpdateInput {
