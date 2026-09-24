@@ -533,6 +533,7 @@ async function clearSeeded(tx: Tx, tenantId: string) {
   await tx.$executeRawUnsafe(`SET LOCAL session_replication_role = replica`);
   const list = `ARRAY[${ids.map((i) => `'${i}'::uuid`).join(',')}]`;
   await tx.$executeRawUnsafe(`DELETE FROM notification_logs WHERE reservation_id = ANY(${list})`);
+  for (const t of ['transfers', 'reservation_extras', 'form_uploads']) await tx.$executeRawUnsafe(`DELETE FROM ${t} WHERE reservation_id = ANY(${list})`);
   await tx.$executeRawUnsafe(`DELETE FROM reviews WHERE reservation_id = ANY(${list})`);
   await tx.$executeRawUnsafe(`DELETE FROM commission_entries WHERE reservation_id = ANY(${list})`);
   await tx.$executeRawUnsafe(`DELETE FROM booking_refunds WHERE reservation_id = ANY(${list})`);

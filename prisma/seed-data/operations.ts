@@ -63,6 +63,10 @@ type SeedReservation = Omit<
   Reservation,
   | 'paymentMode'
   | 'externalRef'
+  | 'formVersionId'
+  | 'formChannel'
+  | 'formAnswers'
+  | 'formSubmittedAt'
   | 'guaranteeType'
   | 'holdExpiresAt'
   | 'commissionBps'
@@ -177,6 +181,8 @@ async function resetTenant(prisma: PrismaClient, tenantId: string) {
       'city_ledger_allocations', 'city_ledger_payments', 'city_ledger_charges', 'city_ledger_invoices',
       'promo_redemptions', 'guard_alerts', 'room_blocks', 'maintenance_ticket_events', 'maintenance_tickets',
       'lost_found_items',
+      // M7 rows that hang off reservations; the M7 seed rebuilds them.
+      'transfers', 'reservation_extras', 'form_uploads',
       'notification_logs', 'reviews', 'commission_entries', 'booking_refunds', 'booking_payments',
       'idempotency_keys', 'guard_flags', 'owner_digests', 'daily_stats', 'night_audit_runs',
       'housekeeping_tasks', 'receipts', 'guest_invoices', 'folio_entries', 'folios', 'cashier_shifts',

@@ -19,6 +19,8 @@ import { seedPro } from './seed-data/pro-data.js';
 import { seedPlatformUsers } from './seed-data/platform-users.js';
 import { HARMATTAN, seedConsole, seedHarmattan, seedHarmattanControl } from './seed-data/enterprise.js';
 import { announceChanges, provisionDedicated, seedFailedJobs } from './seed-data/provision.js';
+import { seedM7, seedM7Harmattan, seedTransportLists } from './seed-data/m7.js';
+import { withDatabase } from '../src/modules/dedicated-db/engine.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const NAIRA = 100;
@@ -339,7 +341,22 @@ async function main() {
   const keys = await seedHarmattanControl(prisma, hh.tenantId, owner?.id ?? null);
   console.log('  API keys (also in storage/dev-api-keys.txt):');
   for (const k of keys) console.log('    %s', k);
+  console.log('Seeding M7 (themes, booking forms, extras, pickups, transfers, setup wizard)...');
+  const lists = await seedTransportLists(prisma);
+  const m7 = await seedM7(prisma);
+  console.log('  transport lists=%d %s', lists, Object.entries(m7).map(([k, v]) => `${k}=${v}`).join(' '));
   if (hh.dedicated) {
+    // Harmattan already lives in its own database: its M7 rows go there.
+    const reg = await prisma.tenantDatabase.findUnique({ where: { tenantId: hh.tenantId } });
+    if (reg?.dbName) {
+      const dedicated = new PrismaClient({ adapter: new PrismaPg({ connectionString: withDatabase(url, reg.dbName) }) });
+      try {
+        const r = await seedM7Harmattan(dedicated, hh.tenantId);
+        console.log('  %s (dedicated) %s', HARMATTAN.slug, Object.entries(r).map(([k, v]) => `${k}=${v}`).join(' '));
+      } finally {
+        await dedicated.$disconnect();
+      }
+    }
     console.log('  dedicated database: already active');
   } else if (process.env.SEED_SKIP_DEDICATED === '1') {
     console.log('  dedicated database: skipped (SEED_SKIP_DEDICATED=1)');
