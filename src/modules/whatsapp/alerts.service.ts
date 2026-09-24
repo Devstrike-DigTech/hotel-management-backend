@@ -256,9 +256,9 @@ export class AlertsService {
 
   /** Sends every alert that is due (a one-minute job; tests call it directly). */
   async processDue(now = new Date()): Promise<{ sent: number }> {
-    const due = await this.db.system((tx) =>
-      tx.guardAlert.findMany({ where: { status: { in: ['PENDING', 'DEFERRED'] }, scheduledFor: { lte: now }, sentAt: null }, select: { id: true, tenantId: true }, take: 200 }),
-    );
+    const due = (await this.db.systemAll((tx, t) =>
+      tx.guardAlert.findMany({ where: { ...t.tenants, status: { in: ['PENDING', 'DEFERRED'] }, scheduledFor: { lte: now }, sentAt: null }, select: { id: true, tenantId: true }, take: 200 }),
+    )).flat();
     let sent = 0;
     for (const a of due) {
       try {

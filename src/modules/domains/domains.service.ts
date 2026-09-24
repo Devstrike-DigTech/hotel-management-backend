@@ -81,11 +81,16 @@ export class DomainsService {
     if (problem === 'APEX') throw appError(HttpStatus.BAD_REQUEST, 'DOMAIN_APEX_NOT_SUPPORTED', `Use a subdomain such as book.${domain}; a bare domain cannot point to the booking site`);
     const appDomain = this.config.get('APP_DOMAIN').toLowerCase();
     if (domain === appDomain || domain.endsWith(`.${appDomain}`)) throw Err.validation('domain', `Your ${appDomain} address is already set up; enter your own domain`);
-    const taken = await this.db.system(async (tx) => {
-      const d = await tx.customDomain.findFirst({ where: { domain }, select: { tenantId: true, propertyId: true } });
-      const p = await tx.property.findFirst({ where: { customDomain: domain }, select: { id: true } });
+    // M6: a domain is unique across the shared and every dedicated database
+    // (and staff portal domains).
+    const found = await this.db.systemAll(async (tx, t) => {
+      const d = await tx.customDomain.findFirst({ where: { ...t.tenants, domain }, select: { tenantId: true, propertyId: true } });
+      const p = await tx.property.findFirst({ where: { ...t.tenants, customDomain: domain }, select: { id: true } });
       return { d, p };
     });
+    const taken = { d: found.find((f) => f.d)?.d ?? null, p: found.find((f) => f.p)?.p ?? null };
+    const portal = await this.db.system((tx) => tx.staffPortalDomain.findUnique({ where: { domain }, select: { tenantId: true } }));
+    if (portal) throw appError(HttpStatus.CONFLICT, 'DOMAIN_TAKEN', 'That domain is already connected to another hotel');
     return this.db.tenant(user.tenantId, async (tx) => {
       const p = await primaryProperty(tx, user.tenantId);
       if ((taken.d && taken.d.propertyId !== p.id) || (taken.p && taken.p.id !== p.id)) throw appError(HttpStatus.CONFLICT, 'DOMAIN_TAKEN', 'That domain is already connected to another hotel');
@@ -169,17 +174,19 @@ export class DomainsService {
   /** Job: PENDING domains every 10 minutes, VERIFIED ones daily. */
   async runScheduled() {
     const now = new Date();
-    const due = await this.db.system((tx) =>
+    const due = (await this.db.systemAll((tx, t) =>
       tx.customDomain.findMany({
         // The mock DNS lives in memory: in development only PENDING domains are re-checked, so seeded
         // VERIFIED domains keep working across restarts.
-        where:
-          this.dns.kind === 'mock'
-            ? { status: 'PENDING' }
-            : { OR: [{ status: 'PENDING' }, { status: 'VERIFIED', OR: [{ lastCheckedAt: null }, { lastCheckedAt: { lte: new Date(now.getTime() - VERIFIED_RECHECK_MS) } }, { failingSince: { not: null } }] }] },
+        where: {
+          ...t.tenants,
+          ...(this.dns.kind === 'mock'
+            ? { status: 'PENDING' as const }
+            : { OR: [{ status: 'PENDING' as const }, { status: 'VERIFIED' as const, OR: [{ lastCheckedAt: null }, { lastCheckedAt: { lte: new Date(now.getTime() - VERIFIED_RECHECK_MS) } }, { failingSince: { not: null } }] }] }),
+        },
         select: { id: true, tenantId: true },
       }),
-    );
+    )).flat();
     let verified = 0;
     for (const d of due) {
       try {

@@ -587,19 +587,21 @@ export class GuestInboxService implements OnModuleInit {
    */
   private async route(digits: string, phoneNumberId: string | null | undefined, now: Date): Promise<{ tenantId: string; propertyId: string; guestId: string | null; guestName: string | null; reservationId: string | null } | null> {
     const local = digits.startsWith('234') ? `0${digits.slice(3)}` : digits;
-    const guests = await this.db.system((tx) =>
+    // M6: guests and inbox numbers of every database (shared and dedicated tenants).
+    const guests = (await this.db.systemAll((tx, t) =>
       tx.$queryRaw<{ id: string; tenant_id: string; full_name: string }[]>`
         SELECT g.id, g.tenant_id, g.full_name FROM guests g
-         WHERE g.anonymised_at IS NULL AND g.phone IS NOT NULL AND regexp_replace(g.phone, '[^0-9]', '', 'g') IN (${digits}, ${local})`,
-    );
-    const pinned = phoneNumberId ? await this.db.system((tx) => tx.inboxSetting.findFirst({ where: { phoneNumberId }, select: { tenantId: true, propertyId: true } })) : null;
+         WHERE g.anonymised_at IS NULL AND g.phone IS NOT NULL AND regexp_replace(g.phone, '[^0-9]', '', 'g') IN (${digits}, ${local})
+           AND g.tenant_id <> ALL(${t.excludeTenantIds}::uuid[])`,
+    )).flat();
+    const pinned = phoneNumberId ? ((await this.db.locate((tx, t) => tx.inboxSetting.findFirst({ where: { ...t.tenants, phoneNumberId }, select: { tenantId: true, propertyId: true } })))?.value ?? null) : null;
     type Cand = { tenantId: string; propertyId: string; guestId: string; guestName: string; reservationId: string; rank: number; at: number };
     const cands: Cand[] = [];
     for (const g of guests) {
       if (pinned && pinned.tenantId !== g.tenant_id) continue;
       const ent = await this.entitlements.getEntitlements(g.tenant_id).catch(() => null);
       if (!ent?.features.includes(FEATURE)) continue;
-      const stays = await this.db.system((tx) =>
+      const stays = await this.db.systemFor(g.tenant_id, (tx) =>
         tx.reservation.findMany({
           where: {
             tenantId: g.tenant_id,
@@ -633,7 +635,7 @@ export class GuestInboxService implements OnModuleInit {
     for (const g of guests) {
       const ent = await this.entitlements.getEntitlements(g.tenant_id).catch(() => null);
       if (!ent?.features.includes(FEATURE)) continue;
-      const open = await this.db.system((tx) => tx.conversation.findFirst({ where: { tenantId: g.tenant_id, guestId: g.id, status: { not: 'CLOSED' } }, orderBy: { lastMessageAt: 'desc' } }));
+      const open = await this.db.systemFor(g.tenant_id, (tx) => tx.conversation.findFirst({ where: { tenantId: g.tenant_id, guestId: g.id, status: { not: 'CLOSED' } }, orderBy: { lastMessageAt: 'desc' } }));
       if (open) return { tenantId: g.tenant_id, propertyId: open.propertyId, guestId: g.id, guestName: g.full_name, reservationId: open.reservationId };
     }
     return null;
@@ -711,7 +713,9 @@ export class GuestInboxService implements OnModuleInit {
   async applyStatus(providerMessageId: string, status: string, error?: string | null) {
     const next = status.toUpperCase();
     if (!(next in STATUS_RANK)) return false;
-    return this.db.system(async (tx) => {
+    const hit = await this.db.locate((tx, t) => tx.conversationMessage.findFirst({ where: { ...t.tenants, providerMessageId }, select: { tenantId: true } }));
+    if (!hit) return false;
+    return this.db.systemFor(hit.value.tenantId, async (tx) => {
       const m = await tx.conversationMessage.findUnique({ where: { providerMessageId }, select: { id: true, status: true } });
       if (!m) return false;
       if (next !== 'FAILED' && (STATUS_RANK[m.status] ?? 0) >= STATUS_RANK[next]) return false;

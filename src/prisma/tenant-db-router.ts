@@ -35,6 +35,8 @@ interface Entry extends TenantClients {
 }
 
 export const ROUTING_CHANNEL = 'hotel:tenant-db-routing';
+/** Registry statuses in which the dedicated database serves the tenant (ROLLING_BACK: read-only). */
+const SERVING = new Set(['ACTIVE', 'ROLLING_BACK']);
 const REFRESH_MS = 10_000;
 
 /** Replaces host, port and database of `base` with those of `target`, keeping base's credentials. */
@@ -150,17 +152,18 @@ export class TenantDbRouter implements OnModuleInit, OnModuleDestroy {
   /** The dedicated route of a tenant, or null when the shared database serves it. */
   dedicated(tenantId: string): DedicatedRoute | null {
     const r = this.routes.get(tenantId.toLowerCase());
-    return r && r.mode === 'DEDICATED' && r.status === 'ACTIVE' ? r : null;
+    return r && r.mode === 'DEDICATED' && SERVING.has(r.status) ? r : null;
   }
 
-  /** True while the tenant is in a cutover window (writes refused). */
+  /** True while the tenant is in a cutover or rollback window (writes refused). */
   readOnly(tenantId: string): boolean {
-    return this.routes.get(tenantId.toLowerCase())?.status === 'CUTOVER';
+    const s = this.routes.get(tenantId.toLowerCase())?.status;
+    return s === 'CUTOVER' || s === 'ROLLING_BACK';
   }
 
   /** Every tenant currently served by a dedicated database. */
   activeDedicated(): DedicatedRoute[] {
-    return [...this.routes.values()].filter((r) => r.mode === 'DEDICATED' && r.status === 'ACTIVE');
+    return [...this.routes.values()].filter((r) => r.mode === 'DEDICATED' && SERVING.has(r.status));
   }
 
   isDedicated(tenantId: string): boolean {

@@ -1,3 +1,4 @@
+import { ControlMirrorService } from '../dedicated-db/control-mirror.service.js';
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import type { Prisma, Subscription } from '../../generated/prisma/client.js';
@@ -59,6 +60,7 @@ export class PaystackWebhookService {
     private readonly audit: AuditService,
     private readonly bookings: BookingPaymentsService,
     private readonly refunds: RefundsService,
+    private readonly mirror: ControlMirrorService,
   ) {}
 
   async handle(
@@ -82,8 +84,11 @@ export class PaystackWebhookService {
     const key = eventKey(event, rawBody!);
 
     const after: After[] = [];
+    // M6: booking payments and refunds of a tenant with a dedicated database
+    // are processed there, ledger entry included (so replays stay idempotent).
+    const routeTenant = await this.routeTenant(type, event);
     try {
-      const result = await this.db.system(async (tx) => {
+      const result = await this.db.systemFor(routeTenant, async (tx) => {
         const ledger = await tx.paymentEvent.create({
           data: {
             provider: 'paystack',
@@ -97,6 +102,8 @@ export class PaystackWebhookService {
           where: { id: ledger.id },
           data: { processedAt: new Date(), tenantId },
         });
+        // M6: subscription changes reach the tenant's dedicated-database mirror.
+        if (tenantId && !routeTenant) after.push(async () => { await this.mirror.sync(tenantId); });
         return { received: true as const, handled: tenantId !== null };
       });
       // Notifications, refunds and jobs run only after the state change committed.
@@ -109,6 +116,28 @@ export class PaystackWebhookService {
       }
       throw err;
     }
+  }
+
+  /** The dedicated-database tenant a booking or refund event belongs to (null = shared database). */
+  private async routeTenant(type: string, event: PaystackEvent): Promise<string | null> {
+    if (!this.db.router.activeDedicated().length) return null;
+    const d = event.data ?? {};
+    const meta = typeof d.metadata === 'object' && d.metadata ? d.metadata : null;
+    let reference: string | null = null;
+    if (type.startsWith('charge.')) {
+      const isBooking = meta?.kind === 'booking' || (d.reference ?? '').startsWith('BKG_');
+      if (!isBooking) return null;
+      const hinted = typeof meta?.tenantId === 'string' ? meta.tenantId : null;
+      if (hinted && this.db.router.isDedicated(hinted)) return hinted;
+      reference = d.reference ?? null;
+    } else if (type.startsWith('refund.')) {
+      const r = d as Record<string, unknown>;
+      const nested = r.transaction as { reference?: string } | undefined;
+      reference = (r.transaction_reference as string | undefined) ?? nested?.reference ?? (r.reference as string | undefined) ?? null;
+    }
+    if (!reference) return null;
+    const tenantId = await this.bookings.paymentTenant(reference);
+    return tenantId && this.db.router.isDedicated(tenantId) ? tenantId : null;
   }
 
   /** Applies the event; returns the affected tenant id (or null if ignored). */
@@ -177,7 +206,7 @@ export class PaystackWebhookService {
       this.logger.error(
         `charge.success amount/currency mismatch for ${d.reference}: got ${d.amount} ${d.currency}, expected ${invoice.amountKobo} ${invoice.currency}`,
       );
-      await this.audit.record(tx, {
+      await this.audit.recordControl(tx, {
         tenantId: invoice.tenantId,
         actor: PAYSTACK_ACTOR,
         action: 'billing.payment_mismatch',
@@ -236,7 +265,7 @@ export class PaystackWebhookService {
         paystackCustomerCode: d.customer?.customer_code ?? sub.paystackCustomerCode,
       },
     });
-    await this.audit.record(tx, {
+    await this.audit.recordControl(tx, {
       tenantId: sub.tenantId,
       actor: PAYSTACK_ACTOR,
       action: 'subscription.provider_linked',
@@ -258,7 +287,7 @@ export class PaystackWebhookService {
         where: { id: sub.id },
         data: { status: 'CANCELLED', cancelledAt: new Date() },
       });
-      await this.audit.record(tx, {
+      await this.audit.recordControl(tx, {
         tenantId: sub.tenantId,
         actor: PAYSTACK_ACTOR,
         action: 'subscription.cancelled',
@@ -281,7 +310,7 @@ export class PaystackWebhookService {
         where: { id: sub.id },
         data: { status: 'PAST_DUE', pastDueAt: new Date() },
       });
-      await this.audit.record(tx, {
+      await this.audit.recordControl(tx, {
         tenantId: sub.tenantId,
         actor: PAYSTACK_ACTOR,
         action: 'subscription.past_due',

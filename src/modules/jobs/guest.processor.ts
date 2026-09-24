@@ -25,7 +25,7 @@ export class GuestProcessor extends WorkerHost {
     switch (job.name) {
       case NOTIFY_JOB: {
         const attempts = job.opts.attempts ?? NOTIFY_ATTEMPTS;
-        await this.notifications.deliver(d.id!, { final: job.attemptsMade + 1 >= attempts, fromName: d.fromName ?? null, meta: d.meta ?? {} });
+        await this.notifications.deliver(d.id!, { final: job.attemptsMade + 1 >= attempts, fromName: d.fromName ?? null, meta: d.meta ?? {}, tenantId: d.tenantId ?? null });
         return { delivered: d.id };
       }
       case GUEST_JOBS.holdExpire:

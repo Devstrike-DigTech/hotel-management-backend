@@ -1,7 +1,7 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { randomUUID } from 'node:crypto';
-import { Prisma } from '../../generated/prisma/client.js';
+import { Prisma, type PrismaClient } from '../../generated/prisma/client.js';
 import type { StaffRole } from '../../generated/prisma/enums.js';
 import { AppException, ErrorCode } from '../../common/errors/app-exception.js';
 import { randomSuffix, slugify } from '../../common/utils/slug.js';
@@ -32,7 +32,7 @@ export interface RequestMeta {
   userAgent?: string;
 }
 
-interface FoundUser {
+export interface FoundUser {
   id: string;
   tenant_id: string;
   email: string;
@@ -228,9 +228,7 @@ export class AuthService {
    */
   async refresh(presented: string, meta: RequestMeta): Promise<AuthResponse> {
     const hash = this.tokens.hashRefresh(presented);
-    const rows = await this.db.prisma.$queryRaw<FoundToken[]>`
-      SELECT * FROM app_auth_find_refresh_token(${hash})`;
-    const token = rows[0];
+    const token = await this.findRefreshToken(hash);
     if (!token) {
       throw AppException.unauthorized(
         'Refresh token is invalid',
@@ -309,9 +307,7 @@ export class AuthService {
   /** Revokes the presented token's family. Idempotent; never errors. */
   async logout(presented: string, meta: RequestMeta): Promise<void> {
     const hash = this.tokens.hashRefresh(presented);
-    const rows = await this.db.prisma.$queryRaw<FoundToken[]>`
-      SELECT * FROM app_auth_find_refresh_token(${hash})`;
-    const token = rows[0];
+    const token = await this.findRefreshToken(hash);
     if (!token) return;
     await this.db.tenant(token.tenant_id, async (tx) => {
       const revoked = await this.revokeFamily(tx, token.family_id, 'logout');
@@ -330,10 +326,30 @@ export class AuthService {
 
   // ---------------------------------------------------------------------------
 
-  private async findUserByEmail(email: string): Promise<FoundUser | undefined> {
-    const rows = await this.db.prisma.$queryRaw<FoundUser[]>`
-      SELECT * FROM app_auth_find_user(${email.toLowerCase()})`;
-    return rows[0];
+  /**
+   * M6: staff of a tenant with a dedicated database live there. The shared
+   * database answers first; a match whose tenant has moved is re-read from
+   * its dedicated database (the shared copy may be stale until it is
+   * purged), and an unknown email is looked up in every dedicated database.
+   */
+  async findUserByEmail(email: string): Promise<FoundUser | undefined> {
+    const lookup = async (client: { $queryRaw: PrismaClient['$queryRaw'] }) =>
+      (await client.$queryRaw<FoundUser[]>`SELECT * FROM app_auth_find_user(${email.toLowerCase()})`)[0];
+    const shared = await lookup(this.db.prisma);
+    const route = shared ? this.db.router.dedicated(shared.tenant_id) : null;
+    if (shared && !route) return shared;
+    if (route) return this.db.router.use(route, (c) => lookup(c.app));
+    return this.db.findAcross(lookup);
+  }
+
+  private async findRefreshToken(hash: string): Promise<FoundToken | undefined> {
+    const lookup = async (client: { $queryRaw: PrismaClient['$queryRaw'] }) =>
+      (await client.$queryRaw<FoundToken[]>`SELECT * FROM app_auth_find_refresh_token(${hash})`)[0];
+    const shared = await lookup(this.db.prisma);
+    const route = shared ? this.db.router.dedicated(shared.tenant_id) : null;
+    if (shared && !route) return shared;
+    if (route) return this.db.router.use(route, (c) => lookup(c.app));
+    return this.db.findAcross(lookup);
   }
 
   private async revokeFamily(

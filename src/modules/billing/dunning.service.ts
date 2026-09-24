@@ -1,3 +1,4 @@
+import { ControlMirrorService } from '../dedicated-db/control-mirror.service.js';
 import { Injectable, Logger } from '@nestjs/common';
 import { DbService } from '../../prisma/db.service.js';
 import { AuditService, SYSTEM_ACTOR } from '../audit/audit.service.js';
@@ -17,6 +18,7 @@ export class DunningService {
   constructor(
     private readonly db: DbService,
     private readonly audit: AuditService,
+    private readonly mirror: ControlMirrorService,
   ) {}
 
   async run(now: Date = new Date()): Promise<DunningReport> {
@@ -40,7 +42,7 @@ export class DunningService {
           },
         });
         for (const step of steps) {
-          await this.audit.record(tx, {
+          await this.audit.recordControl(tx, {
             tenantId: sub.tenantId,
             actor: SYSTEM_ACTOR,
             action: 'subscription.dunning',
@@ -53,6 +55,8 @@ export class DunningService {
         report.changed++;
       }
     });
+    // M6: dedicated databases keep a mirror of the subscription.
+    for (const tid of new Set(report.transitions.map((t) => t.tenantId))) await this.mirror.sync(tid);
     this.logger.log(
       `Dunning run: checked ${report.checked}, changed ${report.changed}`,
     );

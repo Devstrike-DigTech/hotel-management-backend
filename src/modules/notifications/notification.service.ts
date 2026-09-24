@@ -96,13 +96,17 @@ export class NotificationService {
     await tx.notificationLog.createMany({ data: rows, skipDuplicates: true });
     const inserted = await tx.notificationLog.findMany({ where: { id: { in: rows.map((r) => r.id) } }, select: { id: true } });
     const ok = new Set<string>(inserted.map((r) => r.id));
-    const meta = new Map<string, { fromName: string | null; meta: Record<string, unknown> }>(rows.map((r, i) => [r.id, { fromName: messages[i].fromName ?? null, meta: messages[i].meta ?? {} }]));
+    // M6: the rows live in the database of the transaction's tenant (a
+    // platform alert queued inside a hotel's transaction too), so delivery
+    // looks them up there.
+    const dbTenant = messages.find((m) => m.tenantId)?.tenantId ?? null;
+    const meta = new Map<string, { fromName: string | null; meta: Record<string, unknown>; tenantId: string | null }>(rows.map((r, i) => [r.id, { fromName: messages[i].fromName ?? null, meta: messages[i].meta ?? {}, tenantId: dbTenant }]));
     for (const id of ok) this.pendingMeta.set(id, meta.get(id)!);
     return rows.filter((r) => ok.has(r.id)).map((r) => r.id);
   }
 
   /** Per-process hints for the first delivery attempt (sender name, outbox meta). */
-  private readonly pendingMeta = new Map<string, { fromName: string | null; meta: Record<string, unknown> }>();
+  private readonly pendingMeta = new Map<string, { fromName: string | null; meta: Record<string, unknown>; tenantId: string | null }>();
 
   /** Hands queued messages to the worker (or delivers inline). Never throws. */
   async dispatch(ids: string[]): Promise<void> {
@@ -111,12 +115,12 @@ export class NotificationService {
       this.pendingMeta.delete(id);
       const queued = await this.jobs.enqueue(
         NOTIFY_JOB,
-        { id, fromName: hint?.fromName ?? null, meta: hint?.meta ?? {} },
+        { id, fromName: hint?.fromName ?? null, meta: hint?.meta ?? {}, tenantId: hint?.tenantId ?? null },
         { jobId: `notify-${id}`, attempts: NOTIFY_ATTEMPTS, backoff: { type: 'exponential', delay: 30_000 } },
       );
       if (!queued) {
         try {
-          await this.deliver(id, { final: true, fromName: hint?.fromName ?? null, meta: hint?.meta ?? {} });
+          await this.deliver(id, { final: true, fromName: hint?.fromName ?? null, meta: hint?.meta ?? {}, tenantId: hint?.tenantId ?? null });
         } catch (e) {
           this.logger.warn(`Notification ${id} failed: ${(e as Error).message}`);
         }
@@ -124,9 +128,16 @@ export class NotificationService {
     }
   }
 
-  /** Convenience: insert in its own platform transaction and dispatch. */
+  /**
+   * Convenience: insert in its own platform transaction and dispatch. M6:
+   * rows go to the database of each message's tenant (shared for platform
+   * messages and tenants without a dedicated database).
+   */
   async send(messages: OutgoingMessage[]): Promise<string[]> {
-    const ids = await this.db.system((tx) => this.queueTx(tx, messages));
+    const byTenant = new Map<string | null, OutgoingMessage[]>();
+    for (const m of messages) byTenant.set(m.tenantId, [...(byTenant.get(m.tenantId) ?? []), m]);
+    const ids: string[] = [];
+    for (const [tenantId, list] of byTenant) ids.push(...(await this.db.systemFor(tenantId, (tx) => this.queueTx(tx, list))));
     await this.dispatch(ids);
     return ids;
   }
@@ -135,8 +146,9 @@ export class NotificationService {
    * One delivery attempt. Throws on failure so BullMQ retries; on the final
    * attempt the row is marked FAILED.
    */
-  async deliver(id: string, opts: { final: boolean; fromName?: string | null; meta?: Record<string, unknown> }): Promise<void> {
-    const log = await this.db.system((tx) => tx.notificationLog.findUnique({ where: { id } }));
+  async deliver(id: string, opts: { final: boolean; fromName?: string | null; meta?: Record<string, unknown>; tenantId?: string | null }): Promise<void> {
+    const tenantId = opts.tenantId ?? null;
+    const log = await this.db.systemFor(tenantId, (tx) => tx.notificationLog.findUnique({ where: { id } }));
     if (!log || log.status === 'SENT' || log.status === 'OUTBOX') return;
     const provider = this.providers[log.channel];
     try {
@@ -151,7 +163,7 @@ export class NotificationService {
         meta: { ...opts.meta, notificationId: id },
         waTemplate: wa,
       });
-      await this.db.system((tx) =>
+      await this.db.systemFor(tenantId, (tx) =>
         tx.notificationLog.update({
           where: { id },
           data: { status: res.outbox ? 'OUTBOX' : 'SENT', provider: provider.name, providerMessageId: res.providerMessageId, attempts: { increment: 1 }, sentAt: new Date(), error: null },
@@ -159,7 +171,7 @@ export class NotificationService {
       );
     } catch (e) {
       const message = (e as Error).message.slice(0, 500);
-      await this.db.system((tx) =>
+      await this.db.systemFor(tenantId, (tx) =>
         tx.notificationLog.update({
           where: { id },
           data: { attempts: { increment: 1 }, error: message, ...(opts.final && { status: 'FAILED' }) },
@@ -186,7 +198,7 @@ export class NotificationService {
   async sendNow(m: OutgoingMessage & { redactedText?: string }): Promise<{ ok: boolean; logId: string; providerMessageId: string | null; outbox: boolean; error: string | null }> {
     const provider = this.providers[m.channel];
     const logId = randomUUID();
-    await this.db.system((tx) =>
+    await this.db.systemFor(m.tenantId, (tx) =>
       tx.notificationLog.create({
         data: {
           id: logId,
@@ -208,7 +220,7 @@ export class NotificationService {
     try {
       const wa = m.channel === 'WHATSAPP' && m.waTemplate && !(await this.inServiceWindow(m.to)) ? m.waTemplate : null;
       const res = await provider.send({ to: m.to, subject: m.subject, text: m.text, html: m.html, template: m.template, meta: { ...m.meta, ...otpMeta(m), notificationId: logId }, waTemplate: wa });
-      await this.db.system((tx) =>
+      await this.db.systemFor(m.tenantId, (tx) =>
         tx.notificationLog.update({
           where: { id: logId },
           data: { status: res.outbox ? 'OUTBOX' : 'SENT', providerMessageId: res.providerMessageId, attempts: 1, sentAt: new Date() },
@@ -218,7 +230,7 @@ export class NotificationService {
     } catch (e) {
       const error = (e as Error).message.slice(0, 500);
       this.logger.error(`${m.template} to ${m.channel} failed: ${error}`);
-      await this.db.system((tx) => tx.notificationLog.update({ where: { id: logId }, data: { status: 'FAILED', attempts: 1, error } }));
+      await this.db.systemFor(m.tenantId, (tx) => tx.notificationLog.update({ where: { id: logId }, data: { status: 'FAILED', attempts: 1, error } }));
       return { ok: false, logId, providerMessageId: null, outbox: false, error };
     }
   }

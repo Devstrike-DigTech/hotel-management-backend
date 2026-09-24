@@ -176,12 +176,9 @@ export class DigestService {
   /** Scheduled entry point (23:00 Lagos). Skips tenants already sent today. */
   async runAll(now = new Date()) {
     const businessDate = lagosDate(now);
-    const tenants = await this.db.system((tx) =>
-      tx.tenant.findMany({
-        where: { subscription: { status: { notIn: ['SUSPENDED', 'READ_ONLY'] } } },
-        select: { id: true, properties: { select: { id: true }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] } },
-      }),
-    );
+    const ids = await this.db.system((tx) => tx.tenant.findMany({ where: { subscription: { status: { notIn: ['SUSPENDED', 'READ_ONLY'] } } }, select: { id: true } }));
+    const props = await this.db.propertiesOf(ids.map((t) => t.id));
+    const tenants = ids.map((t) => ({ id: t.id, properties: props.get(t.id) ?? [] }));
     let sent = 0;
     for (const t of tenants) {
       try {

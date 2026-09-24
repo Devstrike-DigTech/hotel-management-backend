@@ -185,7 +185,8 @@ export class PropertyService {
 
   /** Slugs are global (marketplace URLs, subdomains); other tenants' slugs are visible in the public context. */
   private async assertSlugFree(tx: Tx, slug: string) {
-    const clash = await this.db.public((ptx) => ptx.property.findFirst({ where: { slug }, select: { id: true } }));
+    // M6: slugs are unique across the shared and every dedicated database.
+    const clash = (await this.db.publicAll((ptx) => ptx.property.findFirst({ where: { slug }, select: { id: true } }))).find((x) => x) ?? null;
     const own = await tx.property.findFirst({ where: { slug }, select: { id: true } });
     if (clash || own) throw appError(HttpStatus.CONFLICT, 'SLUG_TAKEN', `The address ${slug} is taken`, { slug });
   }

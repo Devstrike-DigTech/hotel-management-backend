@@ -31,27 +31,55 @@ export class PlatformMarketplaceService {
     private readonly audit: AuditService,
   ) {}
 
+  /** Raw rows of the summary from every database (cached 30 s per range). */
+  private async gather(start: Date, end: Date) {
+    const key = `${start.toISOString()}|${end.toISOString()}`;
+    const hit = this.gatherCache.get(key);
+    if (hit && Date.now() - hit.at < 30_000) return hit.value;
+    const value = await this.gatherFresh(start, end);
+    this.gatherCache.set(key, { at: Date.now(), value });
+    return value;
+  }
+
+  private readonly gatherCache = new Map<string, { at: number; value: Awaited<ReturnType<PlatformMarketplaceService['gatherFresh']>> }>();
+
+  private async gatherFresh(start: Date, end: Date) {
+    const parts = await this.db.systemAll(async (tx, t) => {
+      const res = await tx.reservation.findMany({
+        where: { ...t.tenants, paymentMode: { not: null }, createdAt: { gte: start, lt: end }, AND: [{ OR: [{ cancelReason: null }, { cancelReason: { not: 'PAYMENT_INIT_FAILED' } }] }] },
+        select: { id: true, tenantId: true, source: true, paymentMode: true, status: true, cancelReason: true, quotedTotalKobo: true, createdAt: true },
+      });
+      const entries = await tx.commissionEntry.findMany({ where: t.tenants, select: { tenantId: true, kind: true, accrual: true, amountKobo: true, createdAt: true, settledAt: true } });
+      const pays = await tx.bookingPayment.findMany({
+        where: { ...t.tenants, status: { in: ['SUCCEEDED', 'PARTIALLY_REFUNDED', 'REFUNDED'] }, paidAt: { gte: start, lt: end } },
+        select: { paidAmountKobo: true, amountKobo: true },
+      });
+      const refunds = await tx.bookingRefund.findMany({ where: { ...t.tenants, createdAt: { gte: start, lt: end }, status: { not: 'FAILED' } }, select: { amountKobo: true } });
+      const orphanedOpen = await tx.bookingPayment.count({ where: { ...t.tenants, status: 'ORPHANED', refunds: { none: { status: 'PROCESSED' } } } });
+      const props = await tx.property.findMany({ where: t.tenants, select: { tenantId: true, name: true, slug: true, payoutReady: true }, orderBy: { createdAt: 'asc' } });
+      return { res, entries, pays, refunds, orphanedOpen, props };
+    });
+    const control = await this.db.system((tx) => tx.tenant.findMany({ include: { subscription: { include: { plan: { select: { code: true } } } } } }));
+    const firstProp = new Map<string, { name: string; slug: string; payoutReady: boolean }>();
+    for (const p of parts.flatMap((x) => x.props)) if (!firstProp.has(p.tenantId)) firstProp.set(p.tenantId, p);
+    const value = {
+      res: parts.flatMap((x) => x.res),
+      entries: parts.flatMap((x) => x.entries),
+      pays: parts.flatMap((x) => x.pays),
+      refunds: parts.flatMap((x) => x.refunds),
+      orphanedOpen: parts.reduce((a, x) => a + x.orphanedOpen, 0),
+      tenants: control.map((t) => ({ ...t, properties: firstProp.has(t.id) ? [firstProp.get(t.id)!] : [] })),
+    };
+    return value;
+  }
+
   summary(q: { from?: string; to?: string }) {
     const to = q.to ?? lagosDate();
     const from = q.from ?? addDays(to, -29);
     const start = lagosStartOfDay(from);
     const end = lagosStartOfDay(addDays(to, 1));
-    return this.db.system(async (tx) => {
-      const res = await tx.reservation.findMany({
-        where: { paymentMode: { not: null }, createdAt: { gte: start, lt: end }, AND: [{ OR: [{ cancelReason: null }, { cancelReason: { not: 'PAYMENT_INIT_FAILED' } }] }] },
-        select: { id: true, tenantId: true, source: true, paymentMode: true, status: true, cancelReason: true, quotedTotalKobo: true, createdAt: true },
-      });
-      const entries = await tx.commissionEntry.findMany({ select: { tenantId: true, kind: true, accrual: true, amountKobo: true, createdAt: true, settledAt: true } });
-      const pays = await tx.bookingPayment.findMany({
-        where: { status: { in: ['SUCCEEDED', 'PARTIALLY_REFUNDED', 'REFUNDED'] }, paidAt: { gte: start, lt: end } },
-        select: { paidAmountKobo: true, amountKobo: true },
-      });
-      const refunds = await tx.bookingRefund.findMany({ where: { createdAt: { gte: start, lt: end }, status: { not: 'FAILED' } }, select: { amountKobo: true } });
-      const orphanedOpen = await tx.bookingPayment.count({ where: { status: 'ORPHANED', refunds: { none: { status: 'PROCESSED' } } } });
-      const tenants = await tx.tenant.findMany({
-        include: { properties: { select: { name: true, slug: true, payoutReady: true }, orderBy: { createdAt: 'asc' }, take: 1 }, subscription: { include: { plan: { select: { code: true } } } } },
-      });
-
+    // M6: aggregated over the shared and every dedicated database.
+    return this.gather(start, end).then(({ res, entries, pays, refunds, orphanedOpen, tenants }) => {
       const counted = res.filter((r) => r.status !== 'CANCELLED' && r.status !== 'PENDING');
       const inRange = (d: Date) => d >= start && d < end;
       const collectedNet = (tid?: string) =>
@@ -118,18 +146,20 @@ export class PlatformMarketplaceService {
   /** Small block for GET /platform/metrics. */
   async metricsBlock(now = new Date()) {
     const s = await this.summary({ to: lagosDate(now), from: addDays(lagosDate(now), -29) });
-    const flagged = await this.db.system((tx) => tx.review.count({ where: { status: 'FLAGGED' } }));
+    const flagged = (await this.db.systemAll((tx, t) => tx.review.count({ where: { ...t.tenants, status: 'FLAGGED' } }))).reduce((a, n) => a + n, 0);
     return { gmv30dKobo: s.gmvKobo, commission30dKobo: s.commissionCollectedKobo, receivableKobo: s.commissionReceivableKobo, orphanedOpen: s.orphanedOpen, flaggedReviews: flagged };
   }
 
   receivables(month?: string) {
     const m = month ?? lagosDate().slice(0, 7);
     const { start, end } = monthBounds(m);
-    return this.db.system(async (tx) => {
-      const entries = await tx.commissionEntry.findMany({
-        where: { createdAt: { gte: start, lt: end }, OR: [{ kind: 'ACCRUED' }, { kind: 'REVERSED', accrual: true }] },
+    return this.db.systemAll((tx, t) =>
+      tx.commissionEntry.findMany({
+        where: { ...t.tenants, createdAt: { gte: start, lt: end }, OR: [{ kind: 'ACCRUED' }, { kind: 'REVERSED', accrual: true }] },
         include: { tenant: { include: { properties: { select: { name: true, slug: true }, orderBy: { createdAt: 'asc' }, take: 1 } } } },
-      });
+      }),
+    ).then((parts) => {
+      const entries = parts.flat();
       const byTenant = new Map<string, typeof entries>();
       for (const e of entries) byTenant.set(e.tenantId, [...(byTenant.get(e.tenantId) ?? []), e]);
       const items = [...byTenant.entries()].map(([tenantId, list]) => {
@@ -157,7 +187,7 @@ export class PlatformMarketplaceService {
 
   async settle(actor: PlatformPrincipal, dto: { tenantId: string; month: string; reference?: string }, ip?: string) {
     const { start, end } = monthBounds(dto.month);
-    await this.db.system(async (tx) => {
+    await this.db.systemFor(dto.tenantId, async (tx) => {
       const res = await tx.commissionEntry.updateMany({
         where: { tenantId: dto.tenantId, createdAt: { gte: start, lt: end }, settledAt: null, OR: [{ kind: 'ACCRUED' }, { kind: 'REVERSED', accrual: true }] },
         data: { settledAt: new Date(), settlementRef: dto.reference ?? null },
@@ -209,8 +239,10 @@ export class PlatformMarketplaceService {
 
   orphaned(q: { status?: string; page?: number; pageSize?: number }) {
     const pg = paginate(q.page, q.pageSize);
-    return this.db.system(async (tx) => {
+    // M6: merged across the shared and every dedicated database.
+    return this.db.systemAll(async (tx, t) => {
       const where: Prisma.BookingPaymentWhereInput = {
+        ...t.tenants,
         status: 'ORPHANED',
         ...(q.status !== 'all' && { refunds: { none: { status: 'PROCESSED' } } }),
       };
@@ -218,16 +250,20 @@ export class PlatformMarketplaceService {
         where,
         include: { refunds: true, reservation: { include: { guest: true, property: true } } },
         orderBy: { createdAt: 'desc' },
-        skip: pg.skip,
-        take: pg.take,
+        take: pg.skip + pg.take,
       });
       const total = await tx.bookingPayment.count({ where });
-      return { items: rows.map((p) => this.orphanView(p)), total, page: pg.page, pageSize: pg.pageSize };
+      return { rows: rows.map((p) => ({ at: p.createdAt.getTime(), view: this.orphanView(p) })), total };
+    }).then((parts) => {
+      const all = parts.flatMap((x) => x.rows).sort((a, b) => b.at - a.at);
+      return { items: all.slice(pg.skip, pg.skip + pg.take).map((x) => x.view), total: parts.reduce((a, x) => a + x.total, 0), page: pg.page, pageSize: pg.pageSize };
     });
   }
 
   async retryRefund(actor: PlatformPrincipal, paymentId: string, ip?: string) {
-    const failed = await this.db.system(async (tx) => {
+    const located = await this.db.locate((tx, t) => tx.bookingPayment.findFirst({ where: { ...t.tenants, id: paymentId }, select: { tenantId: true } }));
+    const tid = located?.value.tenantId ?? null;
+    const failed = await this.db.systemFor(tid, async (tx) => {
       const refund = await tx.bookingRefund.findFirst({ where: { paymentId, status: 'FAILED' }, orderBy: { createdAt: 'desc' } });
       if (refund) {
         await this.audit.record(tx, {
@@ -243,18 +279,19 @@ export class PlatformMarketplaceService {
       return refund;
     });
     if (!failed) {
-      const exists = await this.db.system((tx) => tx.bookingPayment.findUnique({ where: { id: paymentId } }));
+      const exists = await this.db.systemFor(tid, (tx) => tx.bookingPayment.findUnique({ where: { id: paymentId } }));
       if (!exists) throw AppException.notFound('Payment');
       throw appError(HttpStatus.CONFLICT, 'INVALID_STATE', 'There is no failed refund to retry for this payment', { status: exists.status, allowed: ['FAILED'] });
     }
     await this.refunds.retry(failed.id);
-    return this.db.system(async (tx) => this.orphanView(await tx.bookingPayment.findUniqueOrThrow({ where: { id: paymentId }, include: { refunds: true, reservation: { include: { guest: true, property: true } } } })));
+    return this.db.systemFor(tid, async (tx) => this.orphanView(await tx.bookingPayment.findUniqueOrThrow({ where: { id: paymentId }, include: { refunds: true, reservation: { include: { guest: true, property: true } } } })));
   }
 
   notifications(q: NotificationQueryDto) {
     const pg = paginate(q.page, q.pageSize);
-    return this.db.system(async (tx) => {
+    return this.db.systemAll(async (tx, t) => {
       const where: Prisma.NotificationLogWhereInput = {
+        ...(t.tenantId ? { tenantId: t.tenantId } : t.excludeTenantIds.length ? { OR: [{ tenantId: null }, { tenantId: { notIn: t.excludeTenantIds } }] } : {}),
         ...(q.template && { template: q.template }),
         ...(q.channel && { channel: q.channel }),
         ...(q.status && { status: q.status }),
@@ -263,11 +300,11 @@ export class PlatformMarketplaceService {
         where,
         include: { reservation: { select: { code: true } }, tenant: { include: { properties: { select: { name: true }, take: 1 } } } },
         orderBy: { createdAt: 'desc' },
-        skip: pg.skip,
-        take: pg.take,
+        take: pg.skip + pg.take,
       });
       const total = await tx.notificationLog.count({ where });
       return {
+        total,
         items: rows.map((l) => ({
           id: l.id,
           template: l.template,
@@ -288,10 +325,10 @@ export class PlatformMarketplaceService {
           tenantId: l.tenantId,
           hotelName: l.tenant?.properties[0]?.name ?? l.tenant?.name ?? null,
         })),
-        total,
-        page: pg.page,
-        pageSize: pg.pageSize,
       };
+    }).then((parts) => {
+      const all = parts.flatMap((x) => x.items).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      return { items: all.slice(pg.skip, pg.skip + pg.take), total: parts.reduce((a, x) => a + x.total, 0), page: pg.page, pageSize: pg.pageSize };
     });
   }
 }

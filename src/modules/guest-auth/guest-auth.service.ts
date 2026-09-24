@@ -154,6 +154,13 @@ export class GuestAuthService {
       await tx.guest.updateMany({ where: { phone: c.phone, guestAccountId: null }, data: { guestAccountId: account.id } });
       return { kind: 'ok' as const, account, isNew: !existing };
     });
+    if (outcome.kind === 'ok') {
+      // M6: guest records of hotels with a dedicated database are linked there.
+      const phone = outcome.account.phone;
+      for (const r of this.db.router.activeDedicated()) {
+        await this.db.systemFor(r.tenantId, (tx) => tx.guest.updateMany({ where: { phone, guestAccountId: null }, data: { guestAccountId: outcome.account.id } })).catch(() => undefined);
+      }
+    }
     switch (outcome.kind) {
       case 'expired':
         throw appError(HttpStatus.GONE, 'OTP_EXPIRED', 'This code has expired. Ask for a new one.');
@@ -312,21 +319,24 @@ export class GuestAuthService {
    * record carries the account's verified phone.
    */
   async trips(g: GuestPrincipal, now = new Date()) {
-    const rows = await this.db.system((tx) =>
-      tx.reservation.findMany({
+    // M6: across the shared and every dedicated database.
+    const parts = await this.db.systemAll(async (tx, t) => {
+      const rows = await tx.reservation.findMany({
         where: {
+          ...t.tenants,
           OR: [{ guestAccountId: g.guestAccountId }, { guest: { guestAccountId: g.guestAccountId } }],
           AND: [{ OR: [{ cancelReason: null }, { cancelReason: { not: 'PAYMENT_INIT_FAILED' } }] }],
         },
         include: stayInclude,
         orderBy: { arrivalAt: 'asc' },
         take: 200,
-      }),
-    );
-    // M5: points earned per stay (loyalty).
-    const earned = rows.length
-      ? await this.db.system((tx) => tx.loyaltyTransaction.findMany({ where: { type: 'EARN', reservationId: { in: rows.map((r) => r.id) } }, select: { reservationId: true, points: true } }))
-      : [];
+      });
+      // M5: points earned per stay (loyalty).
+      const earned = rows.length ? await tx.loyaltyTransaction.findMany({ where: { type: 'EARN', reservationId: { in: rows.map((r) => r.id) } }, select: { reservationId: true, points: true } }) : [];
+      return { rows, earned };
+    });
+    const rows = parts.flatMap((p) => p.rows).sort((a, b) => a.arrivalAt.getTime() - b.arrivalAt.getTime());
+    const earned = parts.flatMap((p) => p.earned);
     const earnedBy = new Map(earned.map((e) => [e.reservationId, e.points]));
     type Trip = ReturnType<BookingViewService['tripSummary']> & { pointsEarned: number | null };
     const upcoming: Trip[] = [];

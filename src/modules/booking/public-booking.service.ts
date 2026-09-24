@@ -112,9 +112,9 @@ export class PublicBookingService {
   // ---------------------------------------------------------------------------
 
   private async hotelRef(slug: string): Promise<{ id: string; tenantId: string }> {
-    const p = await this.db.public((tx) =>
+    const p = await this.db.publicForSlug(slug, (tx, t) =>
       tx.property.findFirst({
-        where: { slug: slug.toLowerCase(), tenant: { subscription: { is: { status: { not: 'SUSPENDED' } } } } },
+        where: { ...t.tenants, slug: slug.toLowerCase(), tenant: { subscription: { is: { status: { not: 'SUSPENDED' } } } } },
         select: { id: true, tenantId: true },
       }),
     );

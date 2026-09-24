@@ -89,9 +89,10 @@ export class GuestJobsService {
 
   /** Hourly catch-up across hotels (platform role enumerates, each send runs in its tenant). */
   async sweep(now = new Date()): Promise<{ preArrival: number; reviewRequests: number }> {
-    const { arriving, departed } = await this.db.system(async (tx) => {
+    const found = await this.db.systemAll(async (tx, t) => {
       const arriving = await tx.reservation.findMany({
         where: {
+          ...t.tenants,
           status: 'CONFIRMED',
           paymentMode: { not: null },
           arrivalAt: { gt: now, lte: new Date(now.getTime() + PRE_ARRIVAL_LEAD_MS) },
@@ -102,6 +103,7 @@ export class GuestJobsService {
       });
       const departed = await tx.reservation.findMany({
         where: {
+          ...t.tenants,
           status: 'CHECKED_OUT',
           checkedOutAt: { gte: new Date(now.getTime() - REVIEW_CATCH_UP_MS), lte: new Date(now.getTime() - REVIEW_DELAY_MS) },
           review: { is: null },
@@ -112,6 +114,8 @@ export class GuestJobsService {
       });
       return { arriving, departed };
     });
+    const arriving = found.flatMap((f) => f.arriving);
+    const departed = found.flatMap((f) => f.departed);
     let preArrival = 0;
     let reviewRequests = 0;
     for (const r of arriving) {

@@ -5,12 +5,13 @@ import {
   Headers,
   HttpCode,
   Post,
+  Query,
   Req,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { AppRequest, AuthUser } from '../../common/auth-types.js';
 import { AllowWhenReadOnly, ClientIp, CurrentUser, GroupWide, Public, RequirePermission } from '../../common/decorators/index.js';
-import { CheckoutDto, ConfirmDto } from './billing.dto.js';
+import { CheckoutDto, ConfirmDto, CouponCheckQueryDto } from './billing.dto.js';
 import { BillingService } from './billing.service.js';
 import { PaystackWebhookService } from './paystack-webhook.service.js';
 
@@ -27,6 +28,12 @@ export class BillingController {
   @Get('subscription')
   subscription(@CurrentUser() user: AuthUser) {
     return this.billing.subscription(user);
+  }
+
+  @Get('coupons/check')
+  @RequirePermission('billing.manage')
+  checkCoupon(@CurrentUser() user: AuthUser, @Query() q: CouponCheckQueryDto) {
+    return this.billing.checkCoupon(user, q);
   }
 
   @Get('invoices')

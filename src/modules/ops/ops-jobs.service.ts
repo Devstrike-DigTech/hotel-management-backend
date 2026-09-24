@@ -48,12 +48,10 @@ export class OpsJobsService {
    * `feature`, inside that property's scope (see common/property-scope.ts).
    */
   async eachProperty(job: string, feature: string | null, fn: (tenantId: string, propertyId: string) => Promise<number>) {
-    const tenants = await this.db.system((tx) =>
-      tx.tenant.findMany({
-        where: { subscription: { status: { not: 'SUSPENDED' } } },
-        select: { id: true, properties: { select: { id: true }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] } },
-      }),
-    );
+    const ids = await this.db.system((tx) => tx.tenant.findMany({ where: { subscription: { status: { not: 'SUSPENDED' } } }, select: { id: true } }));
+    // M6: properties come from the database that serves each tenant.
+    const props = await this.db.propertiesOf(ids.map((t) => t.id));
+    const tenants = ids.map((t) => ({ id: t.id, properties: props.get(t.id) ?? [] }));
     let total = 0;
     let properties = 0;
     for (const t of tenants) {
@@ -129,7 +127,7 @@ export class OpsJobsService {
   }
 
   async purgeIdempotencyKeys(now = new Date()) {
-    const res = await this.db.system((tx) => tx.idempotencyKey.deleteMany({ where: { expiresAt: { lt: now } } }));
-    return { deleted: res.count };
+    const res = await this.db.systemAll((tx) => tx.idempotencyKey.deleteMany({ where: { expiresAt: { lt: now } } }));
+    return { deleted: res.reduce((a, r) => a + r.count, 0) };
   }
 }

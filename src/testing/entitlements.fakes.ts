@@ -48,6 +48,7 @@ export function fakeDb(state: FakeState): DbService {
   return {
     prisma: tx,
     tenant: async <T>(_id: string, fn: (t: Tx) => Promise<T>) => fn(tx),
+    control: async <T>(_id: string, fn: (t: Tx) => Promise<T>) => fn(tx),
   } as unknown as DbService;
 }
 

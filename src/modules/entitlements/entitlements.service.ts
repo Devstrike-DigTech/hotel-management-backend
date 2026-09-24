@@ -82,7 +82,9 @@ export class EntitlementsService {
         writeBlocked: isWriteBlocked(sub.status, sub.currentPeriodEnd),
       };
     };
-    return tx ? run(tx) : this.db.tenant(tenantId, run);
+    // M6: the subscription is control-plane data: read the authoritative
+    // shared rows (a dedicated database only holds a mirror).
+    return tx ? run(tx) : this.db.control(tenantId, run);
   }
 
   async getUsage(tenantId: string, tx?: Tx): Promise<Usage> {

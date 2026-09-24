@@ -95,16 +95,22 @@ export class PublicService {
   }
 
   async cities(): Promise<{ name: string; state: string; hotelCount: number }[]> {
-    const groups = await this.db.public((tx) =>
+    // M6: counted over the shared and every dedicated database.
+    const parts = await this.db.publicAll((tx, t) =>
       tx.property.groupBy({
         by: ['city', 'state'],
-        where: this.marketplaceWhere(),
+        where: { AND: [this.marketplaceWhere(), t.tenants] },
         _count: { _all: true },
       }),
     );
-    return groups
-      .map((g) => ({ name: g.city, state: g.state, hotelCount: g._count._all }))
-      .sort((a, b) => b.hotelCount - a.hotelCount || a.name.localeCompare(b.name));
+    const merged = new Map<string, { name: string; state: string; hotelCount: number }>();
+    for (const g of parts.flat()) {
+      const key = `${g.city}|${g.state}`;
+      const cur = merged.get(key) ?? { name: g.city, state: g.state, hotelCount: 0 };
+      cur.hotelCount += g._count._all;
+      merged.set(key, cur);
+    }
+    return [...merged.values()].sort((a, b) => b.hotelCount - a.hotelCount || a.name.localeCompare(b.name));
   }
 
   async hotels(q: HotelSearchQueryDto): Promise<{
@@ -152,10 +158,10 @@ export class PublicService {
       });
     }
 
-    const where: Prisma.PropertyWhereInput = { AND: and };
-    const { rows, avail } = await this.db.public(async (tx) => {
+    // M6: every database answers for its own hotels (shared and dedicated tenants).
+    const parts = await this.db.publicAll(async (tx, t) => {
       const rows = await tx.property.findMany({
-        where,
+        where: { AND: [...and, t.tenants] },
         include: {
           roomTypes: { include: { rooms: { select: { status: true } } } },
           taxSetting: true,
@@ -164,6 +170,8 @@ export class PublicService {
       const avail = dated ? await this.booking.searchAvailability(tx, rows, q.checkIn!, q.checkOut!, q.guests) : null;
       return { rows, avail };
     });
+    const rows = parts.flatMap((x) => x.rows);
+    const avail = dated ? new Map(parts.flatMap((x) => [...(x.avail ?? new Map()).entries()])) : null;
 
     const inRange = (price: number) =>
       (q.minPriceKobo === undefined || price >= q.minPriceKobo) && (q.maxPriceKobo === undefined || price <= q.maxPriceKobo);
@@ -201,9 +209,10 @@ export class PublicService {
    * booking microsite); suspended tenants are not.
    */
   async hotel(slug: string): Promise<HotelDetail> {
-    const p = await this.db.public((tx) =>
+    const p = await this.db.publicForSlug(slug, (tx, t) =>
       tx.property.findFirst({
         where: {
+          ...t.tenants,
           slug: slug.toLowerCase(),
           tenant: { subscription: { is: { status: { not: 'SUSPENDED' } } } },
         },
@@ -229,7 +238,7 @@ export class PublicService {
     // Rate plans per room type with the cheapest night over the next 60 days.
     const today = lagosDate();
     const dates = dateRange(today, addDays(today, 59));
-    const ctx = await this.db.public((tx) => this.rates.context(tx, p.tenantId, today, addDays(today, 59), ent?.features ?? [], p.id));
+    const ctx = await this.db.publicFor(p.tenantId, (tx) => this.rates.context(tx, p.tenantId, today, addDays(today, 59), ent?.features ?? [], p.id));
     const plans = ctx.plans.filter((pl) => pl.active && (pl.channels.includes('BOOKING_SITE') || pl.channels.includes('MARKETPLACE')));
     const planInfo = new Map(
       p.roomTypes.map((rt) => {
@@ -298,11 +307,8 @@ export class PublicService {
   async groupsFor(tenantIds: string[]): Promise<Map<string, { slug: string; name: string; propertyCount: number }>> {
     const ids = [...new Set(tenantIds)];
     if (!ids.length) return new Map();
-    const rows = await this.db.public(async (tx) => {
-      const counts = await tx.property.groupBy({ by: ['tenantId'], where: { tenantId: { in: ids } }, _count: { _all: true } });
-      const tenants = await tx.tenant.findMany({ where: { id: { in: ids } }, select: { id: true, slug: true, name: true } });
-      return { counts, tenants };
-    });
+    const counted = await this.db.publicAll((tx, t) => tx.property.groupBy({ by: ['tenantId'], where: { AND: [{ tenantId: { in: ids } }, t.tenants] }, _count: { _all: true } }));
+    const rows = { counts: counted.flat(), tenants: await this.db.public((tx) => tx.tenant.findMany({ where: { id: { in: ids } }, select: { id: true, slug: true, name: true } })) };
     const n = new Map(rows.counts.map((c) => [c.tenantId, c._count._all]));
     const out = new Map<string, { slug: string; name: string; propertyCount: number }>();
     for (const t of rows.tenants) {
@@ -331,19 +337,24 @@ export class PublicService {
 
   /** GET /public/groups/:slug: the group's properties (microsite root). */
   async groupPage(slug: string) {
-    const data = await this.db.public(async (tx) => {
-      const tenant = await tx.tenant.findFirst({
+    const tenant = await this.db.public((tx) =>
+      tx.tenant.findFirst({
         where: { slug: slug.toLowerCase(), subscription: { is: { status: { not: 'SUSPENDED' } } } },
         select: { id: true, slug: true, name: true },
-      });
-      if (!tenant) return null;
-      const rows = await tx.property.findMany({
-        where: { tenantId: tenant.id },
-        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-        include: { roomTypes: { include: { rooms: { select: { status: true } } } }, taxSetting: true },
-      });
-      return { tenant, rows };
-    });
+      }),
+    );
+    const data = tenant
+      ? {
+          tenant,
+          rows: await this.db.publicFor(tenant.id, (tx) =>
+            tx.property.findMany({
+              where: { tenantId: tenant.id },
+              orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+              include: { roomTypes: { include: { rooms: { select: { status: true } } } }, taxSetting: true },
+            }),
+          ),
+        }
+      : null;
     if (!data) throw AppException.notFound('Hotel group');
     const first = data.rows[0];
     const count = data.rows.length;
@@ -370,34 +381,31 @@ export class PublicService {
     const appDomain = this.config.get('APP_DOMAIN').toLowerCase();
     const select = { slug: true, customDomain: true, customDomainVerifiedAt: true, tenant: { select: { slug: true } } } as const;
 
-    const found = await this.db.public(async (tx) => {
-      const active = {
-        tenant: { subscription: { is: { status: { not: 'SUSPENDED' as const } } } },
-      };
+    const active = {
+      tenant: { subscription: { is: { status: { not: 'SUSPENDED' as const } } } },
+    };
+    // M6: each lookup runs on the database that serves the tenant.
+    const found = await (async () => {
       if (host.endsWith(`.${appDomain}`)) {
         const sub = host.slice(0, -(appDomain.length + 1));
         if (!sub || sub.includes('.') || RESERVED_SUBDOMAINS.has(sub)) {
           return null;
         }
         // M5: the group's own subdomain (tenant slug) with 2+ properties is the group root.
-        const tenant = await tx.tenant.findFirst({ where: { slug: sub, subscription: { is: { status: { not: 'SUSPENDED' } } } }, select: { id: true, slug: true } });
+        const tenant = await this.db.public((tx) => tx.tenant.findFirst({ where: { slug: sub, subscription: { is: { status: { not: 'SUSPENDED' } } } }, select: { id: true, slug: true } }));
         if (tenant) {
-          const props = await tx.property.findMany({ where: { tenantId: tenant.id }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], select });
+          const props = await this.db.publicFor(tenant.id, (tx) => tx.property.findMany({ where: { tenantId: tenant.id }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], select }));
           if (props.length >= 2) return { kind: 'GROUP' as const, p: props[0], groupSlug: tenant.slug };
         }
-        const p = await tx.property.findFirst({ where: { slug: sub, ...active }, select });
+        const p = await this.db.publicForSlug(sub, (tx, t) => tx.property.findFirst({ where: { ...t.tenants, slug: sub, ...active }, select }));
         return p ? { kind: 'PROPERTY' as const, p, groupSlug: p.tenant.slug } : null;
       }
-      const p = await tx.property.findFirst({
-        where: {
-          customDomain: host,
-          customDomainVerifiedAt: { not: null },
-          ...active,
-        },
-        select,
-      });
+      const tid = await this.db.dedicatedTenantFor({ customDomain: host });
+      const lookup = (tx: Parameters<Parameters<DbService['public']>[0]>[0], tenants: object) =>
+        tx.property.findFirst({ where: { ...tenants, customDomain: host, customDomainVerifiedAt: { not: null }, ...active }, select });
+      const p = tid ? await this.db.publicFor(tid, (tx) => lookup(tx, { tenantId: tid })) : await this.db.public((tx) => lookup(tx, this.db.sharedTarget().tenants));
       return p ? { kind: 'PROPERTY' as const, p, groupSlug: p.tenant.slug } : null;
-    });
+    })();
 
     if (!found) throw AppException.notFound('Hotel for this host');
     return {

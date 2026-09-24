@@ -359,8 +359,9 @@ export class BookingPaymentsService {
   }
 
   /** Runs `applyChargeTx` in its own platform transaction, then the follow-up work. */
-  async applyCharge(input: ChargeInput): Promise<boolean> {
-    const res = await this.db.system((tx) => this.applyChargeTx(tx, input));
+  async applyCharge(input: ChargeInput, tenantId?: string | null): Promise<boolean> {
+    const tid = tenantId ?? (await this.paymentTenant(input.reference));
+    const res = await this.db.systemFor(tid, (tx) => this.applyChargeTx(tx, input));
     if (!res) return false;
     await runAfter(res.after, this.logger);
     return true;
@@ -370,8 +371,15 @@ export class BookingPaymentsService {
   // Guest-facing: verify, retry, dev confirm
   // ---------------------------------------------------------------------------
 
+  /** M6: the tenant (and so the database) of a payment reference; null when unknown. */
+  async paymentTenant(reference: string): Promise<string | null> {
+    const hit = await this.db.locate((tx, t) => tx.bookingPayment.findFirst({ where: { ...t.tenants, reference }, select: { tenantId: true } }));
+    return hit?.value.tenantId ?? null;
+  }
+
   private async findPayment(reference: string) {
-    const pay = await this.db.system((tx) => tx.bookingPayment.findUnique({ where: { reference } }));
+    const tid = await this.paymentTenant(reference);
+    const pay = tid ? await this.db.systemFor(tid, (tx) => tx.bookingPayment.findUnique({ where: { reference } })) : null;
     if (!pay) throw AppException.notFound('Payment');
     return pay;
   }
@@ -381,7 +389,7 @@ export class BookingPaymentsService {
     if ((pay.status === 'INITIALIZED' || pay.status === 'FAILED') && this.paystack.enabled) {
       const recent = pay.lastVerifiedAt && Date.now() - pay.lastVerifiedAt.getTime() < 5_000;
       if (!recent) {
-        await this.db.system((tx) => tx.bookingPayment.update({ where: { id: pay.id }, data: { lastVerifiedAt: new Date() } }));
+        await this.db.systemFor(pay.tenantId, (tx) => tx.bookingPayment.update({ where: { id: pay.id }, data: { lastVerifiedAt: new Date() } }));
         try {
           const v = await this.paystack.verifyTransaction(reference);
           if (v.status === 'success') {
@@ -395,7 +403,7 @@ export class BookingPaymentsService {
               source: 'verify',
             });
           } else if (v.status === 'failed' && pay.status === 'INITIALIZED') {
-            await this.db.system((tx) => tx.bookingPayment.updateMany({ where: { id: pay.id, status: 'INITIALIZED' }, data: { status: 'FAILED' } }));
+            await this.db.systemFor(pay.tenantId, (tx) => tx.bookingPayment.updateMany({ where: { id: pay.id, status: 'INITIALIZED' }, data: { status: 'FAILED' } }));
           }
         } catch (e) {
           this.logger.warn(`Verify ${reference}: ${(e as Error).message}`);
@@ -406,7 +414,8 @@ export class BookingPaymentsService {
   }
 
   async statusView(reference: string) {
-    return this.db.system(async (tx) => {
+    const tid = await this.paymentTenant(reference);
+    return this.db.systemFor(tid, async (tx) => {
       const pay = await tx.bookingPayment.findUnique({ where: { reference }, include: { refunds: { orderBy: { createdAt: 'desc' } } } });
       if (!pay) throw AppException.notFound('Payment');
       const r = await this.views.load(tx, pay.tenantId, pay.reservationId);
@@ -496,7 +505,7 @@ export class BookingPaymentsService {
     if (this.config.isProduction || this.paystack.enabled) throw AppException.notFound('Route');
     const pay = await this.findPayment(reference);
     if (dto.outcome === 'failed') {
-      await this.db.system((tx) => tx.bookingPayment.updateMany({ where: { id: pay.id, status: 'INITIALIZED' }, data: { status: 'FAILED' } }));
+      await this.db.systemFor(pay.tenantId, (tx) => tx.bookingPayment.updateMany({ where: { id: pay.id, status: 'INITIALIZED' }, data: { status: 'FAILED' } }));
     } else {
       await this.applyCharge({
         reference,

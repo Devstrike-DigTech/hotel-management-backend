@@ -134,14 +134,16 @@ export class WhatsAppInboundService {
 
   /** Staff (active, `guard.resolve`) whose phone matches, in hotels with owner alerts. */
   private async staffFor(fromDigits: string) {
-    const rows = await this.db.system((tx) =>
+    // M6: staff of every database (shared and dedicated tenants).
+    const rows = (await this.db.systemAll((tx, t) =>
       tx.$queryRaw<{ id: string; tenant_id: string; full_name: string }[]>`
         SELECT u.id, u.tenant_id, u.full_name FROM users u
-         WHERE u.is_active AND regexp_replace(u.phone, '[^0-9]', '', 'g') IN (${fromDigits}, ${fromDigits.replace(/^234/, '0')})`,
-    );
+         WHERE u.is_active AND regexp_replace(u.phone, '[^0-9]', '', 'g') IN (${fromDigits}, ${fromDigits.replace(/^234/, '0')})
+           AND u.tenant_id <> ALL(${t.excludeTenantIds}::uuid[])`,
+    )).flat();
     const out: { id: string; tenantId: string; fullName: string }[] = [];
     for (const r of rows) {
-      const u = await this.db.system((tx) => tx.user.findUnique({ where: { id: r.id }, select: { role: true, customRole: { select: { permissions: true } } } }));
+      const u = await this.db.systemFor(r.tenant_id, (tx) => tx.user.findUnique({ where: { id: r.id }, select: { role: true, customRole: { select: { permissions: true } } } }));
       if (!u || !permissionsFor(u.role, u.customRole?.permissions).has('guard.resolve')) continue;
       const ent = await this.entitlements.getEntitlements(r.tenant_id).catch(() => null);
       if (!ent?.features.includes('owner_whatsapp_alerts')) continue;
@@ -172,9 +174,9 @@ export class WhatsAppInboundService {
       return false;
     }
     // A staff member of several hotels acts on the hotel of their latest alert.
-    const latest = await this.db.system((tx) =>
-      tx.guardAlert.findFirst({ where: { recipientUserIds: { hasSome: staff.map((s) => s.id) }, sentAt: { not: null } }, orderBy: { sentAt: 'desc' }, select: { tenantId: true } }),
-    );
+    const latest = (await this.db.systemAll((tx, t) =>
+      tx.guardAlert.findFirst({ where: { ...t.tenants, recipientUserIds: { hasSome: staff.map((s) => s.id) }, sentAt: { not: null } }, orderBy: { sentAt: 'desc' }, select: { tenantId: true, sentAt: true } }),
+    )).filter((x) => x !== null).sort((a, b) => (b.sentAt?.getTime() ?? 0) - (a.sentAt?.getTime() ?? 0))[0];
     const who = staff.find((s) => s.tenantId === latest?.tenantId) ?? staff[0];
     const command = parseCommand(m.text);
     let reply: string;

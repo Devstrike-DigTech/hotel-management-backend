@@ -71,13 +71,14 @@ export class HoldsService {
   }
 
   async sweep(now = new Date()): Promise<{ expired: number }> {
-    const due = await this.db.system((tx) =>
+    // M6: every database (shared and dedicated tenants).
+    const due = (await this.db.systemAll((tx, t) =>
       tx.reservation.findMany({
-        where: { status: 'PENDING', paymentMode: 'ONLINE', holdExpiresAt: { lte: now } },
+        where: { ...t.tenants, status: 'PENDING', paymentMode: 'ONLINE', holdExpiresAt: { lte: now } },
         select: { id: true, tenantId: true },
         take: 500,
       }),
-    );
+    )).flat();
     let expired = 0;
     for (const r of due) {
       try {

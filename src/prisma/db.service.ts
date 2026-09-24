@@ -48,6 +48,14 @@ export interface DbTarget {
   target: string;
   /** Tenant of a dedicated database; null for the shared one. */
   tenantId: string | null;
+  /**
+   * Prisma `where` fragment selecting the tenants this database is
+   * authoritative for: on the shared database it leaves out tenants served
+   * by a dedicated database (their stale shared copy is kept a few days).
+   */
+  tenants: { tenantId?: string | { notIn: string[] } };
+  /** The same for raw SQL: tenant ids to leave out (shared) or the only one (dedicated). */
+  excludeTenantIds: string[];
 }
 
 type TxClient = { $transaction: PrismaService['$transaction'] };
@@ -99,11 +107,11 @@ export class DbService {
     }
     const id = tenantId.toLowerCase();
     const route = this.router.dedicated(id);
-    if (!route) return this.runTenant(id, this.scoped, false, fn);
-    return this.router.use(route, (c) => this.runTenant(id, c.appScoped, true, fn));
+    if (!route) return this.runTenant(id, this.scoped, fn);
+    return this.router.use(route, (c) => this.runTenant(id, c.appScoped, fn));
   }
 
-  private runTenant<T>(id: string, client: TxClient, dedicated: boolean, fn: (tx: Tx) => Promise<T>): Promise<T> {
+  private runTenant<T>(id: string, client: TxClient, fn: (tx: Tx) => Promise<T>): Promise<T> {
     const sig = signContext(this.secret, `tenant:${id}`);
     const idem = idempotencyContext.getStore();
     const dry = dryRunContext.getStore();
@@ -118,7 +126,7 @@ export class DbService {
         throw tenantMigrating(1);
       }
       const result = await fn(tx);
-      const readOnly = gate?.gate === 'read_only' || (!dedicated && this.router.readOnly(id));
+      const readOnly = gate?.gate === 'read_only' || this.router.readOnly(id);
       if (readOnly || (dry && dry.tenantId.toLowerCase() === id)) {
         const [w] = await tx.$queryRaw<{ wrote: boolean }[]>`SELECT txid_current_if_assigned() IS NOT NULL AS wrote`;
         if (w?.wrote) {
@@ -178,11 +186,36 @@ export class DbService {
 
   /** Public context on the shared database and on every dedicated database. */
   async publicAll<T>(fn: (tx: Tx, target: DbTarget) => Promise<T>): Promise<T[]> {
-    const shared = this.public((tx) => fn(tx, { target: 'shared', tenantId: null }));
+    const shared = this.public((tx) => fn(tx, this.sharedTarget()));
     const others = this.router.activeDedicated().map((r) =>
-      this.router.use(r, (c) => this.runPublic(c.app, (tx) => fn(tx, { target: r.dbName, tenantId: r.tenantId }))),
+      this.router.use(r, (c) => this.runPublic(c.app, (tx) => fn(tx, dedicatedTarget(r)))),
     );
     return Promise.all([shared, ...others]);
+  }
+
+  /** The shared database as a fan-out target (without tenants that moved out). */
+  sharedTarget(): DbTarget {
+    const ids = this.router.activeDedicated().map((r) => r.tenantId);
+    return { target: 'shared', tenantId: null, tenants: ids.length ? { tenantId: { notIn: ids } } : {}, excludeTenantIds: ids };
+  }
+
+  /**
+   * Public context on the database that serves a property slug: the listing
+   * projection names the tenant when it has a dedicated database; otherwise
+   * the shared one (with moved tenants left out through `target.tenants`).
+   */
+  async publicForSlug<T>(slug: string, fn: (tx: Tx, target: DbTarget) => Promise<T>): Promise<T> {
+    const tid = await this.dedicatedTenantFor({ slug: slug.toLowerCase() });
+    const r = tid ? this.router.dedicated(tid) : null;
+    if (r) return this.router.use(r, (c) => this.runPublic(c.app, (tx) => fn(tx, dedicatedTarget(r))));
+    return this.public((tx) => fn(tx, this.sharedTarget()));
+  }
+
+  /** The dedicated-database tenant of a listed slug or verified custom domain (null = shared). */
+  async dedicatedTenantFor(where: { slug: string } | { customDomain: string }): Promise<string | null> {
+    if (!this.router.activeDedicated().length) return null;
+    const l = await this.system((tx) => tx.publicListing.findFirst({ where, select: { tenantId: true } }));
+    return l && this.router.isDedicated(l.tenantId) ? l.tenantId : null;
   }
 
   private runPublic<T>(client: TxClient | PrismaClient, fn: (tx: Tx) => Promise<T>): Promise<T> {
@@ -209,16 +242,47 @@ export class DbService {
    * (sweeps over tenant data), one after the other.
    */
   async systemAll<T>(fn: (tx: Tx, target: DbTarget) => Promise<T>): Promise<T[]> {
-    const shared = await this.system((tx) => fn(tx, { target: 'shared', tenantId: null }));
+    const shared = await this.system((tx) => fn(tx, this.sharedTarget()));
     const out: T[] = [shared];
     for (const r of this.router.activeDedicated()) {
-      out.push(await this.onDedicated(r, (tx) => fn(tx, { target: r.dbName, tenantId: r.tenantId })));
+      out.push(await this.onDedicated(r, (tx) => fn(tx, dedicatedTarget(r))));
     }
     return out;
   }
 
   private onDedicated<T>(r: DedicatedRoute, fn: (tx: Tx) => Promise<T>): Promise<T> {
     return this.router.use(r, (c) => activePropertyFilter.run(null, () => c.platform.$transaction((tx) => fn(tx), TX_OPTIONS)));
+  }
+
+  /**
+   * Properties (oldest first) of the given tenants, read from the database
+   * that serves each tenant (jobs that loop per property).
+   */
+  async propertiesOf(tenantIds: string[]): Promise<Map<string, { id: string }[]>> {
+    const out = new Map<string, { id: string }[]>(tenantIds.map((id) => [id, []]));
+    if (!tenantIds.length) return out;
+    const rows = (await this.systemAll((tx, t) =>
+      tx.property.findMany({ where: { AND: [t.tenants, { tenantId: { in: tenantIds } }] }, select: { id: true, tenantId: true }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] }),
+    )).flat();
+    for (const r of rows) out.get(r.tenantId)?.push({ id: r.id });
+    return out;
+  }
+
+  /**
+   * The first database (shared, then each dedicated one) where `fn` finds
+   * something, with the tenant it belongs to: resolving a payment reference,
+   * a refund or a Channex property before the tenant is known.
+   */
+  async locate<T>(fn: (tx: Tx, target: DbTarget) => Promise<T | null | undefined>): Promise<{ value: T; target: DbTarget } | null> {
+    const shared = this.sharedTarget();
+    const hit = await this.system((tx) => fn(tx, shared));
+    if (hit !== null && hit !== undefined) return { value: hit, target: shared };
+    for (const r of this.router.activeDedicated()) {
+      const t = dedicatedTarget(r);
+      const v = await this.onDedicated(r, (tx) => fn(tx, t)).catch(() => null);
+      if (v !== null && v !== undefined) return { value: v, target: t };
+    }
+    return null;
   }
 
   /**
@@ -236,4 +300,8 @@ export class DbService {
     }
     return undefined;
   }
+}
+
+function dedicatedTarget(r: DedicatedRoute): DbTarget {
+  return { target: r.dbName, tenantId: r.tenantId, tenants: { tenantId: r.tenantId }, excludeTenantIds: [] };
 }

@@ -155,6 +155,8 @@ export class StaffService {
     if ((dto.roleId ?? dto.role) === 'OWNER' && user.role !== 'OWNER') {
       throw AppException.forbidden('Only an owner can add another owner');
     }
+    // M6: emails are unique across the shared and every dedicated database.
+    if (await this.auth.findUserByEmail(dto.email)) throw emailTaken();
     const passwordHash = await this.auth.hashPassword(dto.password);
     try {
       return await this.db.tenant(user.tenantId, async (tx) => {

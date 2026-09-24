@@ -873,7 +873,7 @@ export class DynamicPricingService {
   }
 
   private async activeSettings(modes: PricingMode[]) {
-    return this.db.system((tx) => tx.pricingSetting.findMany({ where: { mode: { in: modes } }, select: { tenantId: true, propertyId: true, mode: true, paceSpikeEnabled: true, paceSpikeRooms: true, lastSpikeRunAt: true } }));
+    return (await this.db.systemAll((tx, t) => tx.pricingSetting.findMany({ where: { ...t.tenants, mode: { in: modes } }, select: { tenantId: true, propertyId: true, mode: true, paceSpikeEnabled: true, paceSpikeRooms: true, lastSpikeRunAt: true } }))).flat();
   }
 
   /** 03:00 Lagos: re-prices every property whose engine is on. */

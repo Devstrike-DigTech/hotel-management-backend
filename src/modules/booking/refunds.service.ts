@@ -19,14 +19,21 @@ export class RefundsService {
     private readonly paystack: PaystackClient,
   ) {}
 
-  async process(refundId: string): Promise<void> {
-    const x = await this.db.system((tx) => tx.bookingRefund.findUnique({ where: { id: refundId }, include: { payment: true } }));
+  /** M6: the tenant (and so the database) a refund belongs to. */
+  async refundTenant(refundId: string): Promise<string | null> {
+    const hit = await this.db.locate((tx, t) => tx.bookingRefund.findFirst({ where: { ...t.tenants, id: refundId }, select: { tenantId: true } }));
+    return hit?.value.tenantId ?? null;
+  }
+
+  async process(refundId: string, tenantId?: string | null): Promise<void> {
+    const tid = tenantId ?? (await this.refundTenant(refundId));
+    const x = await this.db.systemFor(tid, (tx) => tx.bookingRefund.findUnique({ where: { id: refundId }, include: { payment: true } }));
     if (!x || x.status === 'PROCESSED') return;
     if (x.status === 'PENDING' && x.providerRefundId) return; // already accepted by Paystack; waiting for refund.processed
     try {
       const res = await this.paystack.refund(x.payment.reference, k(x.amountKobo), `Refund for ${x.reason.toLowerCase().replace(/_/g, ' ')}`);
       const status = res.status === 'processed' ? 'PROCESSED' : res.status === 'failed' ? 'FAILED' : 'PENDING';
-      await this.db.system(async (tx) => {
+      await this.db.systemFor(x.tenantId, async (tx) => {
         await tx.bookingRefund.update({
           where: { id: refundId },
           data: {
@@ -42,14 +49,15 @@ export class RefundsService {
     } catch (e) {
       const message = (e as Error).message.slice(0, 300);
       this.logger.error(`Refund ${refundId} failed: ${message}`);
-      await this.db.system((tx) => tx.bookingRefund.update({ where: { id: refundId }, data: { status: 'FAILED', attempts: { increment: 1 }, error: message } }));
+      await this.db.systemFor(x.tenantId, (tx) => tx.bookingRefund.update({ where: { id: refundId }, data: { status: 'FAILED', attempts: { increment: 1 }, error: message } }));
     }
   }
 
   /** Re-sends a FAILED refund (platform console). */
   async retry(refundId: string): Promise<void> {
-    await this.db.system((tx) => tx.bookingRefund.update({ where: { id: refundId }, data: { status: 'PENDING', providerRefundId: null, error: null } }));
-    await this.process(refundId);
+    const tid = await this.refundTenant(refundId);
+    await this.db.systemFor(tid, (tx) => tx.bookingRefund.update({ where: { id: refundId }, data: { status: 'PENDING', providerRefundId: null, error: null } }));
+    await this.process(refundId, tid);
   }
 
   /** SUCCEEDED -> PARTIALLY_REFUNDED / REFUNDED from the processed refunds. Orphaned payments keep their status. */

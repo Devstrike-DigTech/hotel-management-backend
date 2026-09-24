@@ -149,6 +149,20 @@ export class AuditService {
     }
   }
 
+  /**
+   * M6: records a tenant audit entry from a control-plane transaction (shared
+   * database). For a tenant with a dedicated database the entry goes to that
+   * database right away (its own transaction), so the hotel's trail stays
+   * complete; otherwise it joins the caller's transaction.
+   */
+  async recordControl(tx: Tx, entry: AuditEntry): Promise<void> {
+    if (entry.tenantId && this.db.router.isDedicated(entry.tenantId)) {
+      await this.db.systemFor(entry.tenantId, (t) => this.record(t, entry));
+      return;
+    }
+    await this.record(tx, entry);
+  }
+
   private where(tenantId: string, f: AuditFilter): Prisma.AuditLogWhereInput {
     return {
       tenantId,

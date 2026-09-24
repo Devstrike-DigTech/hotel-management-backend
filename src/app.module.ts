@@ -40,6 +40,7 @@ import { LoyaltyModule } from './modules/loyalty/loyalty.module.js';
 import { DomainsModule } from './modules/domains/domains.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { PlatformSecurityModule } from './modules/platform/security/platform-security.module.js';
+import { DedicatedDbModule } from './modules/dedicated-db/dedicated-db.module.js';
 import { PlatformPermissionGuard } from './modules/platform/security/platform-permission.guard.js';
 import { PlatformAuditInterceptor } from './modules/platform/security/platform-audit.interceptor.js';
 
@@ -61,6 +62,7 @@ function jobsEnabled(): boolean {
       ],
     }),
     PlatformSecurityModule,
+    DedicatedDbModule,
     AuditModule,
     EntitlementsModule,
     HealthModule,

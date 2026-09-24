@@ -90,9 +90,9 @@ export class ReviewsService {
   async publicList(slug: string, q: PublicReviewsQueryDto) {
     const page = q.page ?? 1;
     const pageSize = q.pageSize ?? 10;
-    return this.db.public(async (tx) => {
+    return this.db.publicForSlug(slug, async (tx, t) => {
       const p = await tx.property.findFirst({
-        where: { slug: slug.toLowerCase(), tenant: { subscription: { is: { status: { not: 'SUSPENDED' } } } } },
+        where: { ...t.tenants, slug: slug.toLowerCase(), tenant: { subscription: { is: { status: { not: 'SUSPENDED' } } } } },
       });
       if (!p) throw AppException.notFound('Hotel');
       const where: Prisma.ReviewWhereInput = {
@@ -309,8 +309,10 @@ export class ReviewsService {
 
   platformList(q: PlatformReviewsQueryDto) {
     const pg = paginate(q.page, q.pageSize);
-    return this.db.system(async (tx) => {
+    // M6: merged across the shared and every dedicated database.
+    return this.db.systemAll(async (tx, t) => {
       const where: Prisma.ReviewWhereInput = {
+        ...t.tenants,
         ...(q.status && { status: q.status }),
         ...(q.q && {
           OR: [
@@ -323,28 +325,36 @@ export class ReviewsService {
       // Default queue: flagged first (a CASE ordering is not expressible in Prisma, so two reads).
       const include = { ...withStay, property: { select: { name: true, slug: true } } };
       let rows;
+      let flagged: Awaited<ReturnType<typeof tx.review.findMany<{ include: typeof include }>>> = [];
+      let rest: typeof flagged;
       if (q.status) {
-        rows = await tx.review.findMany({ where, include, orderBy: { createdAt: 'desc' }, skip: pg.skip, take: pg.take });
+        rest = await tx.review.findMany({ where, include, orderBy: { createdAt: 'desc' }, take: pg.skip + pg.take });
       } else {
-        const flagged = await tx.review.findMany({ where: { ...where, status: 'FLAGGED' }, include, orderBy: { flaggedAt: 'desc' } });
-        const rest = await tx.review.findMany({ where: { ...where, status: { not: 'FLAGGED' } }, include, orderBy: { createdAt: 'desc' }, take: pg.skip + pg.take });
-        rows = [...flagged, ...rest].slice(pg.skip, pg.skip + pg.take);
+        flagged = await tx.review.findMany({ where: { ...where, status: 'FLAGGED' }, include, orderBy: { flaggedAt: 'desc' } });
+        rest = await tx.review.findMany({ where: { ...where, status: { not: 'FLAGGED' } }, include, orderBy: { createdAt: 'desc' }, take: pg.skip + pg.take });
       }
       const total = await tx.review.count({ where });
+      const view = (r: (typeof flagged)[number]) => ({ ...hotelReview(r), tenantId: r.tenantId, hotelName: r.property.name, slug: r.property.slug });
+      return { flagged: flagged.map((r) => ({ at: (r.flaggedAt ?? r.createdAt).getTime(), v: view(r) })), rest: rest.map((r) => ({ at: r.createdAt.getTime(), v: view(r) })), total };
+    }).then((parts) => {
+      // Default queue: flagged first (newest flag first), then the rest by date.
+      const flagged = parts.flatMap((x) => x.flagged).sort((a, b) => b.at - a.at);
+      const rest = parts.flatMap((x) => x.rest).sort((a, b) => b.at - a.at);
       return {
-        items: rows.map((r) => ({ ...hotelReview(r), tenantId: r.tenantId, hotelName: r.property.name, slug: r.property.slug })),
-        total,
+        items: [...flagged, ...rest].slice(pg.skip, pg.skip + pg.take).map((x) => x.v),
+        total: parts.reduce((a, x) => a + x.total, 0),
         page: pg.page,
         pageSize: pg.pageSize,
       };
     });
   }
 
-  moderate(actor: PlatformPrincipal, id: string, dto: ModerateReviewDto, ip?: string) {
+  async moderate(actor: PlatformPrincipal, id: string, dto: ModerateReviewDto, ip?: string) {
     if (dto.status === 'HIDDEN' && !dto.reason) {
       throw appError(HttpStatus.BAD_REQUEST, 'VALIDATION_ERROR', 'Give a reason to hide a review', { fields: { reason: ['required when hiding'] } });
     }
-    return this.db.system(async (tx) => {
+    const located = await this.db.locate((tx, t) => tx.review.findFirst({ where: { ...t.tenants, id }, select: { tenantId: true } }));
+    return this.db.systemFor(located?.value.tenantId ?? null, async (tx) => {
       const r = await tx.review.findUnique({ where: { id } });
       if (!r) throw AppException.notFound('Review');
       const now = new Date();

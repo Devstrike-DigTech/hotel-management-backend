@@ -672,9 +672,9 @@ export class ChannelsService {
 
   /** Job: pushes connections whose changes have been quiet for `debounceMs`. */
   async flushDirty(debounceMs = 30_000, now = new Date()) {
-    const due = await this.db.system((tx) =>
-      tx.channelConnection.findMany({ where: { provider: 'CHANNEX', status: { in: ['ACTIVE', 'ERROR'] }, ariDirtySince: { lte: new Date(now.getTime() - debounceMs) } }, select: { id: true, tenantId: true } }),
-    );
+    const due = (await this.db.systemAll((tx, t) =>
+      tx.channelConnection.findMany({ where: { ...t.tenants, provider: 'CHANNEX', status: { in: ['ACTIVE', 'ERROR'] }, ariDirtySince: { lte: new Date(now.getTime() - debounceMs) } }, select: { id: true, tenantId: true } }),
+    )).flat();
     let pushed = 0;
     for (const c of due) {
       try {
@@ -689,7 +689,7 @@ export class ChannelsService {
 
   /** Job: safety sweep every 15 minutes (pushes only what changed over the horizon). */
   async sweepAll() {
-    const all = await this.db.system((tx) => tx.channelConnection.findMany({ where: { provider: 'CHANNEX', status: { in: ['ACTIVE', 'ERROR'] } }, select: { id: true, tenantId: true, settings: true, channel: true } }));
+    const all = (await this.db.systemAll((tx, t) => tx.channelConnection.findMany({ where: { ...t.tenants, provider: 'CHANNEX', status: { in: ['ACTIVE', 'ERROR'] } }, select: { id: true, tenantId: true, settings: true, channel: true } }))).flat();
     let pushed = 0;
     for (const c of all) {
       try {

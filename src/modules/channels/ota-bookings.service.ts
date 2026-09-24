@@ -82,7 +82,7 @@ export class OtaBookingsService {
     const revisionId = body.payload?.revision_id;
     const propertyId = body.property_id;
     if (!revisionId || !propertyId) throw Err.validation('payload', 'property_id and payload.revision_id are required');
-    const conn = await this.db.system((tx) => tx.channelConnection.findFirst({ where: { provider: 'CHANNEX', externalPropertyId: propertyId } }));
+    const conn = (await this.db.locate((tx, t) => tx.channelConnection.findFirst({ where: { ...t.tenants, provider: 'CHANNEX', externalPropertyId: propertyId } })))?.value;
     if (!conn) return { received: true, ignored: true };
     return runInProperty(conn.tenantId, conn.propertyId, async () => {
       const dup = await this.db.tenant(conn.tenantId, (tx) => tx.channelBooking.findFirst({ where: { connectionId: conn.id, revisionId } }));
@@ -483,9 +483,9 @@ export class OtaBookingsService {
   /** Job (every 5 minutes): imports connections not synced for ICAL_POLL_MINUTES. */
   async importAll(now = new Date()) {
     const due = new Date(now.getTime() - this.config.get('ICAL_POLL_MINUTES') * 60_000 + 30_000);
-    const conns = await this.db.system((tx) =>
-      tx.channelConnection.findMany({ where: { provider: 'ICAL', status: { not: 'PAUSED' }, OR: [{ lastSyncAt: null }, { lastSyncAt: { lte: due } }] }, select: { id: true, tenantId: true } }),
-    );
+    const conns = (await this.db.systemAll((tx, t) =>
+      tx.channelConnection.findMany({ where: { ...t.tenants, provider: 'ICAL', status: { not: 'PAUSED' }, OR: [{ lastSyncAt: null }, { lastSyncAt: { lte: due } }] }, select: { id: true, tenantId: true } }),
+    )).flat();
     let created = 0;
     for (const c of conns) {
       try {

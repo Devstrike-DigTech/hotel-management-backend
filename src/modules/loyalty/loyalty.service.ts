@@ -645,9 +645,9 @@ export class LoyaltyService implements OnModuleInit {
 
   /** 04:00: expires lots past their date. */
   async runExpiry(tenantId?: string, now = new Date()) {
-    const due = await this.db.system((tx) =>
-      tx.loyaltyTransaction.findMany({ where: { remaining: { gt: 0 }, expiresAt: { lte: now }, ...(tenantId && { tenantId }) }, select: { id: true, tenantId: true }, orderBy: { expiresAt: 'asc' } }),
-    );
+    const due = (await this.db.systemAll((tx, t) =>
+      tx.loyaltyTransaction.findMany({ where: { ...t.tenants, remaining: { gt: 0 }, expiresAt: { lte: now }, ...(tenantId && { tenantId }) }, select: { id: true, tenantId: true }, orderBy: { expiresAt: 'asc' } }),
+    )).flat();
     let expiredLots = 0;
     let points = 0;
     const byTenant = new Map<string, string[]>();
@@ -682,7 +682,7 @@ export class LoyaltyService implements OnModuleInit {
 
   /** Nightly: nights in the last 12 months move members up and down the tiers. */
   async retierAllTenants() {
-    const programmes = await this.db.system((tx) => tx.loyaltyProgramme.findMany({ where: { enabled: true }, select: { tenantId: true } }));
+    const programmes = (await this.db.systemAll((tx, t) => tx.loyaltyProgramme.findMany({ where: { ...t.tenants, enabled: true }, select: { tenantId: true } }))).flat();
     let changed = 0;
     for (const { tenantId } of programmes) {
       try {
@@ -728,7 +728,7 @@ export class LoyaltyService implements OnModuleInit {
   }
 
   private async hotelBySlug(slug: string) {
-    const p = await this.db.system((tx) => tx.property.findFirst({ where: { slug: slug.toLowerCase() }, select: { id: true, tenantId: true, name: true, slug: true } }));
+    const p = (await this.db.locate((tx, t) => tx.property.findFirst({ where: { ...t.tenants, slug: slug.toLowerCase() }, select: { id: true, tenantId: true, name: true, slug: true } })))?.value;
     if (!p) throw AppException.notFound('Hotel');
     return p;
   }
@@ -774,11 +774,12 @@ export class LoyaltyService implements OnModuleInit {
   }
 
   async guestLoyalty(g: GuestPrincipal) {
-    const tenants = await this.db.system((tx) =>
+    const tenants = (await this.db.systemAll((tx, t) =>
       tx.$queryRaw<{ tenant_id: string }[]>`
         SELECT DISTINCT m.tenant_id::text FROM loyalty_members m JOIN guests g ON g.id = m.guest_id
-         WHERE g.anonymised_at IS NULL AND (g.guest_account_id = ${g.guestAccountId}::uuid OR g.phone = ${g.phone})`,
-    );
+         WHERE g.anonymised_at IS NULL AND (g.guest_account_id = ${g.guestAccountId}::uuid OR g.phone = ${g.phone})
+           AND m.tenant_id <> ALL(${t.excludeTenantIds}::uuid[])`,
+    )).flat();
     const memberships = [];
     for (const { tenant_id } of tenants) {
       const one = await this.db.tenant(tenant_id, async (tx) => {
