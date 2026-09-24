@@ -613,8 +613,8 @@ export async function seedM7(prisma: PrismaClient): Promise<Record<string, numbe
   const bodija = await prop('bodija-heights');
   if (bodija) {
     const { features, formLimit } = await featuresOf(prisma, bodija.tenantId);
-    const d = draftFor('essentials', { primary: '#7C3AED', logoUrl: bodija.logoUrl }, { colourMode: 'LIGHT' });
-    await seedTheme(prisma, bodija.tenantId, bodija.id, [{ note: 'Essentials template', draft: d, daysAgo: 10 }], d, 'Owner');
+    const d = draftFor('essentials', { primary: '#8A4B1F', logoUrl: bodija.logoUrl }, { colourMode: 'LIGHT' });
+    await seedTheme(prisma, bodija.tenantId, bodija.id, [{ note: 'Essentials template in kola brown', draft: d, daysAgo: 10 }], d, 'Owner');
     counts.themes++;
     const base = buildPreset('default', features, formLimit).fields;
     const occasion = buildPreset('boutique', ['form_fields_unlimited'], -1).fields.find((f) => f.key === 'c_occasion')!;

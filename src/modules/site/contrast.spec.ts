@@ -34,7 +34,7 @@ describe('applyColours', () => {
   });
 
   it('always yields readable text on buttons in both modes', () => {
-    for (const hex of ['#B4452A', '#FFE066', '#0E7490', '#7C3AED', '#2F5A43', '#F4A259', '#000000', '#FFFFFF', '#808080']) {
+    for (const hex of ['#B4452A', '#FFE066', '#0E7490', '#8A4B1F', '#2F5A43', '#F4A259', '#000000', '#FFFFFF', '#808080']) {
       const a = applyColours(hex, null);
       for (const mode of ['light', 'dark'] as const) {
         const set = a[mode];
