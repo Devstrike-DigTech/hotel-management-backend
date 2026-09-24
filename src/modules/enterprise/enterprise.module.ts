@@ -3,6 +3,11 @@ import { RoomsModule } from '../rooms/rooms.module.js';
 import { ExportsController, PlatformExportsController, PublicExportsController } from './exports/exports.controller.js';
 import { ExportsService } from './exports/exports.service.js';
 import { BrandingRegistry } from './white-label/branding.registry.js';
+import { PlatformSmsSendersController, PublicStaffPortalController, WhiteLabelController } from './white-label/white-label.controller.js';
+import { WhiteLabelService } from './white-label/white-label.service.js';
+import { MockOidcController, SsoAuthController, SsoConfigController } from './sso/sso.controller.js';
+import { MockOidcService } from './sso/mock-oidc.service.js';
+import { SsoService } from './sso/sso.service.js';
 import { ApiKeysController, DevelopersController, PlatformApiUsageController } from './api-keys/api-keys.controller.js';
 import { ApiKeysService } from './api-keys/api-keys.service.js';
 import { PartnerGuard, PartnerInterceptor } from './partner/partner-auth.js';
@@ -30,8 +35,14 @@ import { WebhooksService } from './webhooks/webhooks.service.js';
     WebhookDeliveriesController,
     PartnerDocsController,
     PartnerController,
+    WhiteLabelController,
+    PublicStaffPortalController,
+    PlatformSmsSendersController,
+    SsoConfigController,
+    SsoAuthController,
+    MockOidcController,
   ],
-  providers: [BrandingRegistry, ExportsService, ApiKeysService, WebhooksService, PartnerGuard, PartnerInterceptor],
-  exports: [BrandingRegistry, ExportsService, ApiKeysService, WebhooksService],
+  providers: [BrandingRegistry, WhiteLabelService, SsoService, MockOidcService, ExportsService, ApiKeysService, WebhooksService, PartnerGuard, PartnerInterceptor],
+  exports: [BrandingRegistry, WhiteLabelService, SsoService, ExportsService, ApiKeysService, WebhooksService],
 })
 export class EnterpriseModule {}

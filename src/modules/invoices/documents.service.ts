@@ -1,4 +1,5 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
+import { BrandingRegistry } from '../enterprise/white-label/branding.registry.js';
 import type { FolioEntry, Prisma } from '../../generated/prisma/client.js';
 import type { DocumentCounterKind, GuestInvoiceKind, PaymentMethod } from '../../generated/prisma/enums.js';
 import type { AuthUser } from '../../common/auth-types.js';
@@ -60,7 +61,25 @@ export class DocumentsService {
     private readonly db: DbService,
     private readonly config: AppConfigService,
     private readonly audit: AuditService,
+    private readonly brands: BrandingRegistry,
   ) {}
+
+  /** M6: brand block of printable documents (white-label hides the platform). */
+  branding(tenantId: string, hotel?: { name?: string; logoUrl?: string | null; accentColor?: string | null }) {
+    const b = this.brands.get(tenantId);
+    return {
+      whiteLabel: !!b,
+      brandName: b?.brandName ?? hotel?.name ?? '',
+      logoUrl: b?.logoUrl ?? hotel?.logoUrl ?? null,
+      accentColor: b?.accentColor ?? b?.primaryColor ?? hotel?.accentColor ?? null,
+      platformName: b ? null : this.config.get('APP_NAME'),
+    };
+  }
+
+  private branded<T extends object>(tenantId: string, doc: T): T & { branding: ReturnType<DocumentsService['branding']> } {
+    const hotel = (doc as { hotel?: unknown }).hotel as { name?: string; logoUrl?: string | null; accentColor?: string | null } | undefined;
+    return { ...doc, branding: this.branding(tenantId, hotel) };
+  }
 
   /**
    * Next number in a gapless per-tenant, per-year sequence. The upsert takes a
@@ -151,14 +170,14 @@ export class DocumentsService {
         issuedById: issuer?.id ?? null,
       },
     });
-    return { ...document, id: receipt.id };
+    return this.branded(tenantId, { ...document, id: receipt.id });
   }
 
   private async receiptView(tx: Tx, tenantId: string, id: string) {
     const r = await tx.receipt.findFirst({ where: { id, tenantId } });
     if (!r) throw AppException.notFound('Receipt');
     const voided = await tx.folioEntry.count({ where: { refEntryId: r.entryId } });
-    return { ...(r.document as Record<string, unknown>), id: r.id, voided: voided > 0 };
+    return this.branded(tenantId, { ...(r.document as Record<string, unknown>), id: r.id, voided: voided > 0 });
   }
 
   // ---------------------------------------------------------------------------
@@ -272,7 +291,7 @@ export class DocumentsService {
     return this.db.tenant(user.tenantId, async (tx) => {
       const r = await tx.guestInvoice.findFirst({ where: { id, tenantId: user.tenantId } });
       if (!r) throw AppException.notFound('Invoice');
-      return { ...(r.document as Record<string, unknown>), id: r.id };
+      return this.branded(user.tenantId, { ...(r.document as Record<string, unknown>), id: r.id });
     });
   }
 
@@ -379,12 +398,12 @@ export class DocumentsService {
       if (t === 'CITY_LEDGER_INVOICE') {
         const doc = await buildCityLedgerDocument(tx, tid, id, this.config.get('APP_NAME'));
         if (!doc) throw AppException.notFound('Document');
-        return { type: 'CITY_LEDGER_INVOICE' as const, document: doc };
+        return { type: 'CITY_LEDGER_INVOICE' as const, document: this.branded(tid, doc as unknown as Record<string, unknown>) };
       }
       if (t === 'INVOICE') {
         const r = await tx.guestInvoice.findFirst({ where: { id, tenantId: tid } });
         if (!r) throw AppException.notFound('Document');
-        return { type: 'INVOICE' as const, document: { ...(r.document as Record<string, unknown>), id: r.id } };
+        return { type: 'INVOICE' as const, document: this.branded(tid, { ...(r.document as Record<string, unknown>), id: r.id }) };
       }
       return { type: 'RECEIPT' as const, document: await this.receiptView(tx, tid, id) };
     });

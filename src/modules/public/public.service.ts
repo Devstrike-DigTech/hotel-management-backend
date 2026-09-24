@@ -1,4 +1,5 @@
 import { runInProperty } from '../../common/property-scope.js';
+import { WhiteLabelService } from '../enterprise/white-label/white-label.service.js';
 import { normalisePhone } from '../../common/utils/phone.js';
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '../../generated/prisma/client.js';
@@ -57,6 +58,7 @@ export class PublicService {
     private readonly config: AppConfigService,
     private readonly booking: PublicBookingService,
     private readonly entitlements: EntitlementsService,
+    private readonly whiteLabel: WhiteLabelService,
   ) {}
 
   app() {
@@ -208,7 +210,7 @@ export class PublicService {
    * A hotel page. Unlisted hotels are still reachable by slug (their own
    * booking microsite); suspended tenants are not.
    */
-  async hotel(slug: string): Promise<HotelDetail> {
+  async hotel(slug: string, host?: string): Promise<HotelDetail & { whiteLabel: ReturnType<WhiteLabelService['publicBrand']> }> {
     const p = await this.db.publicForSlug(slug, (tx, t) =>
       tx.property.findFirst({
         where: {
@@ -291,6 +293,8 @@ export class PublicService {
       group: (await this.groupsFor([p.tenantId])).get(p.tenantId) ?? null,
       canonicalUrl: `https://${this.canonicalHost(p)}`,
       whatsapp: await this.whatsappFor(p, ent?.features ?? []),
+      // M6: brand kit only on the property's own verified domain.
+      whiteLabel: this.whiteLabel.publicBrand(p.tenantId, host, p),
     };
   }
 
@@ -376,10 +380,10 @@ export class PublicService {
    *   grandview.<APP_DOMAIN>  -> "grandview"
    *   book.grandview.com      -> slug of the property with that verified domain
    */
-  async resolveHost(rawHost: string): Promise<{ slug: string; kind: 'PROPERTY' | 'GROUP'; groupSlug: string; canonicalHost: string }> {
+  async resolveHost(rawHost: string): Promise<{ slug: string; kind: 'PROPERTY' | 'GROUP'; groupSlug: string; canonicalHost: string; whiteLabel: boolean }> {
     const host = rawHost.trim().toLowerCase().replace(/:\d+$/, '').replace(/\.$/, '');
     const appDomain = this.config.get('APP_DOMAIN').toLowerCase();
-    const select = { slug: true, customDomain: true, customDomainVerifiedAt: true, tenant: { select: { slug: true } } } as const;
+    const select = { slug: true, tenantId: true, customDomain: true, customDomainVerifiedAt: true, tenant: { select: { slug: true } } } as const;
 
     const active = {
       tenant: { subscription: { is: { status: { not: 'SUSPENDED' as const } } } },
@@ -413,6 +417,7 @@ export class PublicService {
       kind: found.kind,
       groupSlug: found.groupSlug,
       canonicalHost: found.kind === 'GROUP' ? `${found.groupSlug}.${appDomain}` : this.canonicalHost(found.p),
+      whiteLabel: found.kind === 'PROPERTY' && found.p.customDomain === host && !!found.p.customDomainVerifiedAt && this.whiteLabel.whiteLabelActive(found.p.tenantId),
     };
   }
 }

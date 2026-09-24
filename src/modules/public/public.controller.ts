@@ -44,8 +44,8 @@ export class PublicController {
 
   @Get('hotels/:slug')
   @ApiOperation({ summary: 'Hotel detail page' })
-  hotel(@Param('slug') slug: string) {
-    return this.svc.hotel(slug);
+  hotel(@Param('slug') slug: string, @Query('host') host?: string) {
+    return this.svc.hotel(slug, typeof host === 'string' ? host.slice(0, 253) : undefined);
   }
 
   @Get('groups/:slug')
