@@ -1,5 +1,5 @@
 import { otpMeta } from '../notification.service.js';
-import { fullAddress, naira, renderTemplate, TEMPLATES, type BrandContext, type StayContext, type TemplateData } from './templates.js';
+import { fullAddress, naira, renderTemplate, TEMPLATES, type BrandContext, type StayContext, type TemplateData, type TransferContext } from './templates.js';
 
 const brand: BrandContext = {
   appName: 'Stayline',
@@ -35,6 +35,20 @@ const stay: StayContext = {
   manageUrl: 'https://stayline.ng/trips/PWH-7K3Q?t=abc',
   calendarUrl: 'https://api.stayline.ng/api/v1/public/trips/PWH-7K3Q/calendar.ics?t=abc',
   specialRequests: '',
+};
+
+const transfer: TransferContext = {
+  label: 'Airport pickup',
+  direction: 'ARRIVAL',
+  pointName: 'Murtala Muhammed International Airport',
+  whenHuman: 'Thu 1 Oct 2026, 11:20',
+  driverName: 'Sunday Okon',
+  driverPhone: '+2348031234567',
+  vehiclePlate: 'LSD 482 KJ',
+  vehicleDescription: 'Silver Toyota Corolla',
+  meetingNote: 'Your driver waits at the arrivals exit holding a board with your name.',
+  detailsSummary: 'Air Peace P4 7121, Terminal 2',
+  status: 'DRIVER_ASSIGNED',
 };
 
 const samples: TemplateData[] = [
@@ -77,6 +91,9 @@ const samples: TemplateData[] = [
   { template: 'OWNER_SETUP', fullName: 'Aisha Bello', hotelName: 'Harmattan Hotels & Suites', url: 'https://admin.stayline.ng/setup-password?token=t', expiresHuman: 'Thu 1 Oct 2026' },
   { template: 'PLATFORM_INVITE', fullName: 'Zainab Bello', role: 'Support', url: 'https://console.stayline.ng/invite/t', invitedBy: 'Devstrike Admin', expiresHuman: 'Thu 1 Oct 2026' },
   { template: 'OFFBOARDING_NOTICE', hotelName: 'Coal City Retreat', deleteAfterHuman: 'Sat 24 Oct 2026', exportReady: true },
+  // M7
+  { template: 'TRANSFER_DRIVER_ASSIGNED', stay, transfer },
+  { template: 'TRANSFER_UPDATE', stay, transfer: { ...transfer, status: 'EN_ROUTE' }, note: 'Your driver is on the way to MMIA.' },
 ];
 
 // Emoji and pictographs (the brand forbids them in every channel).
@@ -149,5 +166,18 @@ describe('OTP outbox meta', () => {
     expect(otpMeta({ template: 'OTP', meta: { otpCode: '482913' }, waTemplate: null })).toEqual(expected);
     expect(otpMeta({ template: 'OTP', meta: {}, waTemplate: { name: 'otp_code', language: 'en', params: ['482913'] } })).toEqual(expected);
     expect(otpMeta({ template: 'BOOKING_CONFIRMED', meta: { otpCode: 'x' }, waTemplate: null })).toEqual({});
+  });
+});
+
+describe('transfer notifications (M7)', () => {
+  it('the driver message carries the driver, the plate, the point and the time, in every channel', () => {
+    const r = renderTemplate(brand, samples.find((s) => s.template === 'TRANSFER_DRIVER_ASSIGNED')!);
+    for (const s of [r.html, r.text, r.sms]) {
+      expect(s).toContain('Sunday Okon');
+      expect(s).toContain('LSD 482 KJ');
+    }
+    expect(r.text).toContain('11:20');
+    expect(r.text).toContain('PWH-7K3Q');
+    expect(r.sms.length).toBeLessThanOrEqual(320);
   });
 });

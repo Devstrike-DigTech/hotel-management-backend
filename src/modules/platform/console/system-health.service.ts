@@ -22,6 +22,8 @@ export const PLATFORM_JOBS = {
   exportsCleanup: { name: 'exports-cleanup', scheduler: 'exports-cleanup-hourly', cron: '50 * * * *' },
   whiteLabelChecks: { name: 'white-label-checks', scheduler: 'white-label-checks-10m', cron: '*/10 * * * *' },
   provisioningReconcile: { name: 'provisioning-reconcile', scheduler: 'provisioning-reconcile-5m', cron: '*/5 * * * *' },
+  // M7: temporary booking-form uploads nobody booked with.
+  formUploadsCleanup: { name: 'form-uploads-cleanup', scheduler: 'form-uploads-cleanup-hourly', cron: '20 * * * *' },
 } as const;
 
 /** Every scheduled job with its queue and cron, for the cron table. */

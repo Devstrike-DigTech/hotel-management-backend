@@ -24,6 +24,8 @@ not need a template.
 | `guest_message` | UTILITY | en | Guest inbox: staff start or resume a conversation outside the 24-hour window |
 | `pre_arrival_confirm` | UTILITY | en | Guest inbox: pre-arrival arrival-time confirmation 24 hours before check-in |
 | `in_stay_welcome` | UTILITY | en | Guest inbox: welcome after check-in, inviting requests |
+| `transfer_driver_assigned` | UTILITY | en | Arrival pickup / departure drop-off: driver, phone and plate once a driver is assigned |
+| `transfer_update` | UTILITY | en | Arrival pickup / departure drop-off: driver on the way, delays and cancellations |
 
 ## owner_daily_digest
 
@@ -260,3 +262,51 @@ Welcome to {{1}}, {{2}}. You are in room {{3}}. Reply to this message with any r
 | `{{1}}` | hotel name | The Palmwine House |
 | `{{2}}` | guest first name | Adaeze |
 | `{{3}}` | room number | 204 |
+
+## transfer_driver_assigned
+
+- Category: UTILITY
+- Language: English (`en`)
+- Used for: Arrival pickup / departure drop-off: driver, phone and plate once a driver is assigned
+
+Body:
+
+```
+Hello {{1}}, your driver for your {{2}} with {{3}} is {{4}} ({{5}}).
+Vehicle: {{6}}.
+Pickup point: {{7}}, {{8}}.
+Booking {{9}}. Call the hotel on {{10}} if your plans change.
+```
+
+| Placeholder | Meaning | Sample value |
+| --- | --- | --- |
+| `{{1}}` | guest first name | Adaeze |
+| `{{2}}` | transfer | airport pickup |
+| `{{3}}` | hotel name | The Palmwine House |
+| `{{4}}` | driver name | Musa Ibrahim |
+| `{{5}}` | driver phone | +2348035550142 |
+| `{{6}}` | vehicle and plate | Toyota Sienna, LSD 482 KJ |
+| `{{7}}` | pickup point | Murtala Muhammed International Airport (MMIA) |
+| `{{8}}` | date and time | Fri 2 Oct 2026, 15:40 |
+| `{{9}}` | booking code | PWH-7K3Q |
+| `{{10}}` | hotel phone | +234 803 555 0100 |
+
+## transfer_update
+
+- Category: UTILITY
+- Language: English (`en`)
+- Used for: Arrival pickup / departure drop-off: driver on the way, delays and cancellations
+
+Body:
+
+```
+Hello {{1}}, an update on your {{2}} with {{3}}: {{4}} Booking {{5}}.
+```
+
+| Placeholder | Meaning | Sample value |
+| --- | --- | --- |
+| `{{1}}` | guest first name | Adaeze |
+| `{{2}}` | transfer | arrival pickup |
+| `{{3}}` | hotel name | The Palmwine House |
+| `{{4}}` | update | Your driver is on the way and will reach Jibowu Motor Park by 19:30. |
+| `{{5}}` | booking code | PWH-7K3Q |

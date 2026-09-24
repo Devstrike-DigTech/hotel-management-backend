@@ -691,6 +691,43 @@ export class LedgerService {
     });
   }
 
+  /**
+   * M7: voids a charge and its tax lines inside the caller's transaction
+   * (an extra or transfer removed, or its booking cancelled). A correction by
+   * the system, not a staff void: no Revenue Guard flag. Returns false when
+   * the entry was already voided.
+   */
+  async voidChargeTx(tx: Tx, tenantId: string, folioId: string, entryId: string, actor: Actor, reason: string): Promise<boolean> {
+    const folio = await this.docs.loadFolio(tx, tenantId, folioId);
+    const entry = folio.entries.find((e) => e.id === entryId);
+    if (!entry) return false;
+    const voided = new Set(folio.entries.filter((e) => e.type === 'VOID').map((e) => e.refEntryId));
+    if (voided.has(entry.id)) return false;
+    const targets: FolioEntry[] = [];
+    const collect = (e: FolioEntry) => {
+      if (voided.has(e.id)) return;
+      targets.push(e);
+      for (const child of folio.entries.filter((c) => c.parentEntryId === e.id && c.type !== 'VOID')) collect(child);
+    };
+    collect(entry);
+    for (const t of targets) {
+      await this.insert(tx, {
+        tenantId,
+        folioId: folio.id,
+        type: 'VOID',
+        amountKobo: -k(t.amountKobo),
+        description: `Void: ${t.description}`,
+        businessDate: dbDate(lagosDate()),
+        refEntryId: t.id,
+        taxCode: t.taxCode,
+        reason,
+        createdById: actor.userId,
+      });
+    }
+    await runVoidHooksTx(tx, tenantId, targets.map((t) => t.id));
+    return true;
+  }
+
   voidEntry(user: AuthUser, folioId: string, entryId: string, reason: string, ip?: string) {
     return this.db.tenant(user.tenantId, async (tx) => {
       const folio = await this.docs.loadFolio(tx, user.tenantId, folioId);

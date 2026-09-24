@@ -17,7 +17,9 @@ export type WhatsAppTemplateName =
   | 'otp_code'
   | 'guest_message'
   | 'pre_arrival_confirm'
-  | 'in_stay_welcome';
+  | 'in_stay_welcome'
+  | 'transfer_driver_assigned'
+  | 'transfer_update';
 
 export interface WhatsAppTemplateDef {
   name: WhatsAppTemplateName;
@@ -200,6 +202,45 @@ export const WHATSAPP_TEMPLATES: WhatsAppTemplateDef[] = [
     buttons: [],
     usedFor: 'Guest inbox: welcome after check-in, inviting requests',
   },
+  {
+    name: 'transfer_driver_assigned',
+    language: 'en',
+    category: 'UTILITY',
+    body:
+      'Hello {{1}}, your driver for your {{2}} with {{3}} is {{4}} ({{5}}).\n' +
+      'Vehicle: {{6}}.\n' +
+      'Pickup point: {{7}}, {{8}}.\n' +
+      'Booking {{9}}. Call the hotel on {{10}} if your plans change.',
+    params: [
+      { index: 1, name: 'guest first name', example: 'Adaeze' },
+      { index: 2, name: 'transfer', example: 'airport pickup' },
+      { index: 3, name: 'hotel name', example: 'The Palmwine House' },
+      { index: 4, name: 'driver name', example: 'Musa Ibrahim' },
+      { index: 5, name: 'driver phone', example: '+2348035550142' },
+      { index: 6, name: 'vehicle and plate', example: 'Toyota Sienna, LSD 482 KJ' },
+      { index: 7, name: 'pickup point', example: 'Murtala Muhammed International Airport (MMIA)' },
+      { index: 8, name: 'date and time', example: 'Fri 2 Oct 2026, 15:40' },
+      { index: 9, name: 'booking code', example: 'PWH-7K3Q' },
+      { index: 10, name: 'hotel phone', example: '+234 803 555 0100' },
+    ],
+    buttons: [],
+    usedFor: 'Arrival pickup / departure drop-off: driver, phone and plate once a driver is assigned',
+  },
+  {
+    name: 'transfer_update',
+    language: 'en',
+    category: 'UTILITY',
+    body: 'Hello {{1}}, an update on your {{2}} with {{3}}: {{4}} Booking {{5}}.',
+    params: [
+      { index: 1, name: 'guest first name', example: 'Adaeze' },
+      { index: 2, name: 'transfer', example: 'arrival pickup' },
+      { index: 3, name: 'hotel name', example: 'The Palmwine House' },
+      { index: 4, name: 'update', example: 'Your driver is on the way and will reach Jibowu Motor Park by 19:30.' },
+      { index: 5, name: 'booking code', example: 'PWH-7K3Q' },
+    ],
+    buttons: [],
+    usedFor: 'Arrival pickup / departure drop-off: driver on the way, delays and cancellations',
+  },
 ];
 
 const BY_NAME = new Map(WHATSAPP_TEMPLATES.map((t) => [t.name, t]));
@@ -258,6 +299,23 @@ export function waTemplateFor(data: TemplateData): WaTemplateRef | null {
       return ref('payment_receipt', [naira(data.amountKobo), data.stay.code, data.stay.hotel.name, data.receiptNumber]);
     case 'OTP':
       return ref('otp_code', [data.code]);
+    case 'TRANSFER_DRIVER_ASSIGNED': {
+      const t = data.transfer;
+      return ref('transfer_driver_assigned', [
+        first(data.stay.guestName),
+        t.label.toLowerCase(),
+        data.stay.hotel.name,
+        t.driverName,
+        t.driverPhone,
+        [t.vehicleDescription, t.vehiclePlate].filter(Boolean).join(', '),
+        t.pointName,
+        t.whenHuman,
+        data.stay.code,
+        data.stay.hotel.phone,
+      ]);
+    }
+    case 'TRANSFER_UPDATE':
+      return ref('transfer_update', [first(data.stay.guestName), data.transfer.label.toLowerCase(), data.stay.hotel.name, data.note, data.stay.code]);
     default:
       return null;
   }

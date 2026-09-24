@@ -25,6 +25,9 @@ export const TEMPLATES = [
   'OWNER_SETUP',
   'PLATFORM_INVITE',
   'OFFBOARDING_NOTICE',
+  // M7
+  'TRANSFER_DRIVER_ASSIGNED',
+  'TRANSFER_UPDATE',
 ] as const;
 export type TemplateName = (typeof TEMPLATES)[number];
 
@@ -63,6 +66,27 @@ export interface StayContext {
   manageUrl: string;
   calendarUrl: string;
   specialRequests: string;
+  /** M7: estimated arrival time from the booking form ("15:30"). */
+  expectedArrivalTime?: string | null;
+  /** M7: non-sensitive booking-form answers (hotel mail only). */
+  answers?: { label: string; value: string }[];
+  /** M7: pickups and drop-offs booked with the stay. */
+  transfers?: { label: string; whenHuman: string; details: string }[];
+}
+
+/** M7: a pickup or drop-off in a guest message. */
+export interface TransferContext {
+  label: string;
+  direction: 'ARRIVAL' | 'DEPARTURE';
+  pointName: string;
+  whenHuman: string;
+  driverName: string | null;
+  driverPhone: string | null;
+  vehiclePlate: string | null;
+  vehicleDescription: string | null;
+  meetingNote: string | null;
+  detailsSummary: string;
+  status: string;
 }
 
 export type TemplateData =
@@ -104,7 +128,10 @@ export type TemplateData =
   | { template: 'WEBHOOK_DISABLED'; hotelName: string; url: string; failingSinceHuman: string; attempts: number; lastError: string | null; adminUrl: string }
   | { template: 'OWNER_SETUP'; fullName: string; hotelName: string; url: string; expiresHuman: string }
   | { template: 'PLATFORM_INVITE'; fullName: string; role: string; url: string; invitedBy: string; expiresHuman: string }
-  | { template: 'OFFBOARDING_NOTICE'; hotelName: string; deleteAfterHuman: string; exportReady: boolean };
+  | { template: 'OFFBOARDING_NOTICE'; hotelName: string; deleteAfterHuman: string; exportReady: boolean }
+  // M7
+  | { template: 'TRANSFER_DRIVER_ASSIGNED'; stay: StayContext; transfer: TransferContext }
+  | { template: 'TRANSFER_UPDATE'; stay: StayContext; transfer: TransferContext; note: string };
 
 export interface Rendered {
   subject: string;
@@ -398,6 +425,10 @@ function build(ctx: BrandContext, d: TemplateData): { subject: string; spec: Ema
               { label: 'Email', value: d.guestEmail ?? 'Not given' },
             ],
           },
+          ...(s.expectedArrivalTime || s.answers?.length
+            ? [{ kind: 'rows' as const, title: 'From the booking form', rows: [...(s.expectedArrivalTime ? [{ label: 'Estimated arrival', value: s.expectedArrivalTime, mono: true }] : []), ...(s.answers ?? []).map((a) => ({ label: a.label, value: a.value }))] }]
+            : []),
+          ...(s.transfers?.length ? [{ kind: 'rows' as const, title: 'Pickups', rows: s.transfers.map((t) => ({ label: t.label, value: [t.whenHuman, t.details].filter(Boolean).join(', ') })) }] : []),
           moneyRows(s, s.paymentMode === 'ONLINE' ? 'Paid online' : 'Pay at the hotel'),
           ...(d.commissionKobo > 0 ? [{ kind: 'paragraph' as const, text: `Marketplace commission: ${naira(d.commissionKobo)}.`, muted: true }] : []),
           ...(s.specialRequests ? [{ kind: 'quote' as const, text: s.specialRequests }] : []),
@@ -574,7 +605,53 @@ function build(ctx: BrandContext, d: TemplateData): { subject: string; spec: Ema
         ]),
         sms: `${app}: ${d.hotelName} account closes; data deleted on ${d.deleteAfterHuman}.`,
       };
+    // -------------------------------------------------------------------- M7
+    case 'TRANSFER_DRIVER_ASSIGNED': {
+      const s = d.stay;
+      const t = d.transfer;
+      const vehicle = [t.vehicleDescription, t.vehiclePlate].filter(Boolean).join(', ');
+      return {
+        subject: `Your driver for ${t.label.toLowerCase()}: ${t.driverName} (${s.code})`,
+        spec: spec(ctx, `${t.driverName} will ${t.direction === 'ARRIVAL' ? 'meet you at' : 'take you to'} ${t.pointName}.`, t.label, `${t.driverName} is your driver`, [
+          { kind: 'paragraph', text: t.direction === 'ARRIVAL' ? `Hello ${firstName(s.guestName)}, ${t.driverName} will meet you at ${t.pointName} (${t.whenHuman}) and bring you to ${s.hotel.name}.` : `Hello ${firstName(s.guestName)}, ${t.driverName} will pick you up at ${s.hotel.name} (${t.whenHuman}) for ${t.pointName}.` },
+          {
+            kind: 'rows',
+            title: 'Your driver',
+            rows: [
+              { label: 'Driver', value: t.driverName ?? '' },
+              { label: 'Phone', value: t.driverPhone ?? '', mono: true },
+              { label: 'Vehicle', value: vehicle },
+              { label: 'When', value: t.whenHuman },
+              ...(t.detailsSummary ? [{ label: 'Your trip', value: t.detailsSummary }] : []),
+            ],
+          },
+          ...(t.meetingNote ? [{ kind: 'callout' as const, title: 'Where to meet', text: t.meetingNote }] : []),
+          { kind: 'paragraph', text: `If your plans change, call the hotel on ${s.hotel.phone || 'the number on your booking page'}.`, muted: true },
+          { kind: 'links', links: [{ label: 'Your booking', url: s.manageUrl }] },
+        ]),
+        sms: `${s.hotel.name}: your driver ${t.driverName} (${t.driverPhone}) will ${t.direction === 'ARRIVAL' ? `meet you at ${shortPoint(t.pointName)}` : `pick you up at the hotel for ${shortPoint(t.pointName)}`}, ${vehicle}. Booking ${s.code}.`,
+      };
+    }
+    case 'TRANSFER_UPDATE': {
+      const s = d.stay;
+      const t = d.transfer;
+      return {
+        subject: `Update on your ${t.label.toLowerCase()} (${s.code})`,
+        spec: spec(ctx, d.note, t.label, `An update on your ${t.label.toLowerCase()}`, [
+          { kind: 'quote', text: d.note },
+          { kind: 'rows', rows: [{ label: 'Pickup point', value: t.pointName }, { label: 'When', value: t.whenHuman }, ...(t.driverName ? [{ label: 'Driver', value: `${t.driverName}${t.driverPhone ? `, ${t.driverPhone}` : ''}` }] : [])] },
+          { kind: 'paragraph', text: `Questions? Call the hotel on ${s.hotel.phone || 'the number on your booking page'}.`, muted: true },
+        ]),
+        sms: `${s.hotel.name}: ${d.note} (${t.label.toLowerCase()}, booking ${s.code})`.slice(0, 300),
+      };
+    }
   }
+}
+
+/** "Murtala Muhammed International Airport (MMIA)" -> "MMIA" for SMS. */
+function shortPoint(name: string): string {
+  const m = /\(([^)]+)\)\s*$/.exec(name);
+  return m ? m[1]! : name;
 }
 
 /** Address plus area and city, without repeating parts the address already has. */
