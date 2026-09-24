@@ -7,11 +7,14 @@ describe('permission catalogue', () => {
     expect(PERMISSION_GROUPS.every((g) => g.permissions.length > 0)).toBe(true);
   });
 
-  it('gives OWNER everything and MANAGER everything but the payout account', () => {
+  it('gives OWNER everything and MANAGER everything but the payout account (M6: and SSO and the full export)', () => {
     expect(permissionsFor('OWNER').size).toBe(ALL_PERMISSIONS.length);
     const m = permissionsFor('MANAGER');
     expect(m.has('payouts.manage')).toBe(false);
-    expect(m.size).toBe(ALL_PERMISSIONS.length - 1);
+    expect(m.has('sso.manage')).toBe(false);
+    expect(m.has('data.export')).toBe(false);
+    expect(m.has('integrations.manage')).toBe(true);
+    expect(m.size).toBe(ALL_PERMISSIONS.length - 3);
   });
 
   it('keeps the M1-M3 role boundaries', () => {

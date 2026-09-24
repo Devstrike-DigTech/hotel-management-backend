@@ -4,6 +4,7 @@ import type { Job, Queue } from 'bullmq';
 import { DigestService } from '../digest/digest.service.js';
 import { NightAuditService } from '../night-audit/night-audit.service.js';
 import { OpsJobsService } from '../ops/ops-jobs.service.js';
+import { JobRunsService } from '../platform/console/system-health.service.js';
 import { ProJobsService } from './pro-jobs.service.js';
 import { DUNNING_TZ, OPERATIONS_QUEUE, OPS_JOBS } from './jobs.constants.js';
 
@@ -16,11 +17,16 @@ export class OperationsProcessor extends WorkerHost {
     private readonly digest: DigestService,
     private readonly ops: OpsJobsService,
     private readonly pro: ProJobsService,
+    private readonly runs: JobRunsService,
   ) {
     super();
   }
 
-  async process(job: Job): Promise<unknown> {
+  process(job: Job): Promise<unknown> {
+    return this.runs.track(OPERATIONS_QUEUE, job.name, () => this.run(job));
+  }
+
+  private async run(job: Job): Promise<unknown> {
     switch (job.name) {
       case OPS_JOBS.nightAudit.name:
         return this.nightAudit.runAll();

@@ -69,6 +69,14 @@ const samples: TemplateData[] = [
   },
   { template: 'GUARD_ALERT', hotelName: 'The Palmwine House', flags: [{ title: 'Room 204 occupied with no stay', amountKobo: null }], adminUrl: 'https://admin.hotelos.ng/guard', urgent: true },
   { template: 'WHATSAPP_REPLY', text: 'Acknowledged 2 alerts for The Palmwine House.' },
+  // M6
+  { template: 'SUPPORT_NEW', number: 'SR-000042', hotelName: 'Harmattan Hotels & Suites', subject: 'Night audit did not run', category: 'TECHNICAL', priority: 'HIGH', openedBy: 'Musa Danjuma (Manager)', excerpt: 'The night audit for Abuja did not post room charges last night.', slaHours: 2, consoleUrl: 'https://console.stayline.ng/support/1' },
+  { template: 'SUPPORT_REPLY', number: 'SR-000042', subject: 'Night audit did not run', fromName: 'Ifeanyi from Stayline support', excerpt: 'We re-ran the audit for Tuesday; charges are now posted.', adminUrl: 'https://admin.stayline.ng/support/1' },
+  { template: 'ANNOUNCEMENT', title: 'Planned maintenance on Sunday', body: 'The console will be read-only for 20 minutes.\n\nBookings keep working.', severity: 'MAINTENANCE', link: { label: 'Status page', url: 'https://status.stayline.ng' }, whenHuman: 'Sun 4 Oct 2026, 02:00 to 02:20' },
+  { template: 'WEBHOOK_DISABLED', hotelName: 'Harmattan Hotels & Suites', url: 'https://hooks.example.ng/pms', failingSinceHuman: 'Tue 22 Sep 2026, 09:00', attempts: 14, lastError: 'HTTP 503', adminUrl: 'https://admin.stayline.ng/settings/webhooks' },
+  { template: 'OWNER_SETUP', fullName: 'Aisha Bello', hotelName: 'Harmattan Hotels & Suites', url: 'https://admin.stayline.ng/setup-password?token=t', expiresHuman: 'Thu 1 Oct 2026' },
+  { template: 'PLATFORM_INVITE', fullName: 'Zainab Bello', role: 'Support', url: 'https://console.stayline.ng/invite/t', invitedBy: 'Devstrike Admin', expiresHuman: 'Thu 1 Oct 2026' },
+  { template: 'OFFBOARDING_NOTICE', hotelName: 'Coal City Retreat', deleteAfterHuman: 'Sat 24 Oct 2026', exportReady: true },
 ];
 
 // Emoji and pictographs (the brand forbids them in every channel).
@@ -112,6 +120,14 @@ describe('notification templates', () => {
     expect(site.html).toContain('#2F5A43');
     expect(site.html).toContain('https://cdn.example/logo.png');
     expect(site.html).toContain('Sent by Stayline on behalf of The Palmwine House.');
+  });
+
+  it('M6: white-labelled mail carries only the hotel brand', () => {
+    const r = renderTemplate({ ...brand, hotelBranded: true, whiteLabel: { brandName: 'Palmwine Collection', supportEmail: 'stay@palmwine.ng' } }, { template: 'BOOKING_CONFIRMED', stay });
+    expect(r.html).toContain('Palmwine Collection');
+    expect(r.html).not.toContain('Stayline');
+    expect(r.text).toContain('stay@palmwine.ng');
+    expect(r.text).not.toContain('help@stayline.ng');
   });
 
   it('escapes guest-supplied text in HTML', () => {

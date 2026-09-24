@@ -6,6 +6,8 @@ import type { StaffRole } from '../../generated/prisma/enums.js';
 import { AppException, ErrorCode } from '../../common/errors/app-exception.js';
 import { randomSuffix, slugify } from '../../common/utils/slug.js';
 import { DbService, type Tx } from '../../prisma/db.service.js';
+import { sha256Hex } from '../../common/crypto/secret-box.js';
+import { AppConfigService } from '../../config/app-config.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import type { LoginDto, SignupDto } from './auth.dto.js';
 import { TokenService } from './token.service.js';
@@ -71,6 +73,7 @@ export class AuthService {
     private readonly db: DbService,
     private readonly tokens: TokenService,
     private readonly audit: AuditService,
+    private readonly config: AppConfigService,
   ) {}
 
   hashPassword(password: string): Promise<string> {
@@ -203,6 +206,7 @@ export class AuthService {
         ErrorCode.INVALID_CREDENTIALS,
       );
     }
+    await this.assertPasswordAllowed(found);
     return this.db.tenant(found.tenant_id, async (tx) => {
       const user = await tx.user.update({
         where: { id: found.id },
@@ -321,6 +325,99 @@ export class AuthService {
           ip: meta.ip,
         });
       }
+    });
+  }
+
+  /**
+   * M6 SSO: a tenant that enforces SSO refuses password sign-in, except for
+   * its break-glass owner.
+   */
+  private async assertPasswordAllowed(found: FoundUser): Promise<void> {
+    const sso = await this.db.control(found.tenant_id, (tx) =>
+      tx.ssoConfig.findUnique({ where: { tenantId: found.tenant_id } }),
+    );
+    if (!sso?.enabled || !sso.enforced || sso.breakGlassUserId === found.id) return;
+    const slug = await this.db.control(found.tenant_id, (tx) =>
+      tx.tenant.findUnique({ where: { id: found.tenant_id }, select: { slug: true } }),
+    );
+    const base = this.config.get('API_PUBLIC_URL').replace(/\/$/, '');
+    throw new AppException(
+      HttpStatus.FORBIDDEN,
+      'SSO_REQUIRED',
+      'Your hotel signs in with single sign-on. Use the SSO button.',
+      { startUrl: `${base}/api/v1/auth/sso/start?tenant=${encodeURIComponent(slug?.slug ?? '')}` },
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // M6: owner set-up links (Enterprise onboarding from the console).
+  // ---------------------------------------------------------------------------
+
+  private async setupToken(token: string) {
+    const row = await this.db.system((tx) =>
+      tx.ownerSetupToken.findUnique({ where: { tokenHash: sha256Hex(`owner-setup:${token}`) } }),
+    );
+    if (!row || row.usedAt || row.expiresAt.getTime() <= Date.now()) {
+      throw AppException.notFound('Set-up link');
+    }
+    return row;
+  }
+
+  async setupPasswordInfo(token: string) {
+    const row = await this.setupToken(token);
+    const t = await this.db.system((tx) =>
+      tx.tenant.findUnique({ where: { id: row.tenantId }, select: { name: true } }),
+    );
+    return {
+      email: row.email,
+      fullName: row.fullName,
+      hotelName: t?.name ?? '',
+      expiresAt: row.expiresAt.toISOString(),
+    };
+  }
+
+  async setupPassword(token: string, password: string, meta: RequestMeta): Promise<AuthResponse> {
+    const row = await this.setupToken(token);
+    const claimed = await this.db.system((tx) =>
+      tx.ownerSetupToken.updateMany({
+        where: { id: row.id, usedAt: null },
+        data: { usedAt: new Date() },
+      }),
+    );
+    if (claimed.count === 0) throw AppException.notFound('Set-up link');
+    const passwordHash = await this.hashPassword(password);
+    return this.db.tenant(row.tenantId, async (tx) => {
+      const user = await tx.user.update({
+        where: { id: row.userId },
+        data: { passwordHash, lastLoginAt: new Date(), isActive: true },
+      });
+      await this.audit.record(tx, {
+        tenantId: row.tenantId,
+        actor: { kind: 'user', id: user.id, name: user.fullName },
+        action: 'auth.owner_setup_completed',
+        entityType: 'user',
+        entityId: user.id,
+        ip: meta.ip,
+      });
+      return this.issue(tx, user, randomUUID(), meta);
+    });
+  }
+
+  /** Signs a staff member in (SSO callback exchange). */
+  async signInUser(tenantId: string, userId: string, action: string, meta: RequestMeta, metadata?: Record<string, unknown>): Promise<AuthResponse> {
+    return this.db.tenant(tenantId, async (tx) => {
+      const user = await tx.user.update({ where: { id: userId }, data: { lastLoginAt: new Date() } });
+      if (!user.isActive) throw AppException.unauthorized('This account is deactivated', ErrorCode.INVALID_CREDENTIALS);
+      await this.audit.record(tx, {
+        tenantId,
+        actor: { kind: 'user', id: user.id, name: user.fullName },
+        action,
+        entityType: 'user',
+        entityId: user.id,
+        metadata,
+        ip: meta.ip,
+      });
+      return this.issue(tx, user, randomUUID(), meta);
     });
   }
 

@@ -17,6 +17,14 @@ export const TEMPLATES = [
   'CITY_LEDGER_REMINDER',
   'GUARD_ALERT',
   'WHATSAPP_REPLY',
+  // M6
+  'SUPPORT_NEW',
+  'SUPPORT_REPLY',
+  'ANNOUNCEMENT',
+  'WEBHOOK_DISABLED',
+  'OWNER_SETUP',
+  'PLATFORM_INVITE',
+  'OFFBOARDING_NOTICE',
 ] as const;
 export type TemplateName = (typeof TEMPLATES)[number];
 
@@ -28,6 +36,8 @@ export interface BrandContext {
   hotel?: { name: string; accentColor: string | null; logoUrl: string | null; area: string; city: string } | null;
   /** Use the hotel's look (BOOKING_SITE). Marketplace mail keeps the platform look. */
   hotelBranded?: boolean;
+  /** M6 white-label: only the hotel's brand, no platform footer; replies go to the hotel. */
+  whiteLabel?: { brandName: string; supportEmail: string | null } | null;
 }
 
 export interface StayContext {
@@ -86,7 +96,15 @@ export type TemplateData =
       hotelEmail: string;
     }
   | { template: 'GUARD_ALERT'; hotelName: string; flags: { title: string; amountKobo: number | null }[]; adminUrl: string; urgent: boolean }
-  | { template: 'WHATSAPP_REPLY'; text: string };
+  | { template: 'WHATSAPP_REPLY'; text: string }
+  // M6
+  | { template: 'SUPPORT_NEW'; number: string; hotelName: string; subject: string; category: string; priority: string; openedBy: string; excerpt: string; slaHours: number; consoleUrl: string }
+  | { template: 'SUPPORT_REPLY'; number: string; subject: string; fromName: string; excerpt: string; adminUrl: string }
+  | { template: 'ANNOUNCEMENT'; title: string; body: string; severity: string; link: { label: string; url: string } | null; whenHuman: string | null }
+  | { template: 'WEBHOOK_DISABLED'; hotelName: string; url: string; failingSinceHuman: string; attempts: number; lastError: string | null; adminUrl: string }
+  | { template: 'OWNER_SETUP'; fullName: string; hotelName: string; url: string; expiresHuman: string }
+  | { template: 'PLATFORM_INVITE'; fullName: string; role: string; url: string; invitedBy: string; expiresHuman: string }
+  | { template: 'OFFBOARDING_NOTICE'; hotelName: string; deleteAfterHuman: string; exportReady: boolean };
 
 export interface Rendered {
   subject: string;
@@ -111,6 +129,18 @@ export function nairaSms(kobo: number): string {
 
 function brand(ctx: BrandContext): EmailBrand {
   const h = ctx.hotel;
+  if (h && ctx.whiteLabel) {
+    // M6 white-label: the hotel's brand only.
+    return {
+      wordmark: ctx.whiteLabel.brandName || h.name,
+      tagline: [h.area, h.city].filter(Boolean).join(', '),
+      accent: safeAccent(h.accentColor),
+      logoUrl: h.logoUrl,
+      footerNote: `Sent by ${ctx.whiteLabel.brandName || h.name}.`,
+      supportEmail: ctx.whiteLabel.supportEmail || ctx.supportEmail,
+      appName: ctx.whiteLabel.brandName || h.name,
+    };
+  }
   if (h && ctx.hotelBranded) {
     return {
       wordmark: h.name,
@@ -466,6 +496,83 @@ function build(ctx: BrandContext, d: TemplateData): { subject: string; spec: Ema
           },
         ]),
         sms: `Orphaned payment ${d.reference} at ${d.hotelName}: ${nairaSms(d.amountKobo)}, refund ${d.refundStatus.toLowerCase()}.`,
+      };
+    // -------------------------------------------------------------------- M6
+    case 'SUPPORT_NEW':
+      return {
+        subject: `[${d.number}] ${d.subject} (${d.hotelName})`,
+        spec: spec({ ...ctx, hotelBranded: false }, `${d.hotelName} needs help: ${d.subject}`, 'Support request', d.subject, [
+          { kind: 'rows', rows: [
+            { label: 'Request', value: d.number, mono: true },
+            { label: 'Hotel', value: d.hotelName },
+            { label: 'Opened by', value: d.openedBy },
+            { label: 'Category', value: d.category },
+            { label: 'Priority', value: d.priority },
+            { label: 'First response due in', value: `${d.slaHours} hours` },
+          ] },
+          { kind: 'quote', text: d.excerpt },
+          { kind: 'button', label: 'Open in the console', url: d.consoleUrl },
+        ]),
+        sms: `${app} support ${d.number} from ${d.hotelName}: ${d.subject}`,
+      };
+    case 'SUPPORT_REPLY':
+      return {
+        subject: `Re: [${d.number}] ${d.subject}`,
+        spec: spec({ ...ctx, hotelBranded: false }, `${d.fromName} replied to your support request.`, 'Support', `${app} support replied`, [
+          { kind: 'paragraph', text: `${d.fromName} replied to your request ${d.number} (${d.subject}).` },
+          { kind: 'quote', text: d.excerpt },
+          { kind: 'button', label: 'Read and reply', url: d.adminUrl },
+        ]),
+        sms: `${app} support replied to ${d.number}. Open your admin to read it.`,
+      };
+    case 'ANNOUNCEMENT':
+      return {
+        subject: `${d.severity === 'CRITICAL' ? 'Important: ' : d.severity === 'MAINTENANCE' ? 'Planned maintenance: ' : ''}${d.title}`,
+        spec: spec({ ...ctx, hotelBranded: false }, d.body.slice(0, 120), d.severity === 'MAINTENANCE' ? 'Planned maintenance' : 'Announcement', d.title, [
+          ...d.body.split(/\n{2,}/).map((t) => ({ kind: 'paragraph' as const, text: t.trim() })),
+          ...(d.whenHuman ? [{ kind: 'callout' as const, title: 'When', text: d.whenHuman, tone: 'ochre' as const }] : []),
+          ...(d.link ? [{ kind: 'button' as const, label: d.link.label, url: d.link.url }] : []),
+        ]),
+        sms: `${app}: ${d.title}`,
+      };
+    case 'WEBHOOK_DISABLED':
+      return {
+        subject: `Webhook endpoint disabled at ${d.hotelName}`,
+        spec: spec({ ...ctx, hotelBranded: false }, `Deliveries to ${d.url} kept failing, so we paused it.`, 'Integrations', 'A webhook endpoint was disabled', [
+          { kind: 'paragraph', text: `Every delivery to this endpoint has failed since ${d.failingSinceHuman} (${d.attempts} attempts), so we stopped sending to it. Events are kept: fix the endpoint and switch it back on to resume.` },
+          { kind: 'rows', rows: [{ label: 'Endpoint', value: d.url, mono: true }, { label: 'Last error', value: d.lastError ?? 'No response' }] },
+          { kind: 'button', label: 'Open webhooks', url: d.adminUrl },
+        ]),
+        sms: `${d.hotelName}: webhook ${d.url} was disabled after 24 hours of failures.`,
+      };
+    case 'OWNER_SETUP':
+      return {
+        subject: `Your ${app} account for ${d.hotelName} is ready`,
+        spec: spec({ ...ctx, hotelBranded: false }, `Set your password to start using ${app}.`, 'Welcome', `Welcome, ${firstName(d.fullName)}`, [
+          { kind: 'paragraph', text: `${d.hotelName} is set up on ${app}. Choose your password to sign in as the owner.` },
+          { kind: 'button', label: 'Set your password', url: d.url },
+          { kind: 'paragraph', text: `This link works until ${d.expiresHuman}.`, muted: true },
+        ]),
+        sms: `${app}: ${d.hotelName} is ready. Check your email to set your password.`,
+      };
+    case 'PLATFORM_INVITE':
+      return {
+        subject: `You have been invited to the ${app} console`,
+        spec: spec({ ...ctx, hotelBranded: false }, `${d.invitedBy} invited you as ${d.role}.`, 'Console invitation', `Hello ${firstName(d.fullName)}`, [
+          { kind: 'paragraph', text: `${d.invitedBy} invited you to the ${app} platform console as ${d.role}. Choose a password, then set up two-factor sign-in with an authenticator app.` },
+          { kind: 'button', label: 'Accept the invitation', url: d.url },
+          { kind: 'paragraph', text: `This invitation expires on ${d.expiresHuman}.`, muted: true },
+        ]),
+        sms: `${app}: you have been invited to the console. Check your email.`,
+      };
+    case 'OFFBOARDING_NOTICE':
+      return {
+        subject: `${d.hotelName}: your account is closing`,
+        spec: spec({ ...ctx, hotelBranded: false }, `Your data will be deleted on ${d.deleteAfterHuman}.`, 'Account closure', 'Your account is closing', [
+          { kind: 'paragraph', text: `As agreed, ${app} is closing the account of ${d.hotelName}. ${d.exportReady ? 'A full export of your data is ready for you.' : 'A full export of your data is being prepared.'}` },
+          { kind: 'callout', title: 'Deletion date', text: `Every record will be deleted permanently on ${d.deleteAfterHuman}, as the Nigeria Data Protection Act requires. Contact us before then if this is a mistake.`, tone: 'ochre' },
+        ]),
+        sms: `${app}: ${d.hotelName} account closes; data deleted on ${d.deleteAfterHuman}.`,
       };
   }
 }

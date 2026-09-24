@@ -1,9 +1,9 @@
-import { Body, Controller, HttpCode, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { TrustedThrottlerGuard } from '../../common/guards/trusted-throttler.guard.js';
 import type { AppRequest } from '../../common/auth-types.js';
 import { AllowWhenReadOnly, Public } from '../../common/decorators/index.js';
-import { LoginDto, RefreshDto, SignupDto } from './auth.dto.js';
+import { LoginDto, RefreshDto, SetupPasswordDto, SignupDto } from './auth.dto.js';
 import { AuthService, type RequestMeta } from './auth.service.js';
 
 const meta = (req: AppRequest): RequestMeta => ({
@@ -45,5 +45,18 @@ export class AuthController {
   async logout(@Body() dto: RefreshDto, @Req() req: AppRequest) {
     await this.auth.logout(dto.refreshToken, meta(req));
     return { success: true };
+  }
+
+  @Get('setup-password/:token')
+  @ApiOperation({ summary: 'Owner set-up link details (Enterprise onboarding)' })
+  setupInfo(@Param('token') token: string) {
+    return this.auth.setupPasswordInfo(token);
+  }
+
+  @Post('setup-password')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Owner chooses a password from the set-up link and is signed in' })
+  setupPassword(@Body() dto: SetupPasswordDto, @Req() req: AppRequest) {
+    return this.auth.setupPassword(dto.token, dto.password, meta(req));
   }
 }

@@ -234,7 +234,36 @@ export const PERMISSION_GROUPS: PermissionGroupDef[] = [
       p('audit.export', 'Export audit trail', 'Download the audit trail as CSV or JSON.', true),
     ],
   },
+  // M6 (Enterprise)
+  {
+    group: 'integrations',
+    label: 'Integrations',
+    permissions: [
+      p('integrations.view', 'View API keys and webhooks', 'See API keys, webhook endpoints, deliveries and API usage.'),
+      p('integrations.manage', 'Manage API keys and webhooks', 'Create, rotate and revoke API keys; add webhook endpoints, replay deliveries.', true),
+    ],
+  },
+  {
+    group: 'enterprise',
+    label: 'Enterprise',
+    permissions: [
+      p('whitelabel.manage', 'Manage white-label settings', 'Brand kit, email sending domain, SMS sender ID and the staff portal domain.'),
+      p('sso.manage', 'Manage single sign-on', 'Set up SSO with Google Workspace, Microsoft Entra ID or OIDC, and enforce it.', true),
+      p('data.export', 'Export all hotel data', 'Download every record of the hotel group (includes guest ID numbers).', true),
+    ],
+  },
+  {
+    group: 'support',
+    label: 'Platform support',
+    permissions: [
+      p('support.view_all', 'See every support request', 'See the support requests of the whole hotel group.'),
+      p('support.sessions.view', 'See support sessions', 'See when platform support signed in as a staff member, and end a session.'),
+    ],
+  },
 ];
+
+/** M6: only an owner may manage these by default (managers get them through a custom role). */
+const OWNER_ONLY = new Set(['payouts.manage', 'sso.manage', 'data.export']);
 
 export const ALL_PERMISSIONS: readonly string[] = PERMISSION_GROUPS.flatMap((g) => g.permissions.map((x) => x.code));
 const ALL_SET = new Set(ALL_PERMISSIONS);
@@ -280,8 +309,8 @@ export const SYSTEM_ROLES: SystemRoleDef[] = [
   {
     key: 'MANAGER',
     name: 'Manager',
-    description: 'Runs the hotel day to day: everything except the payout bank account.',
-    permissions: ALL_PERMISSIONS.filter((c) => c !== 'payouts.manage'),
+    description: 'Runs the hotel day to day: everything except the payout bank account, single sign-on and the full data export.',
+    permissions: ALL_PERMISSIONS.filter((c) => !OWNER_ONLY.has(c)),
   },
   { key: 'FRONT_DESK', name: 'Front desk', description: 'Bookings, check-in and check-out, folios and payments in their own shift.', permissions: FRONT_DESK },
   { key: 'ACCOUNTANT', name: 'Accountant', description: 'Reads the books: folios, shifts, reports, Revenue Guard and the audit trail.', permissions: ACCOUNTANT },

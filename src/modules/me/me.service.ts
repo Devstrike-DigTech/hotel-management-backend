@@ -6,6 +6,8 @@ import { EntitlementsService } from '../entitlements/entitlements.service.js';
 import { permissionsFor } from '../../common/permissions/catalogue.js';
 import { roleLabel } from '../staff/roles.service.js';
 import { PropertyService } from '../property/property.service.js';
+import { BrandingRegistry } from '../enterprise/white-label/branding.registry.js';
+import { ImpersonationService } from '../platform/console/impersonation.service.js';
 
 @Injectable()
 export class MeService {
@@ -13,10 +15,18 @@ export class MeService {
     private readonly db: DbService,
     private readonly entitlements: EntitlementsService,
     private readonly properties: PropertyService,
+    private readonly branding: BrandingRegistry,
+    private readonly impersonation: ImpersonationService,
   ) {}
 
   async get(auth: AuthUser) {
-    return this.db.tenant(auth.tenantId, async (tx) => {
+    // M6: control-plane extras (impersonation banner, white-label, SSO, database mode).
+    const [impersonation, sso] = await Promise.all([
+      this.impersonation.current(auth).catch(() => null),
+      this.db.control(auth.tenantId, (tx) => tx.ssoConfig.findUnique({ where: { tenantId: auth.tenantId }, select: { enabled: true, enforced: true } })),
+    ]);
+    const brand = this.branding.get(auth.tenantId);
+    const base = await this.db.tenant(auth.tenantId, async (tx) => {
       const user = await tx.user.findUnique({ where: { id: auth.userId }, include: { customRole: { select: { name: true, permissions: true } } } });
       const tenant = await tx.tenant.findUnique({ where: { id: auth.tenantId } });
       if (!user || !tenant || !user.isActive) {
@@ -57,5 +67,12 @@ export class MeService {
         propertyHeaderIgnored: !!auth.propertyHeaderIgnored,
       };
     });
+    return {
+      ...base,
+      impersonation,
+      whiteLabel: { active: !!brand, brandName: brand?.brandName ?? null, logoUrl: brand?.logoUrl ?? null },
+      sso: { enabled: !!sso?.enabled, enforced: !!sso?.enabled && !!sso.enforced },
+      dedicatedDb: { mode: this.db.router.isDedicated(auth.tenantId) ? ('DEDICATED' as const) : ('SHARED' as const) },
+    };
   }
 }

@@ -8,6 +8,8 @@ import { DunningScheduler } from './dunning.scheduler.js';
 import { GuestProcessor, GuestScheduler } from './guest.processor.js';
 import { BILLING_QUEUE, GUEST_QUEUE, OPERATIONS_QUEUE, redisConnection } from './jobs.constants.js';
 import { OperationsProcessor, OperationsScheduler } from './operations.processor.js';
+import { PlatformProcessor, PlatformScheduler } from './platform.processor.js';
+import { PLATFORM_QUEUE } from '../platform/console/system-health.service.js';
 import { ProJobsService } from './pro-jobs.service.js';
 
 /**
@@ -28,8 +30,9 @@ import { ProJobsService } from './pro-jobs.service.js';
     BullModule.registerQueue({ name: BILLING_QUEUE }),
     BullModule.registerQueue({ name: OPERATIONS_QUEUE }),
     BullModule.registerQueue({ name: GUEST_QUEUE }),
+    BullModule.registerQueue({ name: PLATFORM_QUEUE }),
     BillingModule,
   ],
-  providers: [ProJobsService, BillingProcessor, DunningScheduler, OperationsProcessor, OperationsScheduler, GuestProcessor, GuestScheduler],
+  providers: [ProJobsService, BillingProcessor, DunningScheduler, OperationsProcessor, OperationsScheduler, GuestProcessor, GuestScheduler, PlatformProcessor, PlatformScheduler],
 })
 export class JobsModule {}

@@ -1,3 +1,4 @@
+import { BrandingRegistry } from '../enterprise/white-label/branding.registry.js';
 import { Injectable } from '@nestjs/common';
 import type { NotificationChannel } from '../../generated/prisma/enums.js';
 import { humanDate, humanDateTime, lagosDate } from '../../common/time/lagos.js';
@@ -27,15 +28,25 @@ export class BookingNotifier {
     private readonly config: AppConfigService,
     private readonly views: BookingViewService,
     private readonly entitlements: EntitlementsService,
+    private readonly branding: BrandingRegistry,
   ) {}
 
   brand(r: Pick<StayRow, 'property' | 'source'>): BrandContext {
+    // M6: white-labelled hotels send every guest message in their own brand only.
+    const wl = this.branding.get(r.property.tenantId);
     return {
       appName: this.config.get('APP_NAME'),
       appDomain: this.config.get('APP_DOMAIN'),
       supportEmail: this.config.get('SUPPORT_EMAIL'),
-      hotel: { name: r.property.name, accentColor: r.property.accentColor, logoUrl: r.property.logoUrl, area: r.property.area, city: r.property.city },
-      hotelBranded: r.source === 'BOOKING_SITE',
+      hotel: {
+        name: r.property.name,
+        accentColor: wl?.accentColor ?? wl?.primaryColor ?? r.property.accentColor,
+        logoUrl: wl?.logoUrl ?? r.property.logoUrl,
+        area: r.property.area,
+        city: r.property.city,
+      },
+      hotelBranded: r.source === 'BOOKING_SITE' || !!wl,
+      whiteLabel: wl ? { brandName: wl.brandName ?? r.property.name, supportEmail: r.property.email || null } : null,
     };
   }
 

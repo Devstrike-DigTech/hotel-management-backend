@@ -11,6 +11,10 @@ export interface ProviderMessage {
   html: string | null;
   /** Display name for the email sender (e.g. the hotel for booking-site mail). */
   fromName?: string | null;
+  /** M6 white-label: full sender on the hotel's verified domain ("Name <addr>"). */
+  fromAddress?: string | null;
+  /** M6 white-label: the hotel's approved SMS sender ID. */
+  smsSenderId?: string | null;
   template: string;
   meta?: Record<string, unknown>;
   /** WhatsApp: send this approved template (outside the 24-hour window) instead of free-form text. */
@@ -67,7 +71,7 @@ export class ResendEmailProvider implements ChannelProvider {
   async send(m: ProviderMessage): Promise<SendResult> {
     const res = await postJson(
       `${this.config.get('RESEND_BASE_URL').replace(/\/$/, '')}/emails`,
-      { from: fromAddress(this.config, m.fromName), to: [m.to], subject: m.subject ?? '', html: m.html ?? undefined, text: m.text },
+      { from: m.fromAddress ?? fromAddress(this.config, m.fromName), to: [m.to], subject: m.subject ?? '', html: m.html ?? undefined, text: m.text },
       { Authorization: `Bearer ${this.config.get('RESEND_API_KEY')}` },
     );
     return { providerMessageId: typeof res.id === 'string' ? res.id : null };
@@ -89,7 +93,7 @@ export class SmtpEmailProvider implements ChannelProvider {
 
   async send(m: ProviderMessage): Promise<SendResult> {
     try {
-      const info = await this.transport.sendMail({ from: fromAddress(this.config, m.fromName), to: m.to, subject: m.subject ?? '', text: m.text, html: m.html ?? undefined });
+      const info = await this.transport.sendMail({ from: m.fromAddress ?? fromAddress(this.config, m.fromName), to: m.to, subject: m.subject ?? '', text: m.text, html: m.html ?? undefined });
       return { providerMessageId: info.messageId ?? null };
     } catch (e) {
       throw new ProviderError(`smtp: ${(e as Error).message}`);
@@ -106,7 +110,7 @@ export class TermiiSmsProvider implements ChannelProvider {
     const res = await postJson(`${this.config.get('TERMII_BASE_URL').replace(/\/$/, '')}/api/sms/send`, {
       api_key: this.config.get('TERMII_API_KEY'),
       to: m.to.replace(/^\+/, ''),
-      from: this.config.get('TERMII_SENDER_ID'),
+      from: m.smsSenderId ?? this.config.get('TERMII_SENDER_ID'),
       sms: m.text,
       type: 'plain',
       channel: this.config.get('TERMII_CHANNEL'),
@@ -159,7 +163,12 @@ export class OutboxProvider implements ChannelProvider {
       subject: m.subject,
       text: m.text,
       html: m.html,
-      meta: { ...m.meta, ...(m.waTemplate && { waTemplate: m.waTemplate.name, waParams: m.waTemplate.params }) },
+      meta: {
+        ...m.meta,
+        ...(m.waTemplate && { waTemplate: m.waTemplate.name, waParams: m.waTemplate.params }),
+        ...(m.fromAddress && { from: m.fromAddress }),
+        ...(m.smsSenderId && { senderId: m.smsSenderId }),
+      },
     });
     const otp = typeof m.meta?.otpCode === 'string' ? ` code=${m.meta.otpCode}` : '';
     this.logger.log(`${this.channel} ${m.template} to ${m.to}${otp}${m.subject ? ` "${m.subject}"` : ''}`);

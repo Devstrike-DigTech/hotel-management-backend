@@ -14,7 +14,7 @@ export interface GateSession {
 }
 
 /** Hotel routes a read-only support session may still POST to (read-style actions). */
-export const READ_ONLY_ALLOWED_WRITES = [/\/impersonation\/end$/, /\/rates\/quote$/, /\/auth\/logout$/];
+export const READ_ONLY_ALLOWED_WRITES = [/\/impersonation\/end$/, /\/rates\/quote$/, /\/auth\/logout$/, /\/announcements\/[^/]+\/seen$/];
 
 export function impersonationEnded() {
   return new AppException(HttpStatus.UNAUTHORIZED, 'IMPERSONATION_ENDED', 'This support session has ended');

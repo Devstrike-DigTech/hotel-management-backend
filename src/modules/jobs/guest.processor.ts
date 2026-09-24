@@ -5,6 +5,7 @@ import { GUEST_JOBS, GuestJobsService } from '../booking/guest-jobs.service.js';
 import { HoldsService } from '../booking/holds.service.js';
 import { JobsBridge } from '../infra/jobs-bridge.js';
 import { NOTIFY_ATTEMPTS, NOTIFY_JOB, NotificationService } from '../notifications/notification.service.js';
+import { JobRunsService } from '../platform/console/system-health.service.js';
 import { DUNNING_TZ, GUEST_QUEUE } from './jobs.constants.js';
 
 /** Guest-side jobs: notification delivery (with retries), hold expiry, pre-arrival and review messages. */
@@ -16,6 +17,7 @@ export class GuestProcessor extends WorkerHost {
     private readonly notifications: NotificationService,
     private readonly holds: HoldsService,
     private readonly guestJobs: GuestJobsService,
+    private readonly runs: JobRunsService,
   ) {
     super();
   }
@@ -35,9 +37,9 @@ export class GuestProcessor extends WorkerHost {
       case GUEST_JOBS.reviewRequest:
         return { sent: await this.guestJobs.sendReviewRequest(d.tenantId!, d.reservationId!) };
       case GUEST_JOBS.holdSweep.name:
-        return this.holds.sweep();
+        return this.runs.track(GUEST_QUEUE, job.name, () => this.holds.sweep());
       case GUEST_JOBS.guestSweep.name:
-        return this.guestJobs.sweep();
+        return this.runs.track(GUEST_QUEUE, job.name, () => this.guestJobs.sweep());
       default:
         this.logger.warn(`Unknown job ${job.name}`);
         return undefined;

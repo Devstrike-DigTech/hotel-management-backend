@@ -1,6 +1,8 @@
 import {
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
+  ListObjectsV2Command,
   NoSuchKey,
   PutObjectCommand,
   S3Client,
@@ -59,5 +61,21 @@ export class S3Storage implements ObjectStorage {
   async delete(key: string): Promise<void> {
     assertSafeKey(key);
     await this.client.send(new DeleteObjectCommand({ Bucket: this.opts.bucket, Key: key }));
+  }
+
+  async deletePrefix(prefix: string): Promise<number> {
+    if (!/^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+\/$/.test(prefix)) throw new Error(`Refusing to delete prefix ${prefix}`);
+    let removed = 0;
+    let token: string | undefined;
+    do {
+      const page = await this.client.send(new ListObjectsV2Command({ Bucket: this.opts.bucket, Prefix: prefix, ContinuationToken: token }));
+      const keys = (page.Contents ?? []).map((o) => ({ Key: o.Key! })).filter((o) => o.Key);
+      if (keys.length) {
+        await this.client.send(new DeleteObjectsCommand({ Bucket: this.opts.bucket, Delete: { Objects: keys, Quiet: true } }));
+        removed += keys.length;
+      }
+      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (token);
+    return removed;
   }
 }

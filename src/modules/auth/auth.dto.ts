@@ -76,3 +76,14 @@ export class RefreshDto {
   @MaxLength(256)
   refreshToken!: string;
 }
+
+export class SetupPasswordDto {
+  @IsString()
+  @MinLength(10)
+  @MaxLength(200)
+  token!: string;
+
+  @IsString()
+  @Matches(PASSWORD_RULE, { message: PASSWORD_MESSAGE })
+  password!: string;
+}

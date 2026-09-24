@@ -41,6 +41,8 @@ import { DomainsModule } from './modules/domains/domains.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { PlatformSecurityModule } from './modules/platform/security/platform-security.module.js';
 import { DedicatedDbModule } from './modules/dedicated-db/dedicated-db.module.js';
+import { PlatformConsoleModule } from './modules/platform/console/platform-console.module.js';
+import { EnterpriseModule } from './modules/enterprise/enterprise.module.js';
 import { PlatformPermissionGuard } from './modules/platform/security/platform-permission.guard.js';
 import { PlatformAuditInterceptor } from './modules/platform/security/platform-audit.interceptor.js';
 
@@ -63,6 +65,8 @@ function jobsEnabled(): boolean {
     }),
     PlatformSecurityModule,
     DedicatedDbModule,
+    EnterpriseModule,
+    PlatformConsoleModule,
     AuditModule,
     EntitlementsModule,
     HealthModule,

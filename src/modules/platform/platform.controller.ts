@@ -16,7 +16,8 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { TrustedThrottlerGuard } from '../../common/guards/trusted-throttler.guard.js';
 import type { AppRequest, PlatformPrincipal } from '../../common/auth-types.js';
-import { PLATFORM_PERMISSIONS, PLATFORM_ROLES, PlatformPermissionRequired, RequireStepUp } from './security/platform-permissions.js';
+import { PLATFORM_PERMISSIONS, PLATFORM_ROLES, PlatformPermissionRequired, RequireStepUp, STEP_UP_SECONDS } from './security/platform-permissions.js';
+import { stepUpRequired } from './security/platform-permission.guard.js';
 import {
   ClientIp,
   CurrentPlatformUser,
@@ -35,6 +36,10 @@ import {
   PlatformRefreshDto,
   StepUpDto,
   PlatformLoginDto,
+  ApplyCouponDto,
+  CreateTenantDto,
+  ExtendTrialDto,
+  ReasonDto,
   SetFeatureOverrideDto,
   TenantListQueryDto,
   UpdatePlanDto,
@@ -42,6 +47,7 @@ import {
 } from './platform.dto.js';
 import { PlatformAuthService } from './platform-auth.service.js';
 import { PlatformService } from './platform.service.js';
+import { PlatformJobsService } from './console/platform-jobs.service.js';
 
 @ApiTags('Platform auth')
 @Controller('platform/auth')
@@ -207,6 +213,7 @@ export class PlatformController {
   constructor(
     private readonly platform: PlatformService,
     private readonly dunning: DunningService,
+    private readonly jobs: PlatformJobsService,
   ) {}
 
   @Get('metrics')
@@ -214,6 +221,55 @@ export class PlatformController {
   metrics() {
     return this.platform.metrics();
   }
+
+  @Get('overview')
+  @PlatformPermissionRequired('tenants.view')
+  @ApiOperation({ summary: 'MRR, GMV, churn, signups and system health for the console home' })
+  overview() {
+    return this.platform.overview();
+  }
+
+  @Post('tenants')
+  @PlatformPermissionRequired('tenants.manage')
+  @ApiOperation({ summary: 'Create a tenant (Enterprise onboarding); the owner gets a set-up link' })
+  createTenant(@CurrentPlatformUser() p: PlatformPrincipal, @Body() dto: CreateTenantDto, @ClientIp() ip?: string) {
+    return this.platform.createTenant(p, dto, ip);
+  }
+
+  @Post('tenants/:id/extend-trial')
+  @PlatformPermissionRequired('tenants.manage')
+  @HttpCode(200)
+  extendTrial(@CurrentPlatformUser() p: PlatformPrincipal, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ExtendTrialDto, @ClientIp() ip?: string) {
+    return this.platform.extendTrial(p, id, dto.days, dto.reason, ip);
+  }
+
+  @Post('tenants/:id/suspend')
+  @PlatformPermissionRequired('tenants.manage')
+  @HttpCode(200)
+  suspend(@CurrentPlatformUser() p: PlatformPrincipal, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ReasonDto, @ClientIp() ip?: string) {
+    return this.platform.suspend(p, id, dto.reason, ip);
+  }
+
+  @Post('tenants/:id/reinstate')
+  @PlatformPermissionRequired('tenants.manage')
+  @HttpCode(200)
+  reinstate(@CurrentPlatformUser() p: PlatformPrincipal, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ReasonDto, @ClientIp() ip?: string) {
+    return this.platform.reinstate(p, id, dto.reason, ip);
+  }
+
+  @Post('tenants/:id/coupon')
+  @PlatformPermissionRequired('billing.manage')
+  @HttpCode(200)
+  applyCoupon(@CurrentPlatformUser() p: PlatformPrincipal, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ApplyCouponDto, @ClientIp() ip?: string) {
+    return this.platform.applyCoupon(p, id, dto.code, ip);
+  }
+
+  @Delete('tenants/:id/coupon')
+  @PlatformPermissionRequired('billing.manage')
+  removeCoupon(@CurrentPlatformUser() p: PlatformPrincipal, @Param('id', ParseUUIDPipe) id: string, @ClientIp() ip?: string) {
+    return this.platform.removeCoupon(p, id, ip);
+  }
+
 
   @Get('tenants')
   @PlatformPermissionRequired('tenants.view')
@@ -285,5 +341,21 @@ export class PlatformController {
   @ApiOperation({ summary: 'Run the dunning job now (normally daily at 02:00 Lagos)' })
   runDunning() {
     return this.dunning.run();
+  }
+
+  /**
+   * Named jobs (M6, step-up). The M1/M3 routes `jobs/dunning/run` and
+   * `jobs/guest-notifications/run` share this path shape and keep their old
+   * behaviour (no step-up, bare result) for existing clients.
+   */
+  @Post('jobs/:name/run')
+  @PlatformPermissionRequired('system.view')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Run a named scheduled job now' })
+  async runJob(@CurrentPlatformUser() p: PlatformPrincipal, @Param('name') name: string) {
+    if (name === 'dunning') return this.dunning.run();
+    if (name === 'guest-notifications') return this.jobs.run(name);
+    if (Date.now() - (p.stepUpAt?.getTime() ?? 0) > STEP_UP_SECONDS * 1000) throw stepUpRequired();
+    return { result: await this.jobs.run(name) };
   }
 }

@@ -47,4 +47,11 @@ export class LocalDiskStorage implements ObjectStorage {
     await rm(p, { force: true });
     await rm(`${p}.meta`, { force: true });
   }
+
+  async deletePrefix(prefix: string): Promise<number> {
+    if (!/^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+\/$/.test(prefix)) throw new Error(`Refusing to delete prefix ${prefix}`);
+    const p = this.path(prefix.replace(/\/$/, ''));
+    await rm(p, { recursive: true, force: true });
+    return 1;
+  }
 }

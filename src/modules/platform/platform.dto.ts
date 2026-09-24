@@ -18,6 +18,7 @@ import {
   Min,
   MinLength,
   ValidateIf,
+  ValidateNested,
 } from 'class-validator';
 import { SubscriptionStatus } from '../../generated/prisma/enums.js';
 import { FEATURE_CODES } from '../entitlements/entitlements.constants.js';
@@ -36,6 +37,15 @@ export class TenantListQueryDto {
   @IsOptional() @IsEnum(SubscriptionStatus)
   status?: SubscriptionStatus;
 
+  @IsOptional() @IsString() @MaxLength(80)
+  city?: string;
+
+  @IsOptional() @IsIn(['SHARED', 'DEDICATED'])
+  dbMode?: 'SHARED' | 'DEDICATED';
+
+  @IsOptional() @IsIn(['name', 'created', 'mrr'])
+  sort?: 'name' | 'created' | 'mrr';
+
   @IsOptional() @Type(() => Number) @IsInt() @Min(1)
   page?: number = 1;
 
@@ -52,6 +62,94 @@ export class UpdateTenantSubscriptionDto {
 
   @IsOptional() @ValidateIf((_o, v) => v !== null) @IsDateString()
   trialEndsAt?: string | null;
+
+  @IsOptional() @IsIn(['MONTHLY', 'YEARLY'])
+  interval?: 'MONTHLY' | 'YEARLY';
+
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @IsInt() @Min(0) @Max(2_000_000_000)
+  customPriceKobo?: number | null;
+
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @IsDateString()
+  contractStartAt?: string | null;
+
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @IsDateString()
+  contractEndAt?: string | null;
+
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @IsString() @MaxLength(2000)
+  contractNotes?: string | null;
+}
+
+export class TenantOwnerDto {
+  @IsString() @MinLength(2) @MaxLength(120)
+  fullName!: string;
+
+  @IsEmail() @MaxLength(254)
+  email!: string;
+
+  @IsString() @Matches(/^\+?[0-9 ()-]{7,20}$/, { message: 'phone must be a valid phone number' })
+  phone!: string;
+}
+
+export class CreateTenantDto {
+  @IsString() @MinLength(2) @MaxLength(120)
+  name!: string;
+
+  @IsOptional() @Matches(/^[a-z0-9](?:[a-z0-9-]{1,48}[a-z0-9])$/, { message: 'slug must be lower-case letters, digits and dashes' })
+  slug?: string;
+
+  @IsString() @MinLength(2) @MaxLength(80)
+  city!: string;
+
+  @IsString() @MinLength(2) @MaxLength(80)
+  state!: string;
+
+  @IsObject() @ValidateNested() @Type(() => TenantOwnerDto)
+  owner!: TenantOwnerDto;
+
+  @IsOptional() @IsString() @MaxLength(40)
+  planCode?: string;
+
+  @IsOptional() @IsIn(['MONTHLY', 'YEARLY'])
+  interval?: 'MONTHLY' | 'YEARLY';
+
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @IsInt() @Min(0) @Max(2_000_000_000)
+  customPriceKobo?: number | null;
+
+  @IsOptional() @IsDateString()
+  contractStartAt?: string;
+
+  @IsOptional() @IsDateString()
+  contractEndAt?: string;
+
+  @IsOptional() @IsString() @MaxLength(2000)
+  contractNotes?: string;
+
+  @IsOptional() @IsIn(['ACTIVE', 'TRIALING'])
+  status?: 'ACTIVE' | 'TRIALING';
+
+  @ValidateIf((o: CreateTenantDto) => o.status === 'TRIALING') @IsDateString()
+  trialEndsAt?: string;
+
+  @IsOptional() @IsString() @MinLength(2) @MaxLength(120)
+  propertyName?: string;
+}
+
+export class ExtendTrialDto {
+  @Type(() => Number) @IsInt() @Min(1) @Max(90)
+  days!: number;
+
+  @IsString() @MinLength(3) @MaxLength(500)
+  reason!: string;
+}
+
+export class ReasonDto {
+  @IsString() @MinLength(5) @MaxLength(500)
+  reason!: string;
+}
+
+export class ApplyCouponDto {
+  @IsString() @MinLength(3) @MaxLength(32)
+  code!: string;
 }
 
 export class SetFeatureOverrideDto {

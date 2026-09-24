@@ -1,3 +1,4 @@
+import { BrandingRegistry } from '../enterprise/white-label/branding.registry.js';
 import { Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { Prisma } from '../../generated/prisma/client.js';
@@ -66,8 +67,20 @@ export class NotificationService {
     private readonly jobs: JobsBridge,
     outbox: DevOutboxService,
     private readonly config: AppConfigService,
+    private readonly branding: BrandingRegistry,
   ) {
     this.providers = pickProviders(config, outbox);
+  }
+
+  /** M6 white-label: guest mail from the hotel's verified domain, SMS with its sender ID. */
+  private senderFor(tenantId: string | null, audience: string, fromName: string | null | undefined) {
+    const wl = audience === 'GUEST' ? this.branding.get(tenantId) : null;
+    if (!wl) return {};
+    const name = (wl.emailFromName ?? wl.brandName ?? fromName ?? '').replace(/["<>\r\n]/g, '').slice(0, 80);
+    return {
+      ...(wl.emailFrom && { fromAddress: name ? `"${name}" <${wl.emailFrom}>` : wl.emailFrom }),
+      ...(wl.smsSenderId && { smsSenderId: wl.smsSenderId }),
+    };
   }
 
   providerName(channel: NotificationChannel): string {
@@ -154,6 +167,7 @@ export class NotificationService {
     try {
       const wa = log.channel === 'WHATSAPP' && log.waTemplate && !(await this.inServiceWindow(log.recipient)) ? (log.waTemplate as unknown as WaTemplateRef) : null;
       const res = await provider.send({
+        ...this.senderFor(log.tenantId, log.audience, opts.fromName),
         to: log.recipient,
         subject: log.subject,
         text: log.bodyText,
@@ -219,7 +233,7 @@ export class NotificationService {
     );
     try {
       const wa = m.channel === 'WHATSAPP' && m.waTemplate && !(await this.inServiceWindow(m.to)) ? m.waTemplate : null;
-      const res = await provider.send({ to: m.to, subject: m.subject, text: m.text, html: m.html, template: m.template, meta: { ...m.meta, ...otpMeta(m), notificationId: logId }, waTemplate: wa });
+      const res = await provider.send({ ...this.senderFor(m.tenantId, m.audience ?? 'GUEST', m.fromName), to: m.to, subject: m.subject, text: m.text, html: m.html, template: m.template, meta: { ...m.meta, ...otpMeta(m), notificationId: logId }, waTemplate: wa });
       await this.db.systemFor(m.tenantId, (tx) =>
         tx.notificationLog.update({
           where: { id: logId },
