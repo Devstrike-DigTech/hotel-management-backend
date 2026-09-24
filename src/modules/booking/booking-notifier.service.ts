@@ -75,7 +75,11 @@ export class BookingNotifier {
       hours: v.hours,
       adults: v.adults,
       children: v.children,
-      lines: v.breakdown.lines.map((l) => ({ label: l.description, amountKobo: l.amountKobo })),
+      lines: [
+        ...v.breakdown.lines.map((l) => ({ label: l.description, amountKobo: l.amountKobo })),
+        // M7: extras and pickups booked with the stay.
+        ...(v.breakdown.addOns ?? []).map((a) => ({ label: a.description, amountKobo: a.amountKobo })),
+      ],
       taxes: v.breakdown.taxes.map((t) => ({ label: `${t.label} ${(t.rateBps / 100).toString()}%${t.inclusive ? ' (included)' : ''}`, amountKobo: t.amountKobo })),
       totalKobo: v.totalKobo,
       paidKobo: v.paidKobo,
@@ -86,6 +90,9 @@ export class BookingNotifier {
       manageUrl: this.views.tokens.manageUrl(v.code, this.views.manageToken(r)),
       calendarUrl: v.calendarUrl,
       specialRequests: v.specialRequests,
+      expectedArrivalTime: r.expectedArrivalTime,
+      answers: v.answers.filter((a) => a.key !== 'specialRequests' && a.key !== 'estimatedArrivalTime' && a.type !== 'PICKUP').map((a) => ({ label: a.label, value: a.display })),
+      transfers: v.transfers.filter((t) => t.status !== 'CANCELLED').map((t) => ({ label: t.directionLabel, whenHuman: humanDateTime(new Date(t.scheduledAt)), details: [t.pickupPointName, t.detailsSummary].filter(Boolean).join(', ') })),
     };
   }
 

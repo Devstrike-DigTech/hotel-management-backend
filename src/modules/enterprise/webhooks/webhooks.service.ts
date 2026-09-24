@@ -4,6 +4,7 @@ import type { Prisma, WebhookDelivery, WebhookEndpoint } from '../../../generate
 import type { AuthUser } from '../../../common/auth-types.js';
 import { randomString, SecretBox } from '../../../common/crypto/secret-box.js';
 import { onDomainEvent } from '../../../common/domain-events.js';
+import { stayPartnerExtras } from '../../../common/stay-hooks.js';
 import { AppException } from '../../../common/errors/app-exception.js';
 import { checkUrlSyntax, safeRequest, UnsafeUrlError, vetUrl } from '../../../common/net/safe-fetch.js';
 import { humanDateTime, lagosDate, nightsBetween } from '../../../common/time/lagos.js';
@@ -422,7 +423,9 @@ export class WebhooksService implements OnModuleInit, OnModuleDestroy {
       if (!id) return null;
       const r = await unscoped(() => tx.reservation.findFirst({ where: { id, tenantId }, include: reservationInclude }));
       if (!r) return null;
-      return { propertyId: r.propertyId, object: reservationObject(r) };
+      // M7: answers (non-sensitive), extras and transfers.
+      const m7 = (await stayPartnerExtras(tx, tenantId, [r.id], { includeSensitive: false })).get(r.id) ?? {};
+      return { propertyId: r.propertyId, object: { ...reservationObject(r), ...m7 } };
     }
     if (type === 'payment.received') {
       const entryId = typeof meta.entryId === 'string' ? meta.entryId : null;

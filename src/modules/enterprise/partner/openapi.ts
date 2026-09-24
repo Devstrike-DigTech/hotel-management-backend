@@ -58,6 +58,38 @@ const schemas: Record<string, Schema> = {
     rateKobo: kobo, nightlyRates: { type: 'array', items: obj({ date, rateKobo: kobo }) },
     guest: obj({ id: uuid, fullName: str() }), notes: nullable(str()), externalRef: nullable(str()),
     createdAt: dateTime, updatedAt: dateTime, cancelledAt: nullable(dateTime),
+    bookingForm: nullable(ref('BookingFormAnswers')),
+    extras: { type: 'array', items: ref('ExtraLine') },
+    transfers: { type: 'array', items: ref('Transfer') },
+  }),
+  BookingFormAnswers: obj({
+    formVersionId: uuid, version: int(), channel: str({ enum: ['MARKETPLACE', 'BOOKING_SITE', 'FRONT_DESK'] }),
+    answers: {
+      type: 'array',
+      description: 'Answers to the hotel booking form with field metadata. Sensitive answers only with the guests:read scope; files as name, type and size (never a URL).',
+      items: obj({ key: str(), label: str(), type: str(), section: str(), value: {}, display: str(), sensitive: bool }),
+    },
+  }),
+  ExtraLine: obj({
+    id: uuid, extraId: uuid, name: str(), category: str({ enum: ['TRANSPORT', 'FOOD', 'EARLY_LATE', 'CELEBRATION', 'WELLNESS', 'OTHER'] }),
+    pricing: str({ enum: ['PER_STAY', 'PER_NIGHT', 'PER_PERSON', 'PER_PERSON_PER_NIGHT', 'PER_UNIT'] }), quantity: int(), unitPriceKobo: kobo,
+    netKobo: kobo, taxKobo: kobo, totalKobo: kobo, status: str({ enum: ['ACTIVE', 'CANCELLED'] }), posted: bool, createdAt: dateTime,
+  }),
+  Transfer: obj({
+    id: uuid, reservationId: uuid, propertyId: uuid, direction: str({ enum: ['ARRIVAL', 'DEPARTURE'] }),
+    status: str({ enum: ['REQUESTED', 'CONFIRMED', 'DRIVER_ASSIGNED', 'EN_ROUTE', 'PICKED_UP', 'COMPLETED', 'NO_SHOW', 'CANCELLED'] }),
+    pickupPoint: obj({ id: uuid, name: str(), kind: str({ enum: ['AIRPORT', 'MOTOR_PARK', 'TRAIN_STATION', 'JETTY', 'OTHER'] }), city: str() }),
+    scheduledAt: dateTime, passengers: int(), vehicleName: str(), totalKobo: kobo, detailsSummary: str(),
+    driver: nullable(obj({ name: str(), phone: str(), vehiclePlate: str() })), updatedAt: dateTime,
+  }),
+  Extra: obj({
+    id: uuid, propertyId: uuid, name: str(), description: str(), category: str(), kind: str({ enum: ['STANDARD', 'EARLY_CHECK_IN', 'LATE_CHECK_OUT'] }),
+    pricing: str(), priceKobo: kobo, maxUnits: nullable(int()), taxable: bool, channels: { type: 'array', items: str() }, dailyCap: nullable(int()), leadTimeHours: int(), active: bool,
+  }),
+  PickupPoint: obj({
+    id: uuid, propertyId: uuid, name: str(), shortName: nullable(str()), kind: str({ enum: ['AIRPORT', 'MOTOR_PARK', 'TRAIN_STATION', 'JETTY', 'OTHER'] }), city: str(), address: nullable(str()),
+    priceKobo: kobo, dropOffPriceKobo: nullable(kobo), vehicleOptions: { type: 'array', items: obj({ id: str(), name: str(), maxPassengers: int(), priceKobo: nullable(kobo) }) },
+    leadTimeHours: int(), operatingHours: nullable(obj({ open: str(), close: str() })), notesForGuest: nullable(str()), taxable: bool, active: bool,
   }),
   Guest: obj({ id: uuid, fullName: str(), phone: nullable(str()), email: nullable(str()), nationality: nullable(str()), vip: bool, createdAt: dateTime }),
   Folio: obj({
@@ -158,6 +190,7 @@ export const PARTNER_TAGS = [
   { name: 'Folios', description: 'Charges and payments of a reservation.' },
   { name: 'Guests', description: 'Guest profiles (names and contact details only).' },
   { name: 'Housekeeping', description: 'Housekeeping tasks.' },
+  { name: 'Extras and pickups', description: 'Paid extras, pickup points and airport / motor-park / station transfers.' },
   { name: 'Reports', description: 'Daily occupancy, ADR, RevPAR and revenue.' },
   { name: 'Webhooks', description: 'Endpoints that receive signed event notifications.' },
 ];
@@ -187,6 +220,9 @@ const OPERATIONS: Record<string, { id: string; tag: string }> = {
   'get /housekeeping/tasks': { id: 'listHousekeepingTasks', tag: 'Housekeeping' },
   'post /housekeeping/tasks/{id}/complete': { id: 'completeHousekeepingTask', tag: 'Housekeeping' },
   'get /reports/daily': { id: 'getDailyReport', tag: 'Reports' },
+  'get /transfers': { id: 'listTransfers', tag: 'Extras and pickups' },
+  'get /extras': { id: 'listExtras', tag: 'Extras and pickups' },
+  'get /pickup-points': { id: 'listPickupPoints', tag: 'Extras and pickups' },
   'get /webhook-endpoints': { id: 'listWebhookEndpoints', tag: 'Webhooks' },
   'post /webhook-endpoints': { id: 'createWebhookEndpoint', tag: 'Webhooks' },
   'patch /webhook-endpoints/{id}': { id: 'updateWebhookEndpoint', tag: 'Webhooks' },
@@ -201,6 +237,7 @@ const EVENT_OBJECTS: Record<string, string> = {
   housekeeping_task: 'HousekeepingTask',
   review: 'ReviewPublished',
   guard_flag: 'GuardFlagRaised',
+  transfer: 'Transfer',
   ping: 'Ping',
 };
 
@@ -244,7 +281,7 @@ export function partnerOpenApi(serverUrl: string) {
         'Authenticate with an API key created in the hotel admin under Developers: `Authorization: Bearer hk_live_...`. ' +
         'Test keys (`hk_test_...`) validate writes fully and roll them back; responses carry `dryRun: true`.',
     },
-    'x-changelog': [{ date: PARTNER_API_VERSION, changes: ['First release: properties, room types, rooms, availability, rates, reservations, guests, folios, housekeeping, daily reports, webhook endpoints.', 'Tags per resource, stable operationIds, scopes per operation (security + x-scopes) and one schema per webhook event.'] }],
+    'x-changelog': [{ date: PARTNER_API_VERSION, changes: ['First release: properties, room types, rooms, availability, rates, reservations, guests, folios, housekeeping, daily reports, webhook endpoints.', 'Tags per resource, stable operationIds, scopes per operation (security + x-scopes) and one schema per webhook event.', 'Booking-form answers (with field metadata), paid extras and transfers on reservations; GET /transfers, /extras and /pickup-points; transfer.created and transfer.updated events.'] }],
     servers: [{ url: serverUrl }],
     components: {
       securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'hk_live_<prefix>_<secret>', description: 'API key (or header X-Api-Key)' } },
@@ -311,6 +348,13 @@ export function partnerOpenApi(serverUrl: string) {
           parameters: [q('propertyId', uuid, true), q('date', date), q('from', date), q('to', date)],
         }),
       },
+      '/transfers': {
+        get: op('Arrival pickups and departure drop-offs (by scheduled time)', 'reservations:read', { '200': many(ref('Transfer')) }, {
+          parameters: [q('propertyId', uuid), q('from', date), q('to', date), q('status', str()), ...pageParams],
+        }),
+      },
+      '/extras': { get: op('Paid extras', 'rates:read', { '200': many(ref('Extra')) }, { parameters: [q('propertyId', uuid), ...pageParams] }) },
+      '/pickup-points': { get: op('Pickup points (airports, motor parks, stations, jetties)', 'rates:read', { '200': many(ref('PickupPoint')) }, { parameters: [q('propertyId', uuid), ...pageParams] }) },
       '/webhook-endpoints': {
         get: op('Webhook endpoints', 'webhooks:manage', { '200': list(ref('WebhookEndpoint')) }),
         post: op('Create a webhook endpoint (the secret is returned once)', 'webhooks:manage', { '201': one(obj({ endpoint: ref('WebhookEndpoint'), secret: str() }), 'Created') }, {

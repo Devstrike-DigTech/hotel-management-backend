@@ -22,6 +22,7 @@ import { BookingViewService, stayInclude, type StayRow } from './booking-view.se
 import { CommissionService } from './commission.service.js';
 import { GuestJobsService } from './guest-jobs.service.js';
 import { RefundsService } from './refunds.service.js';
+import { AddOnsService } from '../extras/addons.service.js';
 
 export const ONLINE_ACTOR: Actor = { userId: null, fullName: 'Online payment' };
 const PAYSTACK_AUDIT = { kind: 'system' as const, name: 'Paystack' };
@@ -82,6 +83,7 @@ export class BookingPaymentsService {
     private readonly refunds: RefundsService,
     private readonly jobs: GuestJobsService,
     private readonly promos: PromosService,
+    private readonly addOns: AddOnsService,
   ) {}
 
   static newReference(): string {
@@ -224,6 +226,8 @@ export class BookingPaymentsService {
         folioEntryId: entry.id,
       },
     });
+    // M7: extras and pickups paid online are posted to the folio on confirmation.
+    await this.addOns.postPending(tx, tenantId, r.id, ONLINE_ACTOR);
     await this.commission.collect(tx, {
       tenantId,
       reservationId: r.id,

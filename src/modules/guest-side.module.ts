@@ -89,6 +89,7 @@ import { ReviewsService } from './reviews/reviews.service.js';
     HotelBookingService,
     PlatformMarketplaceService,
     ReviewsService,
+    BookingNotifier,
   ],
 })
 export class GuestSideModule {}

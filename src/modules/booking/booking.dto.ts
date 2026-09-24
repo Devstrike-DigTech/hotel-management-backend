@@ -1,6 +1,10 @@
 import { Transform, Type } from 'class-transformer';
+import { ExtraSelectionDto, TransferSelectionDto } from '../extras/extras.dto.js';
 import {
+  ArrayMaxSize,
   Equals,
+  IsArray,
+  IsObject,
   IsBoolean,
   IsEmail,
   IsIn,
@@ -67,6 +71,9 @@ export class QuoteDto {
   @IsOptional() @IsString() @MaxLength(30) promoCode?: string;
   /** M5: loyalty points to redeem (signed-in member). */
   @IsOptional() @IsInt() @Min(1) @Max(10_000_000) redeemPoints?: number;
+  /** M7: paid extras and pickups, priced in the quote (the token freezes them). */
+  @IsOptional() @IsArray() @ArrayMaxSize(20) @ValidateNested({ each: true }) @Type(() => ExtraSelectionDto) extras?: ExtraSelectionDto[];
+  @IsOptional() @IsArray() @ArrayMaxSize(2) @ValidateNested({ each: true }) @Type(() => TransferSelectionDto) transfers?: TransferSelectionDto[];
 }
 
 export class BookingGuestDto {
@@ -83,6 +90,8 @@ export class CreateBookingDto {
   @IsOptional() @IsBoolean() marketingOptIn?: boolean;
   @IsBoolean() @Equals(true, { message: 'Please accept the processing of your details to book' }) consent!: boolean;
   @IsOptional() @IsString() @MaxLength(500) callbackUrl?: string;
+  /** M7: answers to the hotel's booking form (validated against the version frozen in the quote). */
+  @IsOptional() @IsObject() answers?: Record<string, unknown>;
 }
 
 export class DevConfirmDto {

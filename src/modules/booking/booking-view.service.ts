@@ -20,6 +20,7 @@ import {
   type PriceBreakdown,
 } from './booking.logic.js';
 import { BookingTokens } from './booking-tokens.service.js';
+import { stayGuestExtras } from '../../common/stay-hooks.js';
 
 export const stayInclude = {
   property: true,
@@ -145,6 +146,8 @@ export class BookingViewService {
         }
       : { invoices: [], receipts: [] };
     const img = toImages(r.roomType.images)[0] ?? null;
+    // M7: booking-form answers, extras, pickups and the hotel's theme (registered by the site module).
+    const m7 = await stayGuestExtras(tx, r.tenantId, r.id);
     const holdActive = status === 'AWAITING_PAYMENT' && r.holdExpiresAt;
     const shareText = `${r.property.name}: booking ${r.code}, ${lagosDate(r.arrivalAt)} to ${lagosDate(r.departureAt)}. ${this.tokens.manageUrl(r.code, token)}`;
     return {
@@ -154,7 +157,7 @@ export class BookingViewService {
       channel: (r.source === 'BOOKING_SITE' ? 'BOOKING_SITE' : 'MARKETPLACE') as 'MARKETPLACE' | 'BOOKING_SITE',
       paymentMode: r.paymentMode ?? 'PAY_AT_HOTEL',
       guaranteeType: r.guaranteeType ?? 'NONE',
-      hotel: hotelMini(r.property),
+      hotel: { ...hotelMini(r.property), ...(m7.hotelTheme ? { theme: m7.hotelTheme } : {}) },
       roomType: { id: r.roomType.id, name: r.roomType.name, bedType: r.roomType.bedType, capacity: r.roomType.capacity, image: img },
       roomNumber: r.status === 'CHECKED_IN' || r.status === 'CHECKED_OUT' ? (r.room?.number ?? null) : null,
       stayType: r.stayType,
@@ -204,6 +207,9 @@ export class BookingViewService {
       documents: docs,
       review: this.reviewState(r, now),
       loyalty: await this.loyaltyBlock(tx, r, breakdown),
+      answers: (m7.answers ?? []) as { key: string; label: string; display: string; type: string; section: string }[],
+      extras: (m7.extras ?? []) as { description: string; totalKobo: number; status: string }[],
+      transfers: (m7.transfers ?? []) as { directionLabel: string; pickupPointName: string; scheduledAt: string; detailsSummary: string; status: string }[],
       createdAt: r.createdAt.toISOString(),
     };
   }

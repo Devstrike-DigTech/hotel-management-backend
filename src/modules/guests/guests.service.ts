@@ -13,6 +13,7 @@ import { DbService, type Tx } from '../../prisma/db.service.js';
 import { AuditService, userActor } from '../audit/audit.service.js';
 import { appError, Err, paginate } from '../ops/ops.helpers.js';
 import { OBJECT_STORAGE, type ObjectStorage } from '../storage/object-storage.js';
+import { stayGuestErased, stayGuestExport } from '../../common/stay-hooks.js';
 import type { GuestInputDto, GuestQueryDto, GuestUpdateDto, RegisterQueryDto } from './guests.dto.js';
 
 const ALLOWED_TYPES: Record<string, string> = {
@@ -366,6 +367,8 @@ export class GuestsService {
         ip,
       });
       const stats = await this.stats(tx, [id]);
+      // M7: booking-form answers (sensitive included, files as short-lived links), extras and transfers.
+      const m7 = await stayGuestExport(tx, user.tenantId, reservations.map((r) => r.id));
       return {
         exportedAt: new Date().toISOString(),
         guest: { ...this.toView(g, stats.get(id)), idNumber: this.decryptIdNumber(g) },
@@ -391,6 +394,7 @@ export class GuestsService {
           },
           checkedInAt: r.checkedInAt?.toISOString() ?? null,
           checkedOutAt: r.checkedOutAt?.toISOString() ?? null,
+          ...m7.get(r.id),
         })),
         folios: reservations
           .filter((r) => r.folio)
@@ -415,7 +419,7 @@ export class GuestsService {
 
   /** NDPA erasure: wipes PII, keeps the financial trail. Irreversible. */
   async anonymise(user: AuthUser, id: string, reason: string, ip?: string) {
-    const { view, imageKey } = await this.db.tenant(user.tenantId, async (tx) => {
+    const { view, imageKey, cleanup } = await this.db.tenant(user.tenantId, async (tx) => {
       const g = await this.load(tx, user.tenantId, id);
       if (g.anonymisedAt) throw this.anonymised();
       const active = await tx.reservation.count({ where: { guestId: id, status: 'CHECKED_IN' } });
@@ -446,6 +450,9 @@ export class GuestsService {
         where: { guestId: id },
         data: { regArrivingFrom: null, regGoingTo: null, regVehiclePlate: null, notes: '' },
       });
+      // M7: uploaded form files, transfer contact details, flight numbers and notes.
+      const resIds = (await tx.reservation.findMany({ where: { guestId: id }, select: { id: true } })).map((r) => r.id);
+      const cleanup = await stayGuestErased(tx, user.tenantId, resIds);
       await tx.folio.updateMany({ where: { guestId: id }, data: { name: 'Anonymised guest' } });
       await tx.folio.updateMany({ where: { reservation: { guestId: id } }, data: { name: 'Anonymised guest' } });
       await this.audit.record(tx, {
@@ -457,9 +464,10 @@ export class GuestsService {
         metadata: { reason },
         ip,
       });
-      return { view: this.toView(updated), imageKey: g.idImageKey };
+      return { view: this.toView(updated), imageKey: g.idImageKey, cleanup };
     });
     if (imageKey) await this.storage.delete(imageKey).catch(() => undefined);
+    await cleanup();
     return view;
   }
 

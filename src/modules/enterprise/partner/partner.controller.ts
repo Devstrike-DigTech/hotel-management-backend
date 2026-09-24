@@ -34,6 +34,9 @@ import { resolveNights } from '../../rates/rates.logic.js';
 import { RatesService } from '../../rates/rates.service.js';
 import { ReportsService } from '../../reports/reports.service.js';
 import { nightlyOf, reservationInclude, ReservationsService, type ResRow } from '../../reservations/reservations.service.js';
+import { stayPartnerExtras } from '../../../common/stay-hooks.js';
+import { AddOnsService } from '../../extras/addons.service.js';
+import { publicPickupPoint } from '../../site/theme.service.js';
 import { RoomsService } from '../../rooms/rooms.service.js';
 import { decodeCursor, encodeCursor } from '../api-keys/api-keys.logic.js';
 import { WebhooksService } from '../webhooks/webhooks.service.js';
@@ -83,6 +86,12 @@ export class GuestsQueryDto extends PageQueryDto {
 export class TasksQueryDto extends PropertyFilterDto {
   @IsOptional() @IsIn(['OPEN', 'IN_PROGRESS', 'DONE', 'ASSIGNED', 'INSPECTED', 'REJECTED', 'SKIPPED']) status?: string;
   @IsOptional() @Matches(DATE) date?: string;
+}
+
+export class TransfersQueryDto extends PropertyFilterDto {
+  @IsOptional() @Matches(DATE) from?: string;
+  @IsOptional() @Matches(DATE) to?: string;
+  @IsOptional() @IsIn(['REQUESTED', 'CONFIRMED', 'DRIVER_ASSIGNED', 'EN_ROUTE', 'PICKED_UP', 'COMPLETED', 'NO_SHOW', 'CANCELLED']) status?: string;
 }
 
 export class DailyQueryDto {
@@ -201,6 +210,7 @@ export class PartnerController {
   constructor(
     private readonly db: DbService,
     private readonly reservations: ReservationsService,
+    private readonly addOns: AddOnsService,
     private readonly rooms: RoomsService,
     private readonly rates: RatesService,
     private readonly housekeeping: HousekeepingService,
@@ -439,8 +449,12 @@ export class PartnerController {
 
   // ---- reservations --------------------------------------------------------------------
 
-  private mapRows(rows: ResRow[]): Promise<ReturnType<typeof pReservation>[]> {
-    return Promise.resolve(rows.map((r) => pReservation(this.reservations.listItem(r, 0) as unknown as ReservationLike, nightlyOf(r))));
+  private async mapRows(p: PartnerContext, rows: ResRow[]) {
+    // M7: booking-form answers (sensitive ones with guests:read), extras and pickups.
+    const extra = rows.length
+      ? await this.scoped(p, undefined, (tx) => stayPartnerExtras(tx, p.tenantId, rows.map((r) => r.id), { includeSensitive: p.scopes.includes('guests:read') }))
+      : new Map<string, Record<string, unknown>>();
+    return rows.map((r) => ({ ...pReservation(this.reservations.listItem(r, 0) as unknown as ReservationLike, nightlyOf(r)), ...extra.get(r.id) }));
   }
 
   @Get('reservations')
@@ -468,7 +482,7 @@ export class PartnerController {
     const more = rows.length > limit;
     const items = more ? rows.slice(0, limit) : rows;
     const last = items[items.length - 1];
-    return { data: await this.mapRows(items), pagination: { nextCursor: more && last ? encodeCursor(last.createdAt, last.id) : null, limit } };
+    return { data: await this.mapRows(p, items), pagination: { nextCursor: more && last ? encodeCursor(last.createdAt, last.id) : null, limit } };
   }
 
   private async loadReservation(p: PartnerContext, idOrCode: string): Promise<ResRow> {
@@ -483,7 +497,7 @@ export class PartnerController {
   @PartnerScope('reservations:read')
   async reservation(@Req() req: PartnerRequest, @Param('id') id: string) {
     const r = await this.loadReservation(this.ctx(req).p, id);
-    return (await this.mapRows([r]))[0];
+    return (await this.mapRows(this.ctx(req).p, [r]))[0];
   }
 
   @Post('reservations')
@@ -536,7 +550,7 @@ export class PartnerController {
     await runInProperty(p.tenantId, r.propertyId, () =>
       this.reservations.cancel({ ...u, propertyId: r.propertyId }, r.id, { reason: dto.reason && dto.reason.length >= 3 ? dto.reason : `Cancelled through the API (${p.name})` }, req.ip),
     );
-    return (await this.mapRows([await this.loadReservation(p, r.id)]))[0];
+    return (await this.mapRows(p, [await this.loadReservation(p, r.id)]))[0];
   }
 
   @Get('reservations/:id/folio')
@@ -608,6 +622,59 @@ export class PartnerController {
   }
 
   // ---- housekeeping ------------------------------------------------------------------------
+
+  // ---- M7: transfers, extras, pickup points ---------------------------------------------
+
+  @Get('transfers')
+  @PartnerScope('reservations:read')
+  async transfersList(@Req() req: PartnerRequest, @Query() q: TransfersQueryDto) {
+    const { p } = this.ctx(req);
+    if (q.propertyId) await this.assertProperty(p, q.propertyId);
+    const limit = limitOf(q);
+    return this.scoped(p, q.propertyId, async (tx) => {
+      const rows = await tx.transfer.findMany({
+        where: {
+          tenantId: p.tenantId,
+          ...(q.status && { status: q.status as 'REQUESTED' }),
+          ...((q.from || q.to) && { scheduledAt: { ...(q.from && { gte: lagosStartOfDay(q.from) }), ...(q.to && { lt: lagosStartOfDay(addDays(q.to, 1)) }) } }),
+          ...cursorWhere(q.cursor),
+        },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        take: limit + 1,
+      });
+      const more = rows.length > limit;
+      const items = more ? rows.slice(0, limit) : rows;
+      const data = [];
+      for (const t of items) data.push(await this.addOns.partnerTransfer(tx, t));
+      const last = items[items.length - 1];
+      return { data, pagination: { nextCursor: more && last ? encodeCursor(last.createdAt, last.id) : null, limit } };
+    });
+  }
+
+  @Get('extras')
+  @PartnerScope('rates:read')
+  async extrasList(@Req() req: PartnerRequest, @Query() q: PropertyFilterDto) {
+    const { p } = this.ctx(req);
+    if (q.propertyId) await this.assertProperty(p, q.propertyId);
+    const rows = await this.scoped(p, q.propertyId, (tx) =>
+      tx.extra.findMany({ where: { tenantId: p.tenantId, ...cursorWhere(q.cursor) }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], take: limitOf(q) + 1 }),
+    );
+    return page(rows, limitOf(q), (e) => ({
+      id: e.id, propertyId: e.propertyId, name: e.name, description: e.description, category: e.category, kind: e.kind, pricing: e.pricing,
+      priceKobo: e.priceKobo, maxUnits: e.maxUnits, taxable: e.taxable, channels: e.channels, dailyCap: e.dailyCap, leadTimeHours: e.leadTimeHours, active: e.active,
+    }));
+  }
+
+  @Get('pickup-points')
+  @PartnerScope('rates:read')
+  async pickupPointsList(@Req() req: PartnerRequest, @Query() q: PropertyFilterDto) {
+    const { p } = this.ctx(req);
+    if (q.propertyId) await this.assertProperty(p, q.propertyId);
+    const rows = await this.scoped(p, q.propertyId, (tx) =>
+      tx.pickupPoint.findMany({ where: { tenantId: p.tenantId, ...cursorWhere(q.cursor) }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], take: limitOf(q) + 1 }),
+    );
+    return page(rows, limitOf(q), (x) => ({ propertyId: x.propertyId, active: x.active, ...publicPickupPoint(x) }));
+  }
 
   @Get('housekeeping/tasks')
   @PartnerScope('housekeeping:read')

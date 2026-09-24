@@ -40,6 +40,10 @@ export interface QuotePayload {
   lm?: string;
   ln?: string;
   ld?: number[];
+  /** M7: booking form version (published at quote time), extras [id, quantity, amount], transfers [direction, point, vehicle, passengers, scheduledAt, amount]. */
+  fv?: string;
+  ex?: [string, number, number][];
+  tr?: ['ARRIVAL' | 'DEPARTURE', string, string | null, number, string, number][];
 }
 
 interface TripPayload {

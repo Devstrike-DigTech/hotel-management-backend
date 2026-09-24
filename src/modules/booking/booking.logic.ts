@@ -50,6 +50,12 @@ export interface PriceBreakdown {
   discountLines: { date: string; description: string; amountKobo: number }[];
   /** M5: the part of `discountKobo` paid with loyalty points (pre-tax). */
   loyaltyDiscountKobo?: number;
+  /** M7: the room part (= totalKobo without extras and pickups). */
+  roomTotalKobo?: number;
+  /** M7: paid extras and pickups, each taxed like the folio posts it. */
+  addOns?: { kind: 'EXTRA' | 'TRANSFER'; refId: string; description: string; amountKobo: number; netKobo: number; taxKobo: number; totalKobo: number }[];
+  addOnsSubtotalKobo?: number;
+  addOnsTaxKobo?: number;
 }
 
 export interface PricedNight {

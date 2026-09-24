@@ -1,4 +1,5 @@
 import { Type } from 'class-transformer';
+import { DeskTransferDto, ExtraSelectionDto } from '../extras/extras.dto.js';
 import {
   ArrayMaxSize,
   IsArray,
@@ -6,6 +7,7 @@ import {
   IsIn,
   IsInt,
   IsISO8601,
+  IsObject,
   IsOptional,
   IsString,
   IsUUID,
@@ -54,6 +56,10 @@ export class CreateReservationDto {
   @IsOptional() @IsArray() @ArrayMaxSize(60) @ValidateNested({ each: true }) @Type(() => NightPriceDto) nightlyRates?: NightPriceDto[];
   /** M6: partner reference (partner API). */
   @IsOptional() @IsString() @MaxLength(120) externalRef?: string;
+  /** M7: booking form answers (FRONT_DESK channel), paid extras and pickups (posted at check-in). */
+  @IsOptional() @IsObject() formAnswers?: Record<string, unknown>;
+  @IsOptional() @IsArray() @ArrayMaxSize(20) @ValidateNested({ each: true }) @Type(() => ExtraSelectionDto) extras?: ExtraSelectionDto[];
+  @IsOptional() @IsArray() @ArrayMaxSize(2) @ValidateNested({ each: true }) @Type(() => DeskTransferDto) transfers?: DeskTransferDto[];
 }
 
 export class UpdateReservationDto {

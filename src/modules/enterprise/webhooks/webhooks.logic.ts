@@ -13,6 +13,8 @@ export const WEBHOOK_EVENTS = [
   { type: 'housekeeping.task_completed', description: 'A housekeeping task was marked done', object: 'housekeeping_task' },
   { type: 'review.published', description: 'A guest review was published', object: 'review' },
   { type: 'guard.flag_raised', description: 'Revenue Guard raised a flag', object: 'guard_flag' },
+  { type: 'transfer.created', description: 'An arrival pickup or departure drop-off was booked', object: 'transfer' },
+  { type: 'transfer.updated', description: 'A transfer changed: confirmed, driver assigned, on the way, completed, delayed or cancelled', object: 'transfer' },
   { type: 'webhook.ping', description: 'Test event sent from the settings page', object: 'ping' },
 ] as const;
 
@@ -37,6 +39,10 @@ export const AUDIT_EVENT_MAP: Record<string, string> = {
   'housekeeping.task_done': 'housekeeping.task_completed',
   'review.published': 'review.published',
   'review.submitted': 'review.published',
+  // M7: extras and answers changed at the desk.
+  'reservation.extra_added': 'reservation.updated',
+  'reservation.extra_removed': 'reservation.updated',
+  'reservation.form_answers_updated': 'reservation.updated',
 };
 
 /** Seconds after the FIRST attempt at which attempts 2..8 run. */

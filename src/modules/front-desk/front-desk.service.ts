@@ -7,6 +7,10 @@ import { lagosDate, lagosStartOfDay, addDays } from '../../common/time/lagos.js'
 import { DbService, type Tx } from '../../prisma/db.service.js';
 import { EntitlementsService } from '../entitlements/entitlements.service.js';
 import { LedgerService } from '../folios/ledger.service.js';
+import { can } from '../../common/permissions/can.js';
+import { TransfersService } from '../extras/transfers.service.js';
+import { primaryProperty } from '../ops/ops.helpers.js';
+import { SetupService } from '../setup/setup.service.js';
 import { registrationComplete } from '../reservations/reservations.service.js';
 import { ShiftsService } from '../shifts/shifts.service.js';
 
@@ -22,6 +26,8 @@ export class FrontDeskService {
     private readonly shifts: ShiftsService,
     private readonly entitlements: EntitlementsService,
     private readonly hotelBooking: HotelBookingService,
+    private readonly transfers: TransfersService,
+    private readonly setup: SetupService,
   ) {}
 
   async todayTx(tx: Tx, user: AuthUser, now = new Date()) {
@@ -106,6 +112,18 @@ export class FrontDeskService {
       openFlags,
       myShift: await this.shifts.currentTx(tx, user),
       online: await this.hotelBooking.onlineCountsTx(tx, user.tenantId, now),
+      ...(await this.m7Tx(tx, user, ent.features)),
+    };
+  }
+
+  /** M7: today's transfers (with transfers.view and paid extras) and the setup wizard card (with settings.manage). */
+  async m7Tx(tx: Tx, user: AuthUser, features: string[]) {
+    const t = features.includes('paid_extras') && can(user, 'transfers.view') ? await this.transfers.todayTx(tx, user.tenantId) : null;
+    const setup = can(user, 'settings.manage') ? await this.setup.summaryTx(tx, user.tenantId, (await primaryProperty(tx, user.tenantId)).id) : null;
+    return {
+      transfers: t ? { arrivals: t.arrivals, departures: t.departures, unassigned: t.unassigned, next: t.next } : null,
+      transfersToday: t,
+      setup,
     };
   }
 
@@ -121,6 +139,8 @@ export class FrontDeskService {
       openFlags: t.openFlags,
       myShift: t.myShift,
       online: t.online,
+      setup: t.setup,
+      transfersToday: t.transfersToday,
     };
   }
 }

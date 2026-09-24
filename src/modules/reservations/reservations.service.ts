@@ -1,3 +1,9 @@
+import { AddOnsService, stayInfoOf } from '../extras/addons.service.js';
+import { BookingFormService } from '../booking-form/booking-form.service.js';
+import { FormUploadsService } from '../booking-form/form-uploads.service.js';
+import { issuesError } from '../booking-form/form.errors.js';
+import { componentsFrom } from '../folios/tax.logic.js';
+import { TaxSettingsService } from '../folios/tax-settings.service.js';
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { assertCan } from '../../common/permissions/can.js';
 import { Prisma as PrismaNS, type Guest, type Prisma, type Reservation, type Room, type RoomType } from '../../generated/prisma/client.js';
@@ -124,6 +130,10 @@ export class ReservationsService {
     private readonly rates: RatesService,
     private readonly promos: PromosService,
     private readonly corporate: CorporateService,
+    private readonly addOns: AddOnsService,
+    private readonly forms: BookingFormService,
+    private readonly uploads: FormUploadsService,
+    private readonly taxes: TaxSettingsService,
   ) {}
 
   private readonly logger = new Logger(ReservationsService.name);
@@ -171,7 +181,17 @@ export class ReservationsService {
 
   async listItems(tx: Tx, rows: ResRow[]) {
     const balances = await this.ledger.balances(tx, rows.map((r) => r.folio?.id).filter((x): x is string => !!x));
-    return rows.map((r) => this.listItem(r, r.folio ? (balances.get(r.folio.id) ?? 0) : 0));
+    // M7: a compact add-ons summary per row.
+    const lines = rows.length ? await this.addOns.linesOf(tx, rows[0].tenantId, rows.map((r) => r.id)) : null;
+    const today = lagosDate();
+    return rows.map((r) => {
+      const ex = (lines?.extras.get(r.id) ?? []).filter((e) => e.status === 'ACTIVE');
+      const tr = (lines?.transfers.get(r.id) ?? []).filter((t) => t.status !== 'CANCELLED');
+      return {
+        ...this.listItem(r, r.folio ? (balances.get(r.folio.id) ?? 0) : 0),
+        addOns: { extras: ex.length, transfers: tr.length, pickupToday: tr.some((t) => lagosDate(t.scheduledAt) === today) },
+      };
+    });
   }
 
   /** M5: a guest's latest stays in one property (guest inbox context). */
@@ -287,7 +307,8 @@ export class ReservationsService {
       const g = await this.guests.load(tx, user.tenantId, guestId);
       const stats = await this.guests.stats(tx, [guestId]);
       const rows = await tx.reservation.findMany({ where: { guestId }, include, orderBy: { arrivalAt: 'desc' }, take: 20 });
-      return { ...this.guests.toView(g, stats.get(guestId)), stays: await this.listItems(tx, rows) };
+      // M7: non-sensitive booking-form answers from the latest stay that has them.
+      return { ...this.guests.toView(g, stats.get(guestId)), stays: await this.listItems(tx, rows), latestAnswers: await this.forms.latestAnswers(tx, user.tenantId, guestId) };
     });
   }
 
@@ -429,6 +450,8 @@ export class ReservationsService {
         await tx.folio.create({
           data: { tenantId: user.tenantId, propertyId: roomType.propertyId, kind: 'RESERVATION', reservationId: r.id, guestId: guest.id, name: guest.fullName, createdById: user.userId },
         });
+        // M7: booking form answers (FRONT_DESK), extras and pickups (posted at check-in).
+        if (dto.formAnswers || dto.extras?.length || dto.transfers?.length) await this.deskAddOns(tx, user, r, guest, dto);
         await this.audit.record(tx, {
           tenantId: user.tenantId,
           actor: userActor(user),
@@ -454,6 +477,74 @@ export class ReservationsService {
         return { ...(await this.detail(tx, user.tenantId, r.id)), warnings: pricing?.warnings ?? [] };
       }),
     );
+  }
+
+  /** M7: validates and stores the desk's form answers, extras and pickups for a new reservation. */
+  private async deskAddOns(tx: Tx, user: AuthUser, r: Reservation, guest: Guest, dto: CreateReservationDto) {
+    const comps = componentsFrom(await this.taxes.forProperty(tx, user.tenantId, r.propertyId));
+    const stay = stayInfoOf(r);
+    const priced = await this.addOns.price(tx, user.tenantId, r.propertyId, {
+      extras: dto.extras,
+      transfers: dto.transfers,
+      channel: 'FRONT_DESK',
+      stay,
+      roomTypeId: r.roomTypeId,
+      comps,
+      enforceLeadTime: false,
+      pickupAllowed: true,
+      lock: true,
+    });
+    const answers = dto.formAnswers ? await this.forms.validateForBooking(tx, {
+      tenantId: user.tenantId,
+      propertyId: r.propertyId,
+      versionId: null,
+      channel: 'FRONT_DESK',
+      answers: dto.formAnswers,
+      paymentMode: null,
+      adults: r.adults,
+      children: r.children,
+      guest: null,
+      consent: true,
+      checkGuest: false,
+      transfers: priced.transfers,
+      // The pickup block is optional at the desk: details can come with each transfer instead.
+      matchQuote: Object.values(dto.formAnswers).some((v) => v && typeof v === 'object' && (v as { wanted?: unknown }).wanted === true),
+      stay,
+      enforceLeadTime: false,
+      hotelPhone: null,
+    }) : null;
+    const issues = [...priced.issues, ...(answers?.issues ?? [])];
+    if (issues.length) throw issuesError(issues);
+    if (answers) {
+      await tx.reservation.update({
+        where: { id: r.id },
+        data: {
+          formVersionId: answers.version?.id ?? null,
+          formAnswers: answers.stored as Prisma.InputJsonValue,
+          formChannel: 'FRONT_DESK',
+          formSubmittedAt: new Date(),
+          ...(typeof answers.stored.estimatedArrivalTime === 'string' && { expectedArrivalTime: answers.stored.estimatedArrivalTime }),
+          ...(typeof answers.stored.specialRequests === 'string' && { specialRequests: answers.stored.specialRequests }),
+        },
+      });
+      await this.uploads.attach(tx, user.tenantId, r.id, answers.uploadIds);
+      await this.forms.applyToGuest(tx, user.tenantId, guest.id, answers.stored);
+    }
+    await this.addOns.createLines(tx, {
+      tenantId: user.tenantId,
+      propertyId: r.propertyId,
+      reservationId: r.id,
+      source: 'FRONT_DESK',
+      extras: priced.extras,
+      transfers: priced.transfers.map((t, i) => {
+        const d = answers?.transferDetails.get(t.direction);
+        const input = dto.transfers?.[i];
+        return { ...t, details: d?.details ?? input?.details ?? {}, luggage: d?.luggage ?? input?.luggage ?? null, contactPhone: d?.contactPhone ?? input?.contactPhone ?? null, notes: input?.notes ?? null, ...(d && { scheduledAt: d.scheduledAt }) };
+      }),
+      comps,
+      actor: actorOf(user),
+      guestPhone: guest.phone,
+    });
   }
 
   private rateFor(rt: RoomType, stayType: 'NIGHTLY' | 'DAY_USE', override?: number): number {

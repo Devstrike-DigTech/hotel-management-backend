@@ -24,6 +24,14 @@ export interface StayHooks {
   /** After the 24-hour pre-arrival message went out. */
   afterPreArrival?(tenantId: string, reservationId: string): Promise<void>;
   detailTx?(tx: Tx, tenantId: string, reservationId: string): Promise<Record<string, unknown>>;
+  /** M7: fields added to the guest-facing BookingView (trip page, confirmation). */
+  guestViewTx?(tx: Tx, tenantId: string, reservationId: string): Promise<Record<string, unknown>>;
+  /** M7: fields added to partner API reservations and webhook payloads, per reservation id. */
+  partnerTx?(tx: Tx, tenantId: string, reservationIds: string[], opts: { includeSensitive: boolean }): Promise<Map<string, Record<string, unknown>>>;
+  /** M7: fields added to each reservation of an NDPA guest export (everything held, sensitive included). */
+  guestExportTx?(tx: Tx, tenantId: string, reservationIds: string[]): Promise<Map<string, Record<string, unknown>>>;
+  /** M7: NDPA erasure of the guest's reservations; the returned function runs after the commit (file deletes). */
+  guestErasedTx?(tx: Tx, tenantId: string, reservationIds: string[]): Promise<(() => Promise<void>) | void>;
 }
 
 const registry = new Map<string, StayHooks>();
@@ -72,4 +80,45 @@ export async function stayDetailExtras(tx: Tx, tenantId: string, reservationId: 
     if (h.detailTx) Object.assign(out, await h.detailTx(tx, tenantId, reservationId));
   }
   return out;
+}
+
+export async function stayGuestExtras(tx: Tx, tenantId: string, reservationId: string): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  for (const h of registry.values()) {
+    if (h.guestViewTx) Object.assign(out, await h.guestViewTx(tx, tenantId, reservationId));
+  }
+  return out;
+}
+
+export async function stayPartnerExtras(tx: Tx, tenantId: string, reservationIds: string[], opts: { includeSensitive: boolean }): Promise<Map<string, Record<string, unknown>>> {
+  const out = new Map<string, Record<string, unknown>>(reservationIds.map((id) => [id, {}]));
+  for (const h of registry.values()) {
+    if (!h.partnerTx || !reservationIds.length) continue;
+    const m = await h.partnerTx(tx, tenantId, reservationIds, opts);
+    for (const [id, v] of m) Object.assign(out.get(id) ?? {}, v);
+  }
+  return out;
+}
+
+export async function stayGuestExport(tx: Tx, tenantId: string, reservationIds: string[]): Promise<Map<string, Record<string, unknown>>> {
+  const out = new Map<string, Record<string, unknown>>(reservationIds.map((id) => [id, {}]));
+  for (const h of registry.values()) {
+    if (!h.guestExportTx || !reservationIds.length) continue;
+    const m = await h.guestExportTx(tx, tenantId, reservationIds);
+    for (const [id, v] of m) Object.assign(out.get(id) ?? {}, v);
+  }
+  return out;
+}
+
+/** Runs every erasure hook in the transaction; returns the after-commit work. */
+export async function stayGuestErased(tx: Tx, tenantId: string, reservationIds: string[]): Promise<() => Promise<void>> {
+  const after: (() => Promise<void>)[] = [];
+  for (const h of registry.values()) {
+    if (!h.guestErasedTx || !reservationIds.length) continue;
+    const fn = await h.guestErasedTx(tx, tenantId, reservationIds);
+    if (fn) after.push(fn);
+  }
+  return async () => {
+    for (const fn of after) await fn().catch((e: unknown) => logger.error(`guest erasure cleanup failed: ${(e as Error).message}`));
+  };
 }

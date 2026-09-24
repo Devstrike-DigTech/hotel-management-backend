@@ -49,6 +49,11 @@ import { BookingTokens } from './booking-tokens.service.js';
 import { BookingViewService, stayInclude } from './booking-view.service.js';
 import { CommissionService } from './commission.service.js';
 import { GuestJobsService } from './guest-jobs.service.js';
+import { BookingFormService } from '../booking-form/booking-form.service.js';
+import { issuesError } from '../booking-form/form.errors.js';
+import { AddOnsService } from '../extras/addons.service.js';
+import { withAddOns, type StayInfo } from '../extras/extras.logic.js';
+import { FormUploadsService } from '../booking-form/form-uploads.service.js';
 
 export interface StayWindow {
   stayType: 'NIGHTLY' | 'DAY_USE';
@@ -105,7 +110,23 @@ export class PublicBookingService {
     private readonly pricing: PricingService,
     private readonly promos: PromosService,
     private readonly loyalty: LoyaltyService,
+    private readonly forms: BookingFormService,
+    private readonly addOns: AddOnsService,
+    private readonly uploads: FormUploadsService,
   ) {}
+
+  /** M7: stay facts for extras and pickups. */
+  stayInfo(w: StayWindow, adults: number, children: number): StayInfo {
+    return {
+      arrivalDate: w.day,
+      departureDate: w.stayType === 'NIGHTLY' ? w.checkOut! : w.day,
+      arrivalAt: w.arrivalAt,
+      nights: w.nights ?? 0,
+      adults,
+      children,
+      dayUse: w.stayType === 'DAY_USE',
+    };
+  }
 
   // ---------------------------------------------------------------------------
   // Helpers
@@ -517,6 +538,22 @@ export class PublicBookingService {
         const l = await this.loyalty.quoteLoyalty(tx, ref.tenantId, guest, [{ rateKobo: breakdown.roomSubtotalKobo }]);
         loyalty = l?.block ?? null;
       }
+      // M7: the published booking form (frozen in the token) and paid extras / pickups priced like the folio posts them.
+      const form = await this.forms.publishedVersionTx(tx, ref.tenantId, p.id);
+      const formFields = this.forms.fieldsOf(form);
+      const pickupAllowed = formFields.some((f) => f.type === 'PICKUP' && f.required !== 'HIDDEN' && f.channels.includes(dto.channel));
+      const addOns = await this.addOns.price(tx, ref.tenantId, p.id, {
+        extras: dto.extras,
+        transfers: dto.transfers,
+        channel: dto.channel,
+        stay: this.stayInfo(w, adults, children),
+        roomTypeId: rt.id,
+        comps,
+        enforceLeadTime: true,
+        pickupAllowed,
+      });
+      if (addOns.issues.length) throw issuesError(addOns.issues);
+      breakdown = withAddOns(breakdown, addOns.lines);
       const policy = effectivePolicy(p, priced?.plan.cancelPolicy ?? null);
       const signed = this.tokens.signQuote({
         tid: ref.tenantId,
@@ -541,6 +578,9 @@ export class PublicBookingService {
           cp: priced.plan.cancelPolicy,
         }),
         ...(pointsPerNight && loyalty && { lp: loyalty.pointsRedeemed, lm: loyaltyMeta.memberId!, ln: loyaltyMeta.programme!, ld: pointsPerNight }),
+        fv: form.id,
+        ...(addOns.extras.length && { ex: addOns.extras.map((e) => [e.extraId, e.quantity, e.amountKobo] as [string, number, number]) }),
+        ...(addOns.transfers.length && { tr: addOns.transfers.map((t) => [t.direction, t.pickupPointId, t.vehicleOptionId, t.passengers, t.scheduledAt, t.amountKobo] as ['ARRIVAL' | 'DEPARTURE', string, string | null, number, string, number]) }),
       });
       const payOnline = p.payoutReady;
       const payAtHotel = p.allowPayAtHotel && !policy.nonRefundable;
@@ -602,6 +642,10 @@ export class PublicBookingService {
         holdMinutes: HOLD_MINUTES,
         quoteTtlMinutes: QUOTE_TTL_MINUTES,
         available,
+        // M7
+        formVersionId: form.id,
+        extras: addOns.extras,
+        transfers: addOns.transfers,
       };
     }));
   }
@@ -709,7 +753,45 @@ export class PublicBookingService {
             : q.st === 'NIGHTLY'
               ? priceStay({ stayType: 'NIGHTLY', rateKobo: q.rate, roomTypeName: rt.name, components: q.tax, arrivalDate: q.day, nights: q.u })
               : priceStay({ stayType: 'DAY_USE', rateKobo: q.rate, roomTypeName: rt.name, components: q.tax, date: q.day, hours: q.u });
-        if (breakdown.totalKobo !== q.total) throw appError(HttpStatus.BAD_REQUEST, 'QUOTE_INVALID', 'This price quote is not valid.');
+        // M7: extras and pickups at the prices frozen in the quote (caps, timing and lead times checked again).
+        const stay = { arrivalDate: q.day, departureDate: q.st === 'NIGHTLY' ? lagosDate(departureAt) : q.day, arrivalAt, nights: q.st === 'NIGHTLY' ? q.u : 0, adults: q.ad, children: q.cd, dayUse: q.st === 'DAY_USE' };
+        const formVersion = q.fv ? await tx.bookingFormVersion.findFirst({ where: { id: q.fv, tenantId: q.tid, propertyId: p.id } }) : null;
+        const addOns = await this.addOns.price(tx, q.tid, p.id, {
+          extras: (q.ex ?? []).map(([extraId, quantity]) => ({ extraId, quantity })),
+          transfers: (q.tr ?? []).map(([direction, pickupPointId, vehicleOptionId, passengers, scheduledAt]) => ({ direction, pickupPointId, vehicleOptionId, passengers, scheduledAt })),
+          channel: q.ch,
+          stay,
+          roomTypeId: rt.id,
+          comps: q.tax,
+          enforceLeadTime: false,
+          pickupAllowed: true,
+          lock: true,
+          frozenExtraAmounts: (q.ex ?? []).map((e) => e[2]),
+          frozenTransferAmounts: (q.tr ?? []).map((t) => t[5]),
+        });
+        const withExtras = withAddOns(breakdown, addOns.lines);
+        if (!addOns.issues.length && withExtras.totalKobo !== q.total) throw appError(HttpStatus.BAD_REQUEST, 'QUOTE_INVALID', 'This price quote is not valid.');
+        // M7: the booking form answers, validated against the version the guest saw.
+        const answersCheck = await this.forms.validateForBooking(tx, {
+          tenantId: q.tid,
+          propertyId: p.id,
+          versionId: formVersion?.id ?? null,
+          channel: q.ch,
+          answers: dto.answers,
+          paymentMode: dto.paymentMode,
+          adults: q.ad,
+          children: q.cd,
+          guest: { fullName, phone, email },
+          consent: dto.consent,
+          checkGuest: true,
+          transfers: addOns.transfers,
+          matchQuote: true,
+          stay,
+          enforceLeadTime: true,
+          hotelPhone: p.phone || null,
+        });
+        const allIssues = [...addOns.issues, ...answersCheck.issues];
+        if (allIssues.length) throw issuesError(allIssues);
         // The promo's usage limits are checked again now that the guest is known.
         if (q.pc && q.pk) {
           const check = await this.promos.check(tx, q.tid, {
@@ -725,7 +807,7 @@ export class PublicBookingService {
           if (check.reason && check.reason !== 'EXPIRED' && check.reason !== 'NOT_STARTED') throw this.promos.toError(check, q.pk);
         }
         const bps = effectiveCommissionBps(q.ch, p.tenant.subscription.plan.commissionBps);
-        const commissionKobo = commissionFor(breakdown.totalKobo, bps);
+        const commissionKobo = commissionFor(withExtras.totalKobo, bps);
         const online = dto.paymentMode === 'ONLINE';
         const holdExpiresAt = online ? new Date(Date.now() + HOLD_MINUTES * 60_000) : null;
         const code = await this.newCode(tx, q.tid, p.name);
@@ -749,19 +831,41 @@ export class PublicBookingService {
             promoCodeId: q.pc ?? null,
             nightlyRates: (frozen ?? []) as unknown as Prisma.InputJsonValue,
             ...(q.cp && { cancelPolicy: q.cp as unknown as Prisma.InputJsonValue }),
-            notes: dto.specialRequests ? `Guest request: ${dto.specialRequests}` : '',
+            notes: (dto.specialRequests ?? (answersCheck.stored.specialRequests as string | undefined)) ? `Guest request: ${dto.specialRequests ?? (answersCheck.stored.specialRequests as string)}` : '',
             paymentMode: dto.paymentMode,
             guaranteeType: 'NONE',
             holdExpiresAt,
             commissionBps: bps,
-            quotedTotalKobo: breakdown.totalKobo,
+            quotedTotalKobo: withExtras.totalKobo,
             quoteRef: q.n,
-            quote: breakdown as unknown as Prisma.InputJsonValue,
+            quote: withExtras as unknown as Prisma.InputJsonValue,
             contactPhone: phone,
             contactEmail: email,
-            specialRequests: dto.specialRequests ?? '',
+            specialRequests: dto.specialRequests ?? (typeof answersCheck.stored.specialRequests === 'string' ? answersCheck.stored.specialRequests : ''),
             guestAccountId: account?.id ?? null,
+            // M7
+            formVersionId: answersCheck.version?.id ?? null,
+            formAnswers: answersCheck.stored as Prisma.InputJsonValue,
+            formChannel: q.ch,
+            formSubmittedAt: new Date(),
+            ...(typeof answersCheck.stored.estimatedArrivalTime === 'string' && { expectedArrivalTime: answersCheck.stored.estimatedArrivalTime }),
           },
+        });
+        await this.uploads.attach(tx, q.tid, r.id, answersCheck.uploadIds);
+        await this.forms.applyToGuest(tx, q.tid, guest.id, answersCheck.stored);
+        await this.addOns.createLines(tx, {
+          tenantId: q.tid,
+          propertyId: p.id,
+          reservationId: r.id,
+          source: 'ONLINE',
+          extras: addOns.extras,
+          transfers: addOns.transfers.map((t) => {
+            const d = answersCheck.transferDetails.get(t.direction);
+            return { ...t, ...(d && { details: d.details, scheduledAt: d.scheduledAt, luggage: d.luggage, contactPhone: d.contactPhone }) };
+          }),
+          comps: q.tax,
+          actor: { userId: null, fullName: fullName },
+          guestPhone: phone,
         });
         await tx.folio.create({ data: { tenantId: q.tid, propertyId: p.id, kind: 'RESERVATION', reservationId: r.id, guestId: guest.id, name: guest.fullName } });
         if (q.lp && q.lm) {
@@ -793,7 +897,7 @@ export class PublicBookingService {
               reservationId: r.id,
               reference: BookingPaymentsService.newReference(),
               provider: this.paystack.providerName,
-              amountKobo: breakdown.totalKobo,
+              amountKobo: withExtras.totalKobo,
               commissionKobo,
               commissionBps: bps,
               subaccountCode: payout!.subaccountCode,
@@ -803,7 +907,7 @@ export class PublicBookingService {
           });
           paymentId = pay.id;
         } else if (commissionKobo > 0) {
-          await this.commission.accrue(tx, { tenantId: q.tid, reservationId: r.id, amountKobo: commissionKobo, baseKobo: breakdown.totalKobo, bps, channel: q.ch });
+          await this.commission.accrue(tx, { tenantId: q.tid, reservationId: r.id, amountKobo: commissionKobo, baseKobo: withExtras.totalKobo, bps, channel: q.ch });
         }
         await this.audit.record(tx, {
           tenantId: q.tid,
@@ -811,7 +915,7 @@ export class PublicBookingService {
           action: 'reservation.booked_online',
           entityType: 'reservation',
           entityId: r.id,
-          metadata: { code, guest: fullName, channel: q.ch, paymentMode: dto.paymentMode, totalKobo: breakdown.totalKobo, commissionBps: bps, arrivalAt: q.a, departureAt: q.d },
+          metadata: { code, guest: fullName, channel: q.ch, paymentMode: dto.paymentMode, totalKobo: withExtras.totalKobo, commissionBps: bps, arrivalAt: q.a, departureAt: q.d, ...(addOns.lines.length && { addOnsKobo: withExtras.totalKobo - (withExtras.roomTotalKobo ?? withExtras.totalKobo) }) },
           ip,
         });
         const row = await tx.reservation.findFirstOrThrow({ where: { id: r.id }, include: stayInclude });

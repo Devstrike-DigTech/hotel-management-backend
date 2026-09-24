@@ -9,6 +9,7 @@ import { lagosDate, lagosYear, dbDate, lagosStartOfDay, addDays } from '../../co
 import { AppConfigService } from '../../config/app-config.service.js';
 import { DbService, type Tx } from '../../prisma/db.service.js';
 import { AuditService, userActor } from '../audit/audit.service.js';
+import { BookingFormService } from '../booking-form/booking-form.service.js';
 import { buildInvoiceDocument, buildReceiptDocument, type Issuer } from './document.builder.js';
 import { appError, k, paginate, primaryProperty } from '../ops/ops.helpers.js';
 import { buildCityLedgerDocument } from '../corporate/city-ledger.document.js';
@@ -219,12 +220,15 @@ export class DocumentsService {
     meta: { number: string; kind: GuestInvoiceKind; issuedAt: Date; issuer: Issuer },
   ) {
     const receipts = await tx.receipt.findMany({ where: { folioId: folio.id }, select: { entryId: true, number: true } });
-    return buildInvoiceDocument({
+    const doc = buildInvoiceDocument({
       folio,
       receiptNumbers: new Map(receipts.map((r) => [r.entryId, r.number])),
       hotel: await this.hotelHeader(tx, tenantId, folio.propertyId),
       ...meta,
     });
+    // M7: company name / TIN from the booking-form answers.
+    const answers = (folio.reservation as { formAnswers?: unknown } | null)?.formAnswers;
+    return { ...doc, billTo: BookingFormService.billTo(answers && typeof answers === 'object' ? (answers as Record<string, unknown>) : null) };
   }
 
   // ---------------------------------------------------------------------------
