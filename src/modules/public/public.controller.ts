@@ -50,8 +50,8 @@ export class PublicController {
 
   @Get('groups/:slug')
   @ApiOperation({ summary: 'A hotel group and its properties (group microsite root, M5)' })
-  group(@Param('slug') slug: string) {
-    return this.svc.groupPage(slug);
+  group(@Param('slug') slug: string, @Query('host') host?: string) {
+    return this.svc.groupPage(slug, typeof host === 'string' ? host.slice(0, 253) : undefined);
   }
 
   @Get('resolve-host')

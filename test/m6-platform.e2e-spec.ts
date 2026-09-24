@@ -133,7 +133,7 @@ describe('platform audit log', () => {
   it('records platform writes and refuses UPDATE / DELETE', async () => {
     const admin = await platformAuth(app);
     await http().post(`${API}/platform/coupons`).set(admin).send({ code: `AUD${uniq().slice(0, 6).toUpperCase()}`, name: 'Audit probe', percentOff: 5 }).expect(201);
-    const log = await http().get(`${API}/platform/audit?pageSize=20`).set(admin).expect(200);
+    const log = await http().get(`${API}/platform/audit?pageSize=200`).set(admin).expect(200);
     const row = log.body.items.find((r: { path: string | null; method: string | null }) => r.method === 'POST' && r.path?.includes('/platform/coupons'));
     expect(row).toBeTruthy();
     expect(row.actor.role).toBe('SUPER_ADMIN');

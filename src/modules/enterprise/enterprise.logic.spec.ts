@@ -5,7 +5,7 @@ import { slaState, supportNumber } from '../platform/console/support.service.js'
 import { churnedAt, monthlyRevenueKobo, statusChange, weekStart } from '../platform/platform.service.js';
 import { decodeCursor, displayKey, encodeCursor, formatApiKey, keyStatus, parseApiKey, permissionsForScopes, rateLimitsFor } from './api-keys/api-keys.logic.js';
 import { emailDomainOf, IdTokenError, pkcePair, verifyIdToken } from './sso/oidc.js';
-import { fontByName, mockEmailRecords, validSenderId, COLOR_RE } from './white-label/white-label.logic.js';
+import { fontByName, googleFontsUrl, mockEmailRecords, validSenderId, COLOR_RE } from './white-label/white-label.logic.js';
 import { AUDIT_EVENT_MAP, matchesEvents, MAX_ATTEMPTS, nextAttemptAt, shouldDisable, signatureHeader, verifySignature } from './webhooks/webhooks.logic.js';
 
 const DAY = 86_400_000;
@@ -112,6 +112,10 @@ describe('white-label', () => {
   it('knows the curated fonts, colours and sender IDs', () => {
     expect(fontByName('cormorant garamond')?.category).toBe('serif');
     expect(fontByName('Comic Sans')).toBeNull();
+    expect(fontByName('Cormorant Garamond')!.googleFontsUrl).toBe('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600;1,700&display=swap');
+    expect(fontByName('Libre Baskerville')!.googleFontsUrl).toContain('ital,wght@0,400;0,700;1,400&');
+    expect(fontByName('Manrope')!.googleFontsUrl).toBe(googleFontsUrl('Manrope', [400, 500, 600, 700]));
+    expect(fontByName('Manrope')!.googleFontsUrl).not.toContain('ital');
     expect(COLOR_RE.test('#7A2E12')).toBe(true);
     expect(COLOR_RE.test('red')).toBe(false);
     expect(validSenderId('HARMATTAN')).toBe(true);

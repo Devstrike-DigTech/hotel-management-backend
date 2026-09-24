@@ -249,6 +249,21 @@ describe('API keys and the partner API', () => {
     expect(doc.body.info.version).toBe('2026-09-24');
     expect(Object.keys(doc.body.paths)).toContain('/reservations');
     expect(Object.keys(doc.body.webhooks)).toContain('reservation.created');
+    // Tags, stable operationIds and scopes per operation.
+    expect(doc.body.tags.map((t: { name: string }) => t.name)).toContain('Reservations');
+    expect(doc.body.info.description).toContain('Developers');
+    const create = doc.body.paths['/reservations'].post;
+    expect(create).toMatchObject({ operationId: 'createReservation', tags: ['Reservations'], 'x-scopes': ['reservations:write'], security: [{ bearerAuth: ['reservations:write'] }] });
+    expect(doc.body.paths['/me'].get['x-scopes']).toEqual([]);
+    const ids = Object.values(doc.body.paths as Record<string, Record<string, { operationId: string }>>).flatMap((m) => Object.values(m).map((o) => o.operationId));
+    expect(new Set(ids).size).toBe(ids.length);
+    // One schema per webhook event.
+    const hook = doc.body.webhooks['payment.received'].post.requestBody.content['application/json'].schema.$ref;
+    expect(hook).toBe('#/components/schemas/PaymentReceivedEvent');
+    const s = doc.body.components.schemas.PaymentReceivedEvent.allOf[1];
+    expect(s.properties.type.const).toBe('payment.received');
+    expect(s.properties.data.properties.object.$ref).toBe('#/components/schemas/PaymentReceived');
+    expect(doc.body.components.schemas.RoomStatusChangedEvent).toBeTruthy();
   });
 
   it('meters usage per key', async () => {
@@ -348,9 +363,32 @@ describe('white-label', () => {
     expect(market.body.whiteLabel).toBeNull();
     const host = await http().get(`${API}/public/resolve-host?host=book.harmattanhotels.com`).expect(200);
     expect(host.body).toMatchObject({ slug: 'harmattan-abuja', whiteLabel: true });
+    // The group root on its own verified domain.
+    const group = await http().get(`${API}/public/resolve-host?host=www.harmattanhotels.com`).expect(200);
+    expect(group.body).toMatchObject({ kind: 'GROUP', groupSlug: 'harmattan', canonicalHost: 'www.harmattanhotels.com', whiteLabel: true, brand: { brandName: 'Harmattan Hotels & Suites' } });
+    const page = await http().get(`${API}/public/groups/harmattan?host=www.harmattanhotels.com`).expect(200);
+    expect(page.body.whiteLabel.hidePoweredBy).toBe(true);
+    expect((await http().get(`${API}/public/groups/harmattan`).expect(200)).body.whiteLabel).toBeNull();
+    const sub = await http().get(`${API}/public/resolve-host?host=harmattan-abuja.hotelos.test`).expect(200);
+    expect(sub.body).toMatchObject({ kind: 'PROPERTY', whiteLabel: false, brand: null });
     const portal = await http().get(`${API}/public/staff-portal?host=staff.harmattanhotels.com`).expect(200);
     expect(portal.body).toMatchObject({ tenantSlug: 'harmattan', hidePlatformBranding: true, sso: { enabled: true } });
     await http().get(`${API}/public/staff-portal?host=unknown.example.com`).expect(404);
+  });
+
+  it('attaches a verified custom domain to the group root', async () => {
+    const gm = await hotelLogin('owner@harmattanhotels.com');
+    const d = await http().post(`${API}/domains`).set(gm).send({ domain: `group${uniq()}.example.com`, scope: 'GROUP' }).expect(201);
+    expect(d.body).toMatchObject({ scope: 'GROUP', status: 'PENDING' });
+    await http().post(`${API}/domains/${d.body.id}/dev/publish`).set(gm).expect(200);
+    const v = await http().post(`${API}/domains/${d.body.id}/verify`).set(gm).expect(200);
+    expect(v.body.status).toBe('VERIFIED');
+    const r = await http().get(`${API}/public/resolve-host?host=${d.body.domain}`).expect(200);
+    expect(r.body).toMatchObject({ kind: 'GROUP', groupSlug: 'harmattan', whiteLabel: true });
+    const info = await http().get(`${API}/domains`).set(gm).expect(200);
+    expect(info.body.groupDomain.id).toBe(d.body.id);
+    // The property's own booking domain is untouched.
+    expect((await http().get(`${API}/public/resolve-host?host=book.harmattanhotels.com`).expect(200)).body.kind).toBe('PROPERTY');
   });
 
   it('validates settings and verifies a mock email domain', async () => {

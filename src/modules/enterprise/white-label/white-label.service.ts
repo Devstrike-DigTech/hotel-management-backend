@@ -504,10 +504,24 @@ export class WhiteLabelService {
 
   /** Brand block for the booking site: only on the property's verified custom domain. */
   publicBrand(tenantId: string, host: string | undefined, property: { customDomain: string | null; customDomainVerifiedAt: Date | null }) {
-    const b = this.brands.get(tenantId);
-    if (!b || !host) return null;
+    if (!host) return null;
     const h = host.trim().toLowerCase().replace(/:\d+$/, '').replace(/\.$/, '');
     if (!property.customDomain || !property.customDomainVerifiedAt || property.customDomain !== h) return null;
+    return this.brandOf(tenantId);
+  }
+
+  /** Brand block of a group root served on its verified group domain (M6). */
+  async groupBrand(tenantId: string, host: string | undefined) {
+    if (!host || !this.brands.get(tenantId)) return null;
+    const h = host.trim().toLowerCase().replace(/:\d+$/, '').replace(/\.$/, '');
+    const d = await this.db.systemFor(tenantId, (tx) => tx.customDomain.findFirst({ where: { tenantId, domain: h, scope: 'GROUP', status: 'VERIFIED' }, select: { id: true } }));
+    return d ? this.brandOf(tenantId) : null;
+  }
+
+  /** PublicWhiteLabel of an active white-label tenant (null otherwise). */
+  brandOf(tenantId: string) {
+    const b = this.brands.get(tenantId);
+    if (!b) return null;
     return {
       brandName: b.brandName,
       logoUrl: b.logoUrl,

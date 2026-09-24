@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { IsIn, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import type { AuthUser } from '../../common/auth-types.js';
 import { ClientIp, CurrentUser, RequirePermission } from '../../common/decorators/index.js';
 import { RequireFeature } from '../entitlements/entitlements.decorators.js';
@@ -8,6 +8,8 @@ import { DomainsService } from './domains.service.js';
 
 export class DomainDto {
   @IsString() @MinLength(3) @MaxLength(253) domain!: string;
+  /** M6: GROUP points the domain at the group root instead of the primary property. */
+  @IsOptional() @IsIn(['PROPERTY', 'GROUP']) scope?: 'PROPERTY' | 'GROUP';
 }
 
 export class DevDnsDto {
@@ -27,7 +29,7 @@ export class DomainsController {
   get(@CurrentUser() u: AuthUser) { return this.domains.get(u); }
 
   @Post() @RequirePermission('settings.manage')
-  create(@CurrentUser() u: AuthUser, @Body() dto: DomainDto, @ClientIp() ip?: string) { return this.domains.create(u, dto.domain, ip); }
+  create(@CurrentUser() u: AuthUser, @Body() dto: DomainDto, @ClientIp() ip?: string) { return this.domains.create(u, dto.domain, ip, dto.scope ?? 'PROPERTY'); }
 
   @Post('dev/dns') @RequirePermission('settings.manage') @HttpCode(200)
   @ApiOperation({ summary: 'Development only (DNS_PROVIDER=mock): add a record to the mock DNS' })

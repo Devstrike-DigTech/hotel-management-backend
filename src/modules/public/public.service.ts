@@ -340,7 +340,7 @@ export class PublicService {
   }
 
   /** GET /public/groups/:slug: the group's properties (microsite root). */
-  async groupPage(slug: string) {
+  async groupPage(slug: string, host?: string) {
     const tenant = await this.db.public((tx) =>
       tx.tenant.findFirst({
         where: { slug: slug.toLowerCase(), subscription: { is: { status: { not: 'SUSPENDED' } } } },
@@ -372,6 +372,8 @@ export class PublicService {
         group: count >= 2 ? { slug: data.tenant.slug, name: data.tenant.name, propertyCount: count } : null,
         canonicalUrl: `https://${this.canonicalHost(p)}`,
       })),
+      // M6: brand kit when served on the group's own verified domain.
+      whiteLabel: await this.whiteLabel.groupBrand(data.tenant.id, host),
     };
   }
 
@@ -380,7 +382,7 @@ export class PublicService {
    *   grandview.<APP_DOMAIN>  -> "grandview"
    *   book.grandview.com      -> slug of the property with that verified domain
    */
-  async resolveHost(rawHost: string): Promise<{ slug: string; kind: 'PROPERTY' | 'GROUP'; groupSlug: string; canonicalHost: string; whiteLabel: boolean }> {
+  async resolveHost(rawHost: string): Promise<{ slug: string; kind: 'PROPERTY' | 'GROUP'; groupSlug: string; canonicalHost: string; whiteLabel: boolean; brand: ReturnType<WhiteLabelService['brandOf']> }> {
     const host = rawHost.trim().toLowerCase().replace(/:\d+$/, '').replace(/\.$/, '');
     const appDomain = this.config.get('APP_DOMAIN').toLowerCase();
     const select = { slug: true, tenantId: true, customDomain: true, customDomainVerifiedAt: true, tenant: { select: { slug: true } } } as const;
@@ -404,6 +406,16 @@ export class PublicService {
         const p = await this.db.publicForSlug(sub, (tx, t) => tx.property.findFirst({ where: { ...t.tenants, slug: sub, ...active }, select }));
         return p ? { kind: 'PROPERTY' as const, p, groupSlug: p.tenant.slug } : null;
       }
+      // M6: a verified custom domain of a group root.
+      const group = (
+        await this.db.systemAll((tx, t) => tx.customDomain.findFirst({ where: { ...t.tenants, domain: host, scope: 'GROUP', status: 'VERIFIED' }, select: { tenantId: true } }))
+      ).find(Boolean);
+      if (group) {
+        const tenant = await this.db.public((tx) => tx.tenant.findFirst({ where: { id: group.tenantId, lifecycle: 'ACTIVE', subscription: { is: { status: { not: 'SUSPENDED' } } } }, select: { id: true, slug: true } }));
+        if (!tenant) return null;
+        const props = await this.db.publicFor(tenant.id, (tx) => tx.property.findMany({ where: { tenantId: tenant.id }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], select }));
+        return props[0] ? { kind: 'GROUP' as const, p: props[0], groupSlug: tenant.slug, groupDomain: host } : null;
+      }
       const tid = await this.db.dedicatedTenantFor({ customDomain: host });
       const lookup = (tx: Parameters<Parameters<DbService['public']>[0]>[0], tenants: object) =>
         tx.property.findFirst({ where: { ...tenants, customDomain: host, customDomainVerifiedAt: { not: null }, ...active }, select });
@@ -416,8 +428,12 @@ export class PublicService {
       slug: found.p.slug,
       kind: found.kind,
       groupSlug: found.groupSlug,
-      canonicalHost: found.kind === 'GROUP' ? `${found.groupSlug}.${appDomain}` : this.canonicalHost(found.p),
-      whiteLabel: found.kind === 'PROPERTY' && found.p.customDomain === host && !!found.p.customDomainVerifiedAt && this.whiteLabel.whiteLabelActive(found.p.tenantId),
+      canonicalHost: found.kind === 'GROUP' ? ('groupDomain' in found && found.groupDomain ? found.groupDomain : `${found.groupSlug}.${appDomain}`) : this.canonicalHost(found.p),
+      ...(() => {
+        const own = found.kind === 'GROUP' ? 'groupDomain' in found && !!found.groupDomain : found.p.customDomain === host && !!found.p.customDomainVerifiedAt;
+        const brand = own ? this.whiteLabel.brandOf(found.p.tenantId) : null;
+        return { whiteLabel: !!brand, brand };
+      })(),
     };
   }
 }

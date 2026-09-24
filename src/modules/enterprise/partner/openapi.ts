@@ -84,6 +84,11 @@ const schemas: Record<string, Schema> = {
     ['propertyId', 'roomTypeId', 'arrivalDate', 'departureDate', 'adults', 'guest'],
   ),
   UpdateReservation: obj({ arrivalDate: date, departureDate: date, adults: int(), children: int(), notes: str(), externalRef: nullable(str()) }, []),
+  PaymentReceived: obj({ reservationId: nullable(uuid), folioId: uuid, entryId: uuid, amountKobo: kobo, method: nullable(str()), reference: nullable(str()), receivedAt: dateTime }),
+  RoomStatusChanged: { allOf: [ref('Room'), obj({ previousStatus: nullable(ref('RoomStatus')) })] },
+  ReviewPublished: obj({ id: uuid, propertyId: uuid, overall: int({ minimum: 1, maximum: 5 }), title: nullable(str()), body: str(), publishedAt: dateTime }),
+  GuardFlagRaised: obj({ id: uuid, propertyId: uuid, rule: str(), severity: str({ enum: ['LOW', 'MEDIUM', 'HIGH'] }), title: str(), amountKobo: nullable(kobo), createdAt: dateTime }),
+  Ping: obj({ message: str(), endpointId: uuid }),
   Event: obj({
     id: str({ examples: ['evt_4f1c...'] }), type: str({ enum: WEBHOOK_EVENTS.map((e) => e.type) }), createdAt: dateTime, apiVersion: str({ const: PARTNER_API_VERSION }),
     livemode: bool, tenantId: uuid, propertyId: nullable(uuid), data: obj({ object: { type: 'object' } }),
@@ -132,11 +137,100 @@ const body = (schema: Schema) => ({ required: true, content: { 'application/json
 function op(summary: string, scope: string | null, responses: Record<string, unknown>, extra: Record<string, unknown> = {}) {
   return {
     summary,
-    ...(scope && { description: `Scope: \`${scope}\`` }),
-    security: [{ bearerAuth: [] }],
+    description: scope ? `Scope: \`${scope}\`` : 'Any valid API key.',
+    // OpenAPI 3.1: role names are allowed in bearer requirements; x-scopes is the same list, machine-readable.
+    security: [{ bearerAuth: scope ? [scope] : [] }],
+    'x-scopes': scope ? [scope] : [],
     responses: { ...responses, ...errors },
     ...extra,
   };
+}
+
+/** Resource tags, in the order the docs show them. */
+export const PARTNER_TAGS = [
+  { name: 'Key', description: 'The API key in use and its hotel.' },
+  { name: 'Properties', description: 'Properties (hotels of the group) the key may access.' },
+  { name: 'Room types', description: 'Sellable room categories of each property.' },
+  { name: 'Rooms', description: 'Physical rooms and their housekeeping status.' },
+  { name: 'Availability', description: 'Rooms free to sell per room type and night.' },
+  { name: 'Rates', description: 'Resolved nightly rates, restrictions and date overrides.' },
+  { name: 'Reservations', description: 'Bookings: list, read, create, change and cancel.' },
+  { name: 'Folios', description: 'Charges and payments of a reservation.' },
+  { name: 'Guests', description: 'Guest profiles (names and contact details only).' },
+  { name: 'Housekeeping', description: 'Housekeeping tasks.' },
+  { name: 'Reports', description: 'Daily occupancy, ADR, RevPAR and revenue.' },
+  { name: 'Webhooks', description: 'Endpoints that receive signed event notifications.' },
+];
+
+/** Stable operationIds (never renamed; SDK method names are derived from them). */
+const OPERATIONS: Record<string, { id: string; tag: string }> = {
+  'get /me': { id: 'getMe', tag: 'Key' },
+  'get /properties': { id: 'listProperties', tag: 'Properties' },
+  'get /properties/{id}': { id: 'getProperty', tag: 'Properties' },
+  'get /room-types': { id: 'listRoomTypes', tag: 'Room types' },
+  'get /room-types/{id}': { id: 'getRoomType', tag: 'Room types' },
+  'get /rooms': { id: 'listRooms', tag: 'Rooms' },
+  'get /rooms/{id}': { id: 'getRoom', tag: 'Rooms' },
+  'patch /rooms/{id}/status': { id: 'updateRoomStatus', tag: 'Rooms' },
+  'get /availability': { id: 'getAvailability', tag: 'Availability' },
+  'get /rates': { id: 'listRates', tag: 'Rates' },
+  'put /rates/overrides': { id: 'setRateOverrides', tag: 'Rates' },
+  'delete /rates/overrides': { id: 'clearRateOverrides', tag: 'Rates' },
+  'get /reservations': { id: 'listReservations', tag: 'Reservations' },
+  'post /reservations': { id: 'createReservation', tag: 'Reservations' },
+  'get /reservations/{id}': { id: 'getReservation', tag: 'Reservations' },
+  'patch /reservations/{id}': { id: 'updateReservation', tag: 'Reservations' },
+  'post /reservations/{id}/cancel': { id: 'cancelReservation', tag: 'Reservations' },
+  'get /reservations/{id}/folio': { id: 'getReservationFolio', tag: 'Folios' },
+  'get /guests': { id: 'listGuests', tag: 'Guests' },
+  'get /guests/{id}': { id: 'getGuest', tag: 'Guests' },
+  'get /housekeeping/tasks': { id: 'listHousekeepingTasks', tag: 'Housekeeping' },
+  'post /housekeeping/tasks/{id}/complete': { id: 'completeHousekeepingTask', tag: 'Housekeeping' },
+  'get /reports/daily': { id: 'getDailyReport', tag: 'Reports' },
+  'get /webhook-endpoints': { id: 'listWebhookEndpoints', tag: 'Webhooks' },
+  'post /webhook-endpoints': { id: 'createWebhookEndpoint', tag: 'Webhooks' },
+  'patch /webhook-endpoints/{id}': { id: 'updateWebhookEndpoint', tag: 'Webhooks' },
+  'delete /webhook-endpoints/{id}': { id: 'deleteWebhookEndpoint', tag: 'Webhooks' },
+};
+
+/** Schema of `data.object` per event object kind. */
+const EVENT_OBJECTS: Record<string, string> = {
+  reservation: 'Reservation',
+  payment: 'PaymentReceived',
+  room: 'RoomStatusChanged',
+  housekeeping_task: 'HousekeepingTask',
+  review: 'ReviewPublished',
+  guard_flag: 'GuardFlagRaised',
+  ping: 'Ping',
+};
+
+const pascal = (type: string) => type.split(/[._]/).map((w) => w[0]!.toUpperCase() + w.slice(1)).join('');
+
+/** One schema per event type: the envelope with `type` fixed and the object's shape. */
+function eventSchemas(): Record<string, Schema> {
+  return Object.fromEntries(
+    WEBHOOK_EVENTS.map((e) => [
+      `${pascal(e.type)}Event`,
+      {
+        description: e.description,
+        allOf: [
+          ref('Event'),
+          obj({ type: str({ const: e.type }), data: obj({ object: ref(EVENT_OBJECTS[e.object]!) }) }),
+        ],
+      },
+    ]),
+  );
+}
+
+function decorate(paths: Record<string, Record<string, Record<string, unknown>>>) {
+  for (const [path, methods] of Object.entries(paths)) {
+    for (const [method, o] of Object.entries(methods)) {
+      const meta = OPERATIONS[`${method} ${path}`];
+      if (!meta) throw new Error(`No operationId for ${method.toUpperCase()} ${path}`);
+      methods[method] = { operationId: meta.id, tags: [meta.tag], ...o };
+    }
+  }
+  return paths;
 }
 
 export function partnerOpenApi(serverUrl: string) {
@@ -147,16 +241,17 @@ export function partnerOpenApi(serverUrl: string) {
       version: PARTNER_API_VERSION,
       description:
         'Versioned API for integrations (PMS bridges, channel tools, BI). JSON, camelCase, money in kobo, dates in Africa/Lagos. ' +
-        'Authenticate with an API key from the hotel admin (Settings > Integrations): `Authorization: Bearer hk_live_...`. ' +
+        'Authenticate with an API key created in the hotel admin under Developers: `Authorization: Bearer hk_live_...`. ' +
         'Test keys (`hk_test_...`) validate writes fully and roll them back; responses carry `dryRun: true`.',
     },
-    'x-changelog': [{ date: PARTNER_API_VERSION, changes: ['First release: properties, room types, rooms, availability, rates, reservations, guests, folios, housekeeping, daily reports, webhook endpoints.'] }],
+    'x-changelog': [{ date: PARTNER_API_VERSION, changes: ['First release: properties, room types, rooms, availability, rates, reservations, guests, folios, housekeeping, daily reports, webhook endpoints.', 'Tags per resource, stable operationIds, scopes per operation (security + x-scopes) and one schema per webhook event.'] }],
     servers: [{ url: serverUrl }],
     components: {
       securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'hk_live_<prefix>_<secret>', description: 'API key (or header X-Api-Key)' } },
-      schemas,
+      schemas: { ...schemas, ...eventSchemas() },
     },
-    paths: {
+    tags: PARTNER_TAGS,
+    paths: decorate({
       '/me': { get: op('The API key and its hotel', null, { '200': one(ref('Key')) }) },
       '/properties': { get: op('Properties the key may access', null, { '200': many(ref('Property')) }, { parameters: pageParams }) },
       '/properties/{id}': { get: op('One property', null, { '200': one(ref('Property')) }, { parameters: [p('id')] }) },
@@ -227,17 +322,19 @@ export function partnerOpenApi(serverUrl: string) {
         patch: op('Change a webhook endpoint', 'webhooks:manage', { '200': one(ref('WebhookEndpoint')) }, { parameters: [p('id'), idem], requestBody: body({ type: 'object' }) }),
         delete: op('Delete a webhook endpoint', 'webhooks:manage', { '200': one(obj({ success: bool })) }, { parameters: [p('id'), idem] }),
       },
-    },
+    }),
     webhooks: Object.fromEntries(
       WEBHOOK_EVENTS.map((e) => [
         e.type,
         {
           post: {
+            operationId: `on${pascal(e.type)}`,
+            tags: ['Webhooks'],
             summary: e.description,
             description:
               'Headers: X-Webhook-Id, X-Event-Id, X-Event-Type, X-Signature `t=<unix>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>` (a second v1 during secret rotation). ' +
               'Answer 2xx within 10 s. Retries after 1 min, 5 min, 30 min, 2 h, 5 h, 10 h and 24 h.',
-            requestBody: { content: { 'application/json': { schema: ref('Event') } } },
+            requestBody: { required: true, content: { 'application/json': { schema: ref(`${pascal(e.type)}Event`) } } },
             responses: { '200': { description: 'Received' } },
           },
         },

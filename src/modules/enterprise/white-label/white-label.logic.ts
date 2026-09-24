@@ -4,32 +4,44 @@ export interface FontChoice {
   family: string;
   category: 'serif' | 'sans' | 'display';
   weights: number[];
+  /** Weights that also exist in italic (empty = no italics on Google Fonts). */
+  italicWeights: number[];
+  /** CSS2 URL; with italics it uses the `ital,wght@0,400;...;1,400` tuple form. */
   googleFontsUrl: string;
 }
 
-const font = (family: string, category: FontChoice['category'], weights: number[]): FontChoice => ({
+/** Google Fonts CSS2 URL for the given roman and italic weights. */
+export function googleFontsUrl(family: string, weights: number[], italicWeights: number[] = []): string {
+  const name = family.replace(/ /g, '+');
+  if (!italicWeights.length) return `https://fonts.googleapis.com/css2?family=${name}:wght@${weights.join(';')}&display=swap`;
+  const tuples = [...weights.map((w) => `0,${w}`), ...italicWeights.map((w) => `1,${w}`)];
+  return `https://fonts.googleapis.com/css2?family=${name}:ital,wght@${tuples.join(';')}&display=swap`;
+}
+
+const font = (family: string, category: FontChoice['category'], weights: number[], italicWeights: number[] = []): FontChoice => ({
   family,
   category,
   weights,
-  googleFontsUrl: `https://fonts.googleapis.com/css2?family=${family.replace(/ /g, '+')}:wght@${weights.join(';')}&display=swap`,
+  italicWeights,
+  googleFontsUrl: googleFontsUrl(family, weights, italicWeights),
 });
 
 export const FONTS: FontChoice[] = [
-  font('Fraunces', 'serif', [400, 600, 700]),
-  font('Playfair Display', 'serif', [400, 600, 700]),
-  font('Cormorant Garamond', 'serif', [400, 500, 600, 700]),
-  font('DM Serif Display', 'display', [400]),
-  font('Libre Baskerville', 'serif', [400, 700]),
-  font('Lora', 'serif', [400, 500, 600, 700]),
+  font('Fraunces', 'serif', [400, 600, 700], [400, 600, 700]),
+  font('Playfair Display', 'serif', [400, 600, 700], [400, 600, 700]),
+  font('Cormorant Garamond', 'serif', [400, 500, 600, 700], [400, 500, 600, 700]),
+  font('DM Serif Display', 'display', [400], [400]),
+  font('Libre Baskerville', 'serif', [400, 700], [400]),
+  font('Lora', 'serif', [400, 500, 600, 700], [400, 500, 600, 700]),
   font('Marcellus', 'display', [400]),
-  font('Schibsted Grotesk', 'sans', [400, 500, 600, 700]),
-  font('Work Sans', 'sans', [400, 500, 600, 700]),
+  font('Schibsted Grotesk', 'sans', [400, 500, 600, 700], [400, 500, 600, 700]),
+  font('Work Sans', 'sans', [400, 500, 600, 700], [400, 500, 600, 700]),
   font('Manrope', 'sans', [400, 500, 600, 700]),
-  font('Karla', 'sans', [400, 500, 600, 700]),
-  font('Figtree', 'sans', [400, 500, 600, 700]),
-  font('Libre Franklin', 'sans', [400, 500, 600, 700]),
-  font('Source Sans 3', 'sans', [400, 600, 700]),
-  font('IBM Plex Sans', 'sans', [400, 500, 600, 700]),
+  font('Karla', 'sans', [400, 500, 600, 700], [400, 500, 600, 700]),
+  font('Figtree', 'sans', [400, 500, 600, 700], [400, 500, 600, 700]),
+  font('Libre Franklin', 'sans', [400, 500, 600, 700], [400, 500, 600, 700]),
+  font('Source Sans 3', 'sans', [400, 600, 700], [400, 600, 700]),
+  font('IBM Plex Sans', 'sans', [400, 500, 600, 700], [400, 500, 600, 700]),
   font('Space Grotesk', 'sans', [400, 500, 600, 700]),
 ];
 

@@ -3452,6 +3452,8 @@ model CustomDomain {
   tenantId      String       @map("tenant_id") @db.Uuid
   propertyId    String       @map("property_id") @db.Uuid
   domain        String       @unique
+  /// M6: PROPERTY (the property's booking site) or GROUP (the group root, all properties).
+  scope         String       @default("PROPERTY")
   status        DomainStatus @default(PENDING)
   token         String
   failures      String[]     @default([])

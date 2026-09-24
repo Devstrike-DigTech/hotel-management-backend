@@ -32,6 +32,7 @@ export const HARMATTAN = {
   ],
   customPriceKobo: 1_250_000 * NAIRA,
   bookingDomain: 'book.harmattanhotels.com',
+  groupDomain: 'www.harmattanhotels.com',
   staffPortal: 'staff.harmattanhotels.com',
   emailDomain: 'mail.harmattanhotels.com',
   smsSender: 'HARMATTAN',
@@ -151,6 +152,12 @@ export async function seedHarmattan(prisma: PrismaClient, passwordHash: string):
     where: { domain: HARMATTAN.bookingDomain },
     create: { tenantId, propertyId: abuja, domain: HARMATTAN.bookingDomain, status: 'VERIFIED', token: 'harmattan-dev-token', txtOk: true, cnameOk: true, verifiedAt: new Date(now - 60 * DAY), lastCheckedAt: new Date(now - DAY) },
     update: { status: 'VERIFIED' },
+  });
+  // The group root on its own domain (all three hotels).
+  await prisma.customDomain.upsert({
+    where: { domain: HARMATTAN.groupDomain },
+    create: { tenantId, propertyId: abuja, domain: HARMATTAN.groupDomain, scope: 'GROUP', status: 'VERIFIED', token: 'harmattan-group-dev-token', txtOk: true, cnameOk: true, verifiedAt: new Date(now - 60 * DAY), lastCheckedAt: new Date(now - DAY) },
+    update: { status: 'VERIFIED', scope: 'GROUP' },
   });
 
   const people = [{ ...HARMATTAN.owner, role: 'OWNER' as const }, ...HARMATTAN.staff];

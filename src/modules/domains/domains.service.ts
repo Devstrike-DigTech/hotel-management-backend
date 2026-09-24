@@ -48,6 +48,8 @@ export class DomainsService {
       id: d.id,
       propertyId: d.propertyId,
       domain: d.domain,
+      /** M6: PROPERTY (booking site of one property) or GROUP (group root). */
+      scope: d.scope as 'PROPERTY' | 'GROUP',
       status: d.status,
       records: [
         { ...e.txt, ok: d.txtOk },
@@ -61,12 +63,24 @@ export class DomainsService {
     };
   }
 
+  /** Tenant transaction without the property filter (lookups by id; group-root domains). */
+  private anyProperty<T>(tenantId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
+    return this.db.tenant(tenantId, (tx) => this.db.withAllProperties(tenantId, () => fn(tx)));
+  }
+
   get(user: AuthUser) {
     return this.db.tenant(user.tenantId, async (tx) => {
       const p = await primaryProperty(tx, user.tenantId);
-      const d = await tx.customDomain.findFirst({ where: { propertyId: p.id }, orderBy: { createdAt: 'desc' } });
+      const d = await tx.customDomain.findFirst({ where: { propertyId: p.id, scope: 'PROPERTY' }, orderBy: { createdAt: 'desc' } });
+      const g = await this.db.withAllProperties(user.tenantId, () => tx.customDomain.findFirst({ where: { tenantId: user.tenantId, scope: 'GROUP' } }));
       const subdomain = `${p.slug}.${this.config.get('APP_DOMAIN')}`;
-      return { domain: d ? this.view(d) : null, subdomain, canonicalHost: p.customDomain && p.customDomainVerifiedAt ? p.customDomain : subdomain };
+      return {
+        domain: d ? this.view(d) : null,
+        subdomain,
+        canonicalHost: p.customDomain && p.customDomainVerifiedAt ? p.customDomain : subdomain,
+        // M6: the group root's own domain (all properties of the group).
+        groupDomain: g ? this.view(g) : null,
+      };
     });
   }
 
@@ -75,7 +89,7 @@ export class DomainsService {
     await tx.property.update({ where: { id: propertyId }, data: { customDomain: null, customDomainVerifiedAt: null } });
   }
 
-  async create(user: AuthUser, input: string, ip?: string) {
+  async create(user: AuthUser, input: string, ip?: string, scope: 'PROPERTY' | 'GROUP' = 'PROPERTY') {
     const { domain, problem } = domainProblem(input);
     if (problem === 'INVALID' || !domain) throw Err.validation('domain', 'Enter a domain such as book.yourhotel.com');
     if (problem === 'APEX') throw appError(HttpStatus.BAD_REQUEST, 'DOMAIN_APEX_NOT_SUPPORTED', `Use a subdomain such as book.${domain}; a bare domain cannot point to the booking site`);
@@ -94,19 +108,21 @@ export class DomainsService {
     return this.db.tenant(user.tenantId, async (tx) => {
       const p = await primaryProperty(tx, user.tenantId);
       if ((taken.d && taken.d.propertyId !== p.id) || (taken.p && taken.p.id !== p.id)) throw appError(HttpStatus.CONFLICT, 'DOMAIN_TAKEN', 'That domain is already connected to another hotel');
-      const old = await tx.customDomain.findMany({ where: { propertyId: p.id } });
+      const old = scope === 'GROUP'
+        ? await this.db.withAllProperties(user.tenantId, () => tx.customDomain.findMany({ where: { tenantId: user.tenantId, scope: 'GROUP' } }))
+        : await tx.customDomain.findMany({ where: { propertyId: p.id, scope: 'PROPERTY' } });
       if (old.length) {
-        await tx.customDomain.deleteMany({ where: { propertyId: p.id } });
-        await this.unpublish(tx, p.id);
+        await this.db.withAllProperties(user.tenantId, () => tx.customDomain.deleteMany({ where: { id: { in: old.map((o) => o.id) } } }));
+        if (scope === 'PROPERTY') await this.unpublish(tx, p.id);
       }
-      const d = await tx.customDomain.create({ data: { tenantId: user.tenantId, propertyId: p.id, domain, token: randomBytes(16).toString('hex') } });
-      await this.audit.record(tx, { tenantId: user.tenantId, actor: userActor(user), action: 'domain.added', entityType: 'custom_domain', entityId: d.id, metadata: { domain, replaced: old.map((o) => o.domain) }, ip });
+      const d = await tx.customDomain.create({ data: { tenantId: user.tenantId, propertyId: p.id, domain, scope, token: randomBytes(16).toString('hex') } });
+      await this.audit.record(tx, { tenantId: user.tenantId, actor: userActor(user), action: 'domain.added', entityType: 'custom_domain', entityId: d.id, metadata: { domain, scope, replaced: old.map((o) => o.domain) }, ip });
       return this.view(d);
     });
   }
 
   remove(user: AuthUser, id: string, ip?: string) {
-    return this.db.tenant(user.tenantId, async (tx) => {
+    return this.anyProperty(user.tenantId, async (tx) => {
       const d = await tx.customDomain.findFirst({ where: { id, tenantId: user.tenantId } });
       if (!d) throw AppException.notFound('Domain');
       await tx.customDomain.delete({ where: { id } });
@@ -130,11 +146,11 @@ export class DomainsService {
 
   /** Checks DNS and moves the domain between PENDING, VERIFIED and FAILED. */
   private async check(tenantId: string, id: string, actor: AuditActor, now = new Date()) {
-    const d0 = await this.db.tenant(tenantId, (tx) => tx.customDomain.findFirst({ where: { id, tenantId } }));
+    const d0 = await this.anyProperty(tenantId, (tx) => tx.customDomain.findFirst({ where: { id, tenantId } }));
     if (!d0) throw AppException.notFound('Domain');
     const found = await this.lookup(d0);
     const r = readCheck(this.records(d0), found);
-    return this.db.tenant(tenantId, async (tx) => {
+    return this.anyProperty(tenantId, async (tx) => {
       const d = await tx.customDomain.findFirst({ where: { id } });
       if (!d) throw AppException.notFound('Domain');
       const ok = r.failures.length === 0;
@@ -156,7 +172,7 @@ export class DomainsService {
         data: { status, failingSince, verifiedAt, txtOk: r.txtOk, cnameOk: r.cnameOk, failures: r.failures, lastCheckedAt: now, checkCount: { increment: 1 } },
       });
       if (status === 'VERIFIED' && d.status !== 'VERIFIED') {
-        await tx.property.update({ where: { id: d.propertyId }, data: { customDomain: d.domain, customDomainVerifiedAt: now } });
+        if (d.scope === 'PROPERTY') await tx.property.update({ where: { id: d.propertyId }, data: { customDomain: d.domain, customDomainVerifiedAt: now } });
         await this.audit.record(tx, { tenantId, propertyId: d.propertyId, actor, action: 'domain.verified', entityType: 'custom_domain', entityId: id, metadata: { domain: d.domain } });
       } else if (status === 'FAILED' && d.status !== 'FAILED') {
         const p = await tx.property.findFirstOrThrow({ where: { id: d.propertyId } });
@@ -213,7 +229,7 @@ export class DomainsService {
 
   async devPublish(user: AuthUser, id: string) {
     this.assertMock();
-    const d = await this.db.tenant(user.tenantId, (tx) => tx.customDomain.findFirst({ where: { id, tenantId: user.tenantId } }));
+    const d = await this.anyProperty(user.tenantId, (tx) => tx.customDomain.findFirst({ where: { id, tenantId: user.tenantId } }));
     if (!d) throw AppException.notFound('Domain');
     const e = this.records(d);
     MockDnsResolver.set(e.txt.name, 'TXT', e.txt.value);
