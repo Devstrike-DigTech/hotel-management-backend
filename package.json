@@ -22,6 +22,7 @@
     "prisma:generate": "prisma generate",
     "postinstall": "prisma generate",
     "db:migrate": "prisma migrate deploy",
+    "db:migrate:all": "tsx scripts/migrate-all.ts",
     "db:migrate:dev": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts",
     "db:reset": "prisma migrate reset --force",

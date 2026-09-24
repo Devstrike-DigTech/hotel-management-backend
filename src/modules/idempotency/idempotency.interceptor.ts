@@ -7,7 +7,7 @@ import { from, mergeMap, Observable, of, catchError, throwError } from 'rxjs';
 import type { Prisma } from '../../generated/prisma/client.js';
 import type { AppRequest } from '../../common/auth-types.js';
 import { AppException, ErrorCode } from '../../common/errors/app-exception.js';
-import { DbService } from '../../prisma/db.service.js';
+import { DbService, dryRunContext } from '../../prisma/db.service.js';
 import { isUniqueViolation } from '../ops/ops.helpers.js';
 import { idempotencyContext } from './idempotency.context.js';
 
@@ -95,8 +95,8 @@ export class IdempotencyInterceptor implements NestInterceptor {
           idempotencyContext.run({ tenantId, key }, () => next.handle().subscribe(subscriber)),
         );
         return handled.pipe(
-          mergeMap((body) => from(idempotencyContext.exit(() => this.complete(tenantId, key, status, body)).then(() => body))),
-          catchError((err) => from(idempotencyContext.exit(() => this.release(tenantId, key))).pipe(mergeMap(() => throwError(() => err)))),
+          mergeMap((body) => from(dryRunContext.exit(() => idempotencyContext.exit(() => this.complete(tenantId, key, status, body))).then(() => body))),
+          catchError((err) => from(dryRunContext.exit(() => idempotencyContext.exit(() => this.release(tenantId, key)))).pipe(mergeMap(() => throwError(() => err)))),
         );
       }),
     );

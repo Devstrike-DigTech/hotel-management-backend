@@ -29,7 +29,7 @@ function setup(state: FakeState) {
     spy,
     feature: new FeatureGuard(reflector, service),
     limit: new LimitGuard(reflector, service),
-    sub: new SubscriptionGuard(reflector, service),
+    sub: new SubscriptionGuard(reflector, service, fakeDb(state)),
   };
 }
 

@@ -1,4 +1,6 @@
-import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
+import { CanActivate, ExecutionContext, HttpStatus, Injectable } from '@nestjs/common';
+import { AppException } from '../../common/errors/app-exception.js';
+import { DbService } from '../../prisma/db.service.js';
 import { Reflector } from '@nestjs/core';
 import type { AppRequest } from '../../common/auth-types.js';
 import { ALLOW_READ_ONLY_KEY } from '../../common/decorators/index.js';
@@ -39,6 +41,7 @@ export class SubscriptionGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly entitlements: EntitlementsService,
+    private readonly db: DbService,
   ) {}
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
@@ -50,6 +53,13 @@ export class SubscriptionGuard implements CanActivate {
     );
     if (allowed) return true;
     const ent = await entitlementsFor(req, this.entitlements);
+    if (ent.writeBlocked) {
+      // M6: a tenant being offboarded gets its own code.
+      const t = await this.db.control(req.user.tenantId, (tx) => tx.tenant.findUnique({ where: { id: req.user!.tenantId }, select: { lifecycle: true } }));
+      if (t?.lifecycle === 'OFFBOARDING') {
+        throw new AppException(HttpStatus.CONFLICT, 'TENANT_OFFBOARDING', 'This hotel account is being closed; changes are no longer possible');
+      }
+    }
     this.entitlements.assertWritable(ent);
     return true;
   }

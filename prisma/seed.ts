@@ -17,6 +17,8 @@ import { seedGrowth, seedRatePlansEverywhere } from './seed-data/growth.js';
 import { prepareProTenant } from './seed-data/pro.js';
 import { seedPro } from './seed-data/pro-data.js';
 import { seedPlatformUsers } from './seed-data/platform-users.js';
+import { HARMATTAN, seedConsole, seedHarmattan, seedHarmattanControl } from './seed-data/enterprise.js';
+import { provisionDedicated, seedFailedJobs } from './seed-data/provision.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const NAIRA = 100;
@@ -331,6 +333,27 @@ async function main() {
   console.log('Seeding Pro-tier data (Ikoyi, POS, channels, pricing, inbox, loyalty, domains)...');
   const pro = await seedPro(prisma, DEMO_HOTEL.slug);
   console.log('  %s', Object.entries(pro).map(([k, v]) => `${k}=${v}`).join(' '));
+  console.log('Seeding Enterprise tier (%s)...', HARMATTAN.name);
+  const hh = await seedHarmattan(prisma, passwordHash);
+  const owner = await prisma.user.findUnique({ where: { email: HARMATTAN.owner.email }, select: { id: true } });
+  const keys = await seedHarmattanControl(prisma, hh.tenantId, owner?.id ?? null);
+  console.log('  API keys (also in storage/dev-api-keys.txt):');
+  for (const k of keys) console.log('    %s', k);
+  if (hh.dedicated) {
+    console.log('  dedicated database: already active');
+  } else if (process.env.SEED_SKIP_DEDICATED === '1') {
+    console.log('  dedicated database: skipped (SEED_SKIP_DEDICATED=1)');
+  } else {
+    const r = await provisionDedicated(hh.tenantId, HARMATTAN.slug);
+    console.log('  dedicated database: %s %s (%d tables, %d ms)', r.dbName, r.status, r.tables, r.durationMs);
+  }
+  console.log('Seeding platform console data...');
+  const consoleData = await seedConsole(prisma);
+  const jobs = await seedFailedJobs().catch((e: Error) => {
+    console.log('  failed jobs skipped (Redis: %s)', e.message);
+    return 0;
+  });
+  console.log('  %s failedJobs=%d', Object.entries(consoleData).map(([k, v]) => `${k}=${v}`).join(' '), jobs);
   console.log('Done. Hotel logins use password "%s"; demo owner: %s', HOTEL_PASSWORD, DEMO_HOTEL.owner.email);
 }
 
