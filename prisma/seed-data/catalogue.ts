@@ -36,22 +36,33 @@ export const FEATURES: FeatureSeed[] = [
   { code: 'api_access', name: 'API access', category: 'Platform', description: 'Programmatic access for your own integrations.' },
   { code: 'dedicated_database', name: 'Dedicated database', category: 'Platform', description: 'Your data in an isolated database instance.' },
   { code: 'sso', name: 'Single sign-on', category: 'Platform', description: 'Staff sign in with Google Workspace, Microsoft Entra ID or any OIDC provider.' },
+  // M7: Brand Studio, booking form, extras and pickups. booking_site_branding is kept as an alias of brand_kit.
+  { code: 'brand_kit', name: 'Brand kit', category: 'Growth', description: 'Your logo, favicon and colours on your booking site, emails and invoices.' },
+  { code: 'site_templates_all', name: 'All booking-site templates', category: 'Growth', description: 'Choose from every booking-site template (Starter: Essentials and Editorial).' },
+  { code: 'site_sections', name: 'Section editor', category: 'Growth', description: 'Show, hide and reorder booking-site sections and choose light or dark.' },
+  { code: 'site_fonts', name: 'Font pairings', category: 'Growth', description: 'Choose the typefaces of your booking site from curated pairings.' },
+  { code: 'form_fields_unlimited', name: 'Unlimited form fields', category: 'Guests', description: 'Ask guests as many extra questions as you need when they book.' },
+  { code: 'form_conditional_logic', name: 'Conditional questions', category: 'Guests', description: 'Show booking-form questions only when an earlier answer calls for them.' },
+  { code: 'paid_extras', name: 'Paid extras and pickups', category: 'Revenue', description: 'Sell breakfast, early check-in, celebrations and airport or motor-park pickups with the room.' },
+  { code: 'form_file_uploads', name: 'File uploads in the booking form', category: 'Guests', description: 'Let guests attach documents such as an event invitation or a company letter.' },
   { code: 'data_export', name: 'Full data export', category: 'Platform', description: 'Download every record of your hotel group as JSON and CSV, any time.' },
 ];
 
 const STARTER = [
   'front_desk', 'reservations', 'guest_register', 'invoicing', 'hourly_bookings',
-  'offline_mode', 'marketplace_listing', 'revenue_guard_basic',
+  'offline_mode', 'marketplace_listing', 'revenue_guard_basic', 'brand_kit',
 ];
 const GROWTH = [
   ...STARTER,
   'booking_site_branding', 'revenue_guard_full', 'owner_whatsapp_alerts',
   'housekeeping', 'maintenance', 'custom_roles', 'promotions', 'sms_messaging',
+  'site_templates_all', 'site_sections', 'form_fields_unlimited', 'form_conditional_logic', 'paid_extras',
 ];
 const PRO = [
   ...GROWTH,
   'custom_domain', 'pos', 'channel_manager', 'dynamic_pricing',
   'whatsapp_messaging', 'loyalty', 'multi_property', 'audit_export',
+  'site_fonts', 'form_file_uploads',
 ];
 const ENTERPRISE = [...PRO, 'white_label', 'api_access', 'dedicated_database', 'sso', 'data_export'];
 
@@ -61,7 +72,7 @@ export interface PlanSeed {
   tagline: string;
   priceMonthlyKobo: number | null;
   priceYearlyKobo: number | null;
-  limits: { max_rooms: number; max_staff: number; max_properties: number };
+  limits: { max_rooms: number; max_staff: number; max_properties: number; max_custom_form_fields: number };
   commissionBps: number | null;
   highlighted: boolean;
   sortOrder: number;
@@ -77,7 +88,7 @@ export const PLANS: PlanSeed[] = [
     tagline: 'Everything a small guest house needs to leave the paper register behind.',
     priceMonthlyKobo: 25_000 * NAIRA,
     priceYearlyKobo: 250_000 * NAIRA,
-    limits: { max_rooms: 20, max_staff: 3, max_properties: 1 },
+    limits: { max_rooms: 20, max_staff: 3, max_properties: 1, max_custom_form_fields: 3 },
     commissionBps: 1000,
     highlighted: false,
     sortOrder: 1,
@@ -89,7 +100,7 @@ export const PLANS: PlanSeed[] = [
     tagline: 'For busy hotels that want tighter control of revenue and a branded booking site.',
     priceMonthlyKobo: 75_000 * NAIRA,
     priceYearlyKobo: 750_000 * NAIRA,
-    limits: { max_rooms: 60, max_staff: 15, max_properties: 1 },
+    limits: { max_rooms: 60, max_staff: 15, max_properties: 1, max_custom_form_fields: -1 },
     commissionBps: 800,
     highlighted: true,
     sortOrder: 2,
@@ -101,7 +112,7 @@ export const PLANS: PlanSeed[] = [
     tagline: 'Point of sale, channel manager and dynamic pricing for full-service hotels.',
     priceMonthlyKobo: 180_000 * NAIRA,
     priceYearlyKobo: 1_800_000 * NAIRA,
-    limits: { max_rooms: 200, max_staff: 50, max_properties: 3 },
+    limits: { max_rooms: 200, max_staff: 50, max_properties: 3, max_custom_form_fields: -1 },
     commissionBps: 500,
     highlighted: false,
     sortOrder: 3,
@@ -113,7 +124,7 @@ export const PLANS: PlanSeed[] = [
     tagline: 'Groups and chains: white label, API access and a dedicated database.',
     priceMonthlyKobo: null,
     priceYearlyKobo: null,
-    limits: { max_rooms: -1, max_staff: -1, max_properties: -1 },
+    limits: { max_rooms: -1, max_staff: -1, max_properties: -1, max_custom_form_fields: -1 },
     commissionBps: null,
     highlighted: false,
     sortOrder: 4,

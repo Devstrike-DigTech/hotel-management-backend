@@ -95,3 +95,20 @@ describe('normaliseLimits', () => {
     expect(normaliseLimits([1, 2])).toEqual({});
   });
 });
+
+describe('feature aliases (M7: booking_site_branding -> brand_kit)', () => {
+  it('a plan or add-on with either name grants both', () => {
+    expect(computeFeatures(['brand_kit'], [])).toEqual(['booking_site_branding', 'brand_kit']);
+    expect(computeFeatures(['front_desk'], [{ featureCode: 'booking_site_branding', enabled: true }])).toEqual(['booking_site_branding', 'brand_kit', 'front_desk']);
+  });
+
+  it('a removal under either name removes both', () => {
+    expect(computeFeatures(['brand_kit', 'front_desk'], [{ featureCode: 'booking_site_branding', enabled: false }])).toEqual(['front_desk']);
+  });
+
+  it('the required plan of the old name is the plan that has brand_kit', () => {
+    const withKit: PlanLike[] = plans.map((p) => ({ ...p, features: [...p.features, 'brand_kit'] }));
+    expect(requiredPlanFor('booking_site_branding', withKit)).toBe('starter');
+    expect(requiredPlanFor('brand_kit', withKit)).toBe('starter');
+  });
+});

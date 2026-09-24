@@ -15,20 +15,39 @@ export interface OverrideLike {
 }
 
 /**
+ * M7: feature codes that are other names of one capability. Basic logo and
+ * colours moved from Growth (`booking_site_branding`) to every plan
+ * (`brand_kit`); the old code stays as an alias so nothing breaks.
+ */
+export const FEATURE_ALIASES: Record<string, string> = { booking_site_branding: 'brand_kit' };
+
+function canonical(code: string): string {
+  return FEATURE_ALIASES[code] ?? code;
+}
+
+/** Adds every alias of a canonical code that is present (for output and gates). */
+export function expandAliases(codes: Iterable<string>): string[] {
+  const set = new Set([...codes].map(canonical));
+  for (const [alias, target] of Object.entries(FEATURE_ALIASES)) if (set.has(target)) set.add(alias);
+  return [...set].sort();
+}
+
+/**
  * Effective feature set = plan features, plus overrides with enabled=true
  * (add-ons), minus overrides with enabled=false (explicit removals).
+ * Aliases are resolved first (an override on either name applies to both).
  * Returned sorted for stable API output.
  */
 export function computeFeatures(
   planFeatures: readonly string[],
   overrides: readonly OverrideLike[],
 ): string[] {
-  const set = new Set(planFeatures);
+  const set = new Set(planFeatures.map(canonical));
   for (const o of overrides) {
-    if (o.enabled) set.add(o.featureCode);
-    else set.delete(o.featureCode);
+    if (o.enabled) set.add(canonical(o.featureCode));
+    else set.delete(canonical(o.featureCode));
   }
-  return [...set].sort();
+  return expandAliases(set);
 }
 
 /** Normalises a plan's JSON limits column into a numeric record. */
@@ -61,7 +80,7 @@ export function requiredPlanFor(
   plans: readonly PlanLike[],
 ): string | null {
   const match = [...plans]
-    .filter((p) => p.isActive && p.features.includes(feature))
+    .filter((p) => p.isActive && expandAliases(p.features).includes(feature))
     .sort((a, b) => a.sortOrder - b.sortOrder)[0];
   return match?.code ?? null;
 }

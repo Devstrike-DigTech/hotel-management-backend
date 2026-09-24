@@ -83,6 +83,8 @@ export const PROPERTY_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'PriceSuggestion', 'PriceChange',
   'Conversation', 'ConversationMessage', 'QuickReply', 'TaskSuggestion', 'InboxSetting',
   'CustomDomain',
+  // M7 (themes and assets can belong to the group root: filtered explicitly)
+  'BookingForm', 'BookingFormVersion', 'FormUpload', 'Extra', 'PickupPoint', 'ReservationExtra', 'Transfer', 'SetupProgress',
 ]);
 
 const FILTERED_OPS = new Set([

@@ -29,11 +29,22 @@ export const FEATURE_CODES = [
   // M6
   'sso',
   'data_export',
+  // M7
+  'brand_kit',
+  'site_templates_all',
+  'site_sections',
+  'site_fonts',
+  'form_fields_unlimited',
+  'form_conditional_logic',
+  'paid_extras',
+  'form_file_uploads',
 ] as const;
 
 export type FeatureCode = (typeof FEATURE_CODES)[number];
 
 export const LIMIT_CODES = ['max_rooms', 'max_staff', 'max_properties'] as const;
+/** M7: checked by the booking form service itself (usage = fields of the draft form). */
+export const FORM_FIELD_LIMIT = 'max_custom_form_fields';
 export type LimitCode = (typeof LIMIT_CODES)[number];
 
 /** Which usage counter each limit is measured against. */

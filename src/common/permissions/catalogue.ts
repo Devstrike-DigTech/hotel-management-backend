@@ -234,6 +234,18 @@ export const PERMISSION_GROUPS: PermissionGroupDef[] = [
       p('audit.export', 'Export audit trail', 'Download the audit trail as CSV or JSON.', true),
     ],
   },
+  // M7
+  {
+    group: 'site',
+    label: 'Booking site and extras',
+    permissions: [
+      p('site.manage', 'Brand Studio', 'Change the booking-site theme, template, logo and colours; publish and revert; preview links.'),
+      p('forms.manage', 'Booking form builder', 'Choose the questions guests answer when they book; publish new versions.'),
+      p('extras.manage', 'Extras and pickup points', 'Paid extras, pickup points with their prices, and local transport companies.'),
+      p('transfers.view', 'See transfers', 'See the board of airport, motor-park and station pickups and drop-offs.'),
+      p('transfers.manage', 'Run transfers', 'Confirm pickups, assign drivers, update their status and message the guest.'),
+    ],
+  },
   // M6 (Enterprise)
   {
     group: 'integrations',
@@ -287,6 +299,8 @@ const FRONT_DESK = [
   // M5
   'pos.view', 'pos.order', 'pos.settle', 'pos.discount', 'minibar.record',
   'inbox.view', 'inbox.reply', 'loyalty.view', 'loyalty.redeem',
+  // M7
+  'transfers.view', 'transfers.manage',
 ];
 
 const ACCOUNTANT = [
