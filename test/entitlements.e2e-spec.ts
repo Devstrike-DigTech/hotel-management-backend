@@ -120,15 +120,16 @@ describe('Entitlements', () => {
       expect(me.body.entitlements.features).toContain('housekeeping');
     });
 
-    it('branding fields on PATCH /property require booking_site_branding', async () => {
+    it('branding fields on PATCH /property follow brand_kit (M7: on every plan; booking_site_branding is its alias)', async () => {
       const t = await signup(app, 'Brand');
       await setPlan(t, { planCode: 'starter' });
-      const locked = await request(app.getHttpServer())
-        .patch(`${API}/property`)
-        .set(t.auth)
-        .send({ accentColor: '#B4452A' })
-        .expect(403);
-      expect(locked.body.details).toEqual({ feature: 'booking_site_branding', requiredPlan: 'growth' });
+      await request(app.getHttpServer()).patch(`${API}/property`).set(t.auth).send({ accentColor: '#B4452A' }).expect(200);
+      const me = await request(app.getHttpServer()).get(`${API}/me`).set(t.auth).expect(200);
+      expect(me.body.entitlements.features).toEqual(expect.arrayContaining(['brand_kit', 'booking_site_branding']));
+      // Removing the old name removes both, and the gate still answers with the old code.
+      await request(app.getHttpServer()).put(`${API}/platform/tenants/${t.tenantId}/features`).set(platform).send({ featureCode: 'booking_site_branding', enabled: false }).expect(200);
+      const locked = await request(app.getHttpServer()).patch(`${API}/property`).set(t.auth).send({ accentColor: '#1D3557' }).expect(403);
+      expect(locked.body.details).toEqual({ feature: 'booking_site_branding', requiredPlan: 'starter' });
       await request(app.getHttpServer()).patch(`${API}/property`).set(t.auth).send({ tagline: 'Fine' }).expect(200);
     });
   });

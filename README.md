@@ -1273,6 +1273,151 @@ its last run in `job_runs` (the console's cron table flags overdue ones);
 
 ---
 
+## Brand Studio, booking forms, extras and pickups (M7)
+
+M7 adds five modules: `site` (themes, templates, assets, preview tokens),
+`booking-form`, `extras` (paid extras, pickup points, transfers), `setup`
+(the wizard) and their public endpoints under `/public`. The contract is in
+`docs`-style form in the API notes; this section is the operator view.
+
+### Plans
+
+| feature | Starter | Growth | Pro | Enterprise |
+|---|---|---|---|---|
+| `brand_kit` (logo, favicon, colours) | yes | yes | yes | yes |
+| `site_templates_all` (all six templates; Starter: Editorial, Essentials) | | yes | yes | yes |
+| `site_sections` (show / hide / reorder sections, colour mode) | | yes | yes | yes |
+| `site_fonts` (curated font pairings) | | | yes | yes |
+| `form_fields_unlimited` (limit `max_custom_form_fields`: Starter 3) | | yes | yes | yes |
+| `form_conditional_logic` | | yes | yes | yes |
+| `paid_extras` (extras, pickup points, transfers) | | yes | yes | yes |
+| `form_file_uploads` | | | yes | yes |
+
+`booking_site_branding` is kept as an alias of `brand_kit`: a plan, add-on or
+removal under either name applies to both, and gates on the old code keep
+working (the migration copies overrides across). The platform console's
+plans editor lists limits from a hard-coded list; add
+`max_custom_form_fields` there to edit it (the API already accepts it).
+
+### Themes and templates
+
+Each property has a theme (and a group has an optional root theme,
+`scope=GROUP`) with a working draft and immutable published versions (last
+20 kept; a database trigger refuses updates). Publishing, discarding and
+reverting are audited; revert publishes a copy of the old version as a new
+one. The server derives the colours the web app uses: from the hotel's
+primary and optional secondary it computes light and dark sets that keep
+text at 4.5:1 and buttons and focus rings at 3:1 (WCAG 2.1), moving only HSL
+lightness, and reports every adjustment (`POST /site/theme/contrast` for live
+feedback). Publishing also updates the property's accent colour and logo, so
+emails and invoices follow. Logos, favicons and section images are uploaded
+to `/site/assets` (type sniffed from the bytes, images re-encoded without
+metadata) and served from `/public/site-assets/...`. `POST
+/site/preview-token` signs a short-lived link (`?preview=`) that shows the
+draft theme and draft form on the real site (`X-Robots-Tag: noindex`).
+
+### Booking form
+
+The form is a list of fields: seven compulsory SYSTEM fields (name, phone,
+email, dates, guests, policy consent), two recommended ones, a library
+(nationality, purpose of visit, company name and TIN, vehicle plate, dietary
+needs, next of kin, pickup block, extras picker ...) and custom fields
+(`c_*`). Each field has a channel list (marketplace, booking site, front
+desk), required / optional / hidden, an optional condition on an earlier
+answer, validation (length, number range, date offset, safe patterns, file
+size and type) and a purpose note. Seven presets match hotel types. Rules:
+
+- BVN questions are refused (`BVN_BLOCKED`); NIN, passport and other ID
+  numbers only warn (collect them at check-in, on the register card).
+- Publishing creates an immutable version with a diff; every booking stores
+  the version id, the channel and the cleaned answers, so old bookings keep
+  the labels they were asked with.
+- Answers are validated strictly on the server for the channel: unknown keys,
+  system keys, hidden fields and fields whose condition does not hold are
+  refused or dropped; email is required when paying online (or when the
+  hotel makes it required).
+- File answers (Pro): uploaded first (`/public/hotels/:slug/booking-form/uploads`),
+  sniffed (PDF, JPEG, PNG, WebP), images re-encoded, scanned through the
+  `FileScanner` interface (a no-op that refuses the EICAR test string by
+  default), stored through the storage abstraction, attached at booking and
+  deleted after 24 hours when unused (job `form-uploads-cleanup`). Staff get
+  10-minute signed links.
+- Mapped answers pre-fill empty guest fields (nationality, address, company,
+  vehicle), the register card and the invoice (`billTo`: company and TIN).
+- `GET /booking-form/answers/export` downloads answers per date range (JSON or
+  CSV with a BOM for Excel; sensitive columns need `guests.export`).
+
+### Paid extras, pickups and transfers
+
+Extras are priced per stay, night, person, person per night or unit, with
+maximum units, channels, availability windows, weekdays, minimum nights,
+early check-in / late check-out kinds, daily caps and lead times; they are
+taxed with the property's tax settings like room charges. Pickup points
+(airport, motor park, train station, jetty, other) have a pickup and a
+drop-off price, vehicle options with capacities and prices, a lead time and
+optional operating hours. The quote prices everything and the signed quote
+token freezes each amount, the form version and the tax components; the
+booking re-checks daily caps (under a lock) and pickup lead times inside its
+transaction. Folio posting:
+
+- online payment: posted when the payment is applied;
+- pay at hotel and front-desk bookings: posted at check-in;
+- extras added later: at once when the guest is in house or paid online,
+  otherwise at check-in; removing a posted line voids it (VOID entries);
+- cancellations and expired holds cancel the lines and void posted ones.
+
+Commission (M3 rule): marketplace bookings pay the plan commission on the
+whole online total, add-ons included; booking-site bookings pay none; extras
+added at the desk pay none.
+
+Transfers move `REQUESTED -> CONFIRMED -> DRIVER_ASSIGNED -> EN_ROUTE ->
+PICKED_UP -> COMPLETED` (or `NO_SHOW` / `CANCELLED`); every step is kept in
+the transfer's history and audited. Assigning a driver sends the guest the
+driver's name, phone, plate and the meeting point by WhatsApp (template
+`transfer_driver_assigned`), SMS and email; `transfer_update` covers "on the
+way", delays and cancellations. In development these land in the dev outbox
+(`GET /api/v1/public/dev/outbox`). The WhatsApp templates and their
+parameters are listed in `docs/whatsapp-templates.md`. Motor-park pickups
+ask for the transport company (a platform list plus the hotel's own) and the
+departure city; train stations ask for the route (Lagos - Ibadan, Abuja -
+Kaduna, Warri - Itakpe, the Lagos Red and Blue lines, Abuja light rail).
+
+### Setup wizard
+
+New hotels get a server-side checklist (hotel type, brand, rooms, booking
+form, extras, payments, policies, go live). Steps are detected from the data,
+so work done elsewhere counts; `POST /setup/go-live` publishes what is
+unpublished and needs rooms (`409 SETUP_INCOMPLETE`). Hotels that existed
+before M7 are marked complete by the migration. The dashboard and the front
+desk "Today" card show the progress (`setup`) and today's transfers.
+
+### NDPA, partner API and webhooks
+
+The guest export (`GET /guests/:id/export`) includes each stay's answers
+(sensitive ones too, files as short-lived links), extras and transfers;
+anonymising wipes the answers, deletes uploaded files and clears transfer
+contact details and flight numbers. The partner API returns `bookingForm`,
+`extras` and `transfers` on reservations (sensitive answers need the
+`guests:read` scope), adds `GET /transfers`, `/extras`, `/pickup-points`,
+and webhooks gain `transfer.created` and `transfer.updated`.
+
+### M7 seed data
+
+The Palmwine House (Lekki) publishes Editorial with a Boutique draft, a
+Boutique-preset form with a second version (airport pickup block, an
+occasion question with a conditional follow-up), six extras (Breakfast for
+two, Early check-in from 10:00, Late check-out until 16:00, Birthday cake &
+decoration, Bottle of wine on arrival, Laundry bundle), seven pickup points
+(MMIA, MMA2, Jibowu, Ojota New Garage, Mobolaji Johnson Station Ebute Metta,
+Maza-Maza, Marina jetty) and today's arrivals with transfers in every live
+state; Palmwine House Ikoyi uses Business, Eko Tides Resort, Bodija Heights
+(Starter) Essentials with one custom question, and Harmattan Heritage on
+every property and on the group root, with Abuja pickup points (Nnamdi
+Azikiwe airport, Utako, Jabi, Idu and Kubwa stations) seeded into its
+dedicated database. Wuse Garden Suites is part-way through the setup wizard.
+
+---
+
 ## Auth
 
 - **Staff**: `POST /auth/signup` creates a tenant, its primary property, an
@@ -1454,7 +1599,9 @@ pnpm test        # unit (Vitest): tax maths, availability, guard rules, shift va
                  # rate resolution, restrictions, promo discounts, permissions,
                  # trusted IP, auto-balance, SLA, aging, quiet hours, webhook signatures,
                  # M5: pricing engine and events calendar, POS totals and happy hour,
-                 # iCal, inbox rules, loyalty rules, custom domain checks
+                 # iCal, inbox rules, loyalty rules, custom domain checks,
+                 # M7: colour contrast, template gates, form validation and presets,
+                 # extras and pickup pricing, transfer flow, feature aliases
 pnpm test:e2e    # needs local Postgres (roles hotel, hotel_app, hotel_platform) and Redis
 ```
 
@@ -1549,6 +1696,22 @@ M5 suite (`m5-pro`):
   at check-out moving the member up a tier, expiry.
 - custom domains: apex refused, verification with the mock DNS, resolve-host
   only once verified, `DOMAIN_TAKEN`, removal.
+
+M7 suite (`m7-site-forms`):
+
+- themes: publish, versions, revert, the public theme following; server-side
+  contrast variants; Starter template, section and font gates.
+- booking form: BVN blocked, NIN warning, Starter limit of 3 custom fields
+  (`LIMIT_REACHED`), conditional questions gated; versioning (a booking keeps
+  the version and labels it was made with); conditions, channels, hidden and
+  unknown keys; email required only for online payment; file uploads (Pro
+  only, sniffed type, size cap, one booking per upload).
+- extras and pickups: per-person-per-night pricing with VAT in the quote, a
+  tampered add-on token refused, pickup lead time, operating hours, vehicle
+  size and motor-park details, posting at check-in, the transfer status flow
+  with the driver message in the dev outbox, Starter gate.
+- NDPA: export with answers, profile answers without sensitive ones,
+  anonymise wiping answers; seed data and the setup wizard.
 
 ## Docker
 
