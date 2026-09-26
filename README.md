@@ -84,6 +84,7 @@ The migrations create missing roles `NOLOGIN`, so the grants still apply.
 | Enterprise group, Harmattan Hotels & Suites (dedicated database `hotel_t_harmattan`, white-label, SSO): Abuja `HHA`, Lagos `HHL`, Port Harcourt `HHP` | `owner@harmattanhotels.com` (break-glass owner), `gm@` (manager), `frontdesk.abuja@harmattanhotels.com` | `Demo1234!` |
 | Demo group owner, The Palmwine House (Pro, ACTIVE): The Palmwine House (Lekki Phase 1, 24 rooms, prefix `PWH`) and Palmwine House Ikoyi (12 rooms, prefix `PWI`) | `demo@palmwine.ng` | `Demo1234!` |
 | Palmwine staff | `tunde@` (manager), `ngozi@` (front desk, morning), `chidinma@` (front desk, evening, Lekki only), `musa@` and `blessing@` (housekeeping), `grace@` (housekeeping supervisor), `emeka@` (maintenance), `seun@` (custom role "Night Auditor"), `funmi@palmwine.ng` (accountant) | `Demo1234!` |
+| Palmwine Concierge (M8, Lekki only) | `amaka@palmwine.ng` | `Demo1234!` |
 | Palmwine M5 staff | `kelechi@` (front desk, Ikoyi only), `yemi@` (waiter / cashier, Lekki), `bisi@palmwine.ng` (kitchen / bar, Lekki) | `Demo1234!` |
 | Growth hotel (every Pro feature locked) | `owner@ekotides.ng` | `Demo1234!` |
 | Starter hotel on trial (housekeeping is locked) | `owner@wusegarden.ng` | `Demo1234!` |
@@ -933,6 +934,8 @@ header from a browser changes nothing. Audit `ip` fields are unchanged.
 | autopilot pace-spike check | every 10 minutes |
 | loyalty expiry and tier recalculation | 04:00 |
 | custom domain checks (PENDING; VERIFIED daily) | every 10 minutes |
+| concierge SLA escalation | every minute |
+| concierge redaction (retention) | 03:40 |
 
 ---
 
@@ -1427,6 +1430,99 @@ dedicated database. Wuse Garden Suites is part-way through the setup wizard.
 
 ---
 
+## Concierge (M8)
+
+The contract is `API-M8.md` (shared with the admin and web apps). The
+concierge arranges **lawful** guest services only: transport, dining,
+celebrations, wellness by licensed therapists, grooming, tours, tickets and
+table bookings, family, shopping, business services and "something else".
+There is no category, field, template or seed row for sexual services,
+escorts, companionship for hire or dating, and there never will be; the
+acceptable-use policy, the content screen and the platform review exist to
+keep it that way.
+
+Features: `concierge` (Growth and up) and `concierge_vendors` (Pro and up:
+vendor commission and settlement). `GET /concierge/gates`, `/concierge/aup`
+and `POST /concierge/aup/accept` answer on every plan so the admin can show
+a locked preview.
+
+Permissions (group `concierge`): `concierge.view`, `.work`, `.discreet`,
+`.catalogue`, `.review`, `.settings`, `.reports`. Front desk gets view and
+work; accountants view and reports; managers and owners everything. The
+built-in **Concierge** role (`CONCIERGE` staff role) has view, work,
+discreet and catalogue, plus read access to reservations, guests, folios and
+transfers and the WhatsApp inbox. Platform console users need `concierge.review`
+(ALL, OPERATIONS, SUPPORT).
+
+Every M8 table (`concierge_accounts`, `concierge_settings`,
+`concierge_vendors`, `concierge_services`, `concierge_requests`,
+`concierge_payments`) carries `tenant_id` under row-level security; the
+operational ones are property-scoped.
+
+### Operator notes
+
+- **Acceptable-use policy.** Nothing can be listed or switched on until
+  someone with `concierge.settings` accepts the current version
+  (`AUP_REQUIRED`); the text lives in `src/modules/concierge/aup.ts` and is
+  mirrored in `docs/concierge-acceptable-use.md` (a unit test keeps them
+  equal). A new version needs a new acceptance.
+- **Content screen.** `src/modules/concierge/denylist.ts` is the one place
+  the denylist is maintained (terms, categories, folding of `s3x` / `e s c o r t`
+  style obfuscation; `denylist.spec.ts` pins hits and deliberate near misses).
+  A flagged service is saved as `PENDING_REVIEW`, hidden from guests, and
+  waits in the platform queue (`/platform/concierge/reviews`: approve, reject,
+  hide). A flagged guest request stays `NEW`: never auto-confirmed, quoted or
+  sent to a vendor until someone with `concierge.review` clears or declines
+  it; the guest just sees "received". Settings wording, vendor names and
+  quote / vendor notes are screened too.
+- **Suspension.** The platform can suspend a hotel's concierge
+  (`CONCIERGE_SUSPENDED`, owners emailed); the public catalogue closes, work
+  already under way can still be finished.
+- **Discretion.** A guest may mark a discreet-eligible service private.
+  Staff without `concierge.discreet` see "Private request" (no service,
+  notes, answers, guest or price) or, with `discreetVisibility: HIDDEN`,
+  nothing at all (404). Every holder view of a private request is audited
+  (`concierge_request.discreet_viewed`); audit titles, guest messages,
+  escalation emails and the folio line use neutral wording ("In-room
+  service (CR-000123)", editable per property). Private requests never
+  appear in webhooks, the partner API, the shared Today card list, the
+  concierge export for non-holders or the full-data export for non-holders.
+- **SLA.** Targets per property (default 15 minutes in stay, 120 before
+  arrival). An unanswered request past its target is escalated once by
+  email to active staff with `concierge.review`.
+- **Payments.** Fixed prices confirm at once to the folio (FOLIO) or after
+  paying online (Paystack reference `CRQ_...`, dispatched by the billing
+  webhook on `metadata.kind = concierge` or the prefix; the dev mock checkout
+  is `${WEB_URL}/pay/mock?reference=CRQ_...&kind=concierge`). Free-form and
+  "from" prices are quoted; the guest accepts on the link
+  `${WEB_URL}/concierge/q/<token>`, on the trip page or by replying YES / NO
+  on WhatsApp (Pro). Folio charges post on completion; online payments post
+  a charge and a payment at once (a walk-in folio when the stay has none).
+  Guest cancellation of a paid request refunds in full.
+- **Retention.** Finished requests are redacted after `redactAfterDays`
+  (default 90): texts, answers, notes and comments become `[redacted]`;
+  amounts, statuses and ratings stay. NDPA export (`GET /guests/:id/export`)
+  includes the guest's requests; anonymising wipes them with contact details.
+- **Jobs on demand** (`concierge.settings`): `POST /concierge/jobs/sla/run`
+  and `POST /concierge/jobs/redaction/run`.
+
+### M8 seed data
+
+The Palmwine House (Lekki) has five vendors (spa, private chef, car hire,
+photographer, tour operator, with commission) and twelve services (in-room
+massage by a licensed therapist, private chef dinner, romantic room set-up,
+barber, hair and make-up, car with driver, city tour, babysitting, table
+reservation, photographer, express laundry, airport fast-track), the Concierge `amaka@palmwine.ng` (Lekki only) and thirteen requests
+`CR-000001` ... `CR-000013` in every state: two private ones (a completed
+massage and a proposal set-up), an overdue tailor request, a request held by
+the content screen, a chef quote waiting on WhatsApp and a car awaiting an
+online payment. Eko Tides (Growth) has a cabana service and "Police escort
+for the airport run" waiting in the platform review queue. Harmattan Abuja
+(dedicated database) has five services, a vendor and two requests. The seed
+is idempotent and contains no emoji.
+
+---
+
 ## Auth
 
 - **Staff**: `POST /auth/signup` creates a tenant, its primary property, an
@@ -1619,7 +1715,8 @@ pnpm test        # unit (Vitest): tax maths, availability, guard rules, shift va
                  # M5: pricing engine and events calendar, POS totals and happy hour,
                  # iCal, inbox rules, loyalty rules, custom domain checks,
                  # M7: colour contrast, template gates, form validation and presets,
-                 # extras and pickup pricing, transfer flow, feature aliases
+                 # extras and pickup pricing, transfer flow, feature aliases,
+                 # M8: concierge denylist, policy text, pricing, quotes, SLA, commission
 pnpm test:e2e    # needs local Postgres (roles hotel, hotel_app, hotel_platform) and Redis
 ```
 
@@ -1730,6 +1827,28 @@ M7 suite (`m7-site-forms`):
   with the driver message in the dev outbox, Starter gate.
 - NDPA: export with answers, profile answers without sensitive ones,
   anonymise wiping answers; seed data and the setup wizard.
+
+M8 suite (`m8-concierge`):
+
+- policy and plans: `AUP_REQUIRED` before listing or switching on, version
+  mismatch, Starter `FEATURE_LOCKED` with gates still answering, commission
+  needing Pro.
+- content screen: flagged services held in `PENDING_REVIEW` and hidden from
+  guests, platform approve / reject / hide, resubmission after an edit;
+  suspension and reinstatement; flagged guest requests never assigned,
+  quoted or sent to a vendor until cleared or declined.
+- requests: fixed and variant prices, automatic confirmation to the folio,
+  per-property numbering, completion posting one named folio line, ratings
+  and reports; a quote replaced, accepted from the link and paid through a
+  signed Paystack webhook (replays ignored, verify, refund on cancel); a
+  declined quote.
+- discretion: masking for staff without `concierge.discreet`, `HIDDEN`
+  visibility, holder views audited, neutral audit and folio wording, the
+  Concierge role; private requests kept out of the Today card, exports and
+  the partner API.
+- WhatsApp YES / NO replies (Pro), vendor jobs and commission with
+  settlement, SLA escalation, retention redaction, NDPA export and
+  anonymisation, and RLS isolation of every M8 table.
 
 ## Run everything with Docker
 
