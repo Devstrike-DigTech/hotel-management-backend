@@ -245,8 +245,19 @@ function checkOutbound(env: Env): string[] {
     : [];
 }
 
+/**
+ * Blank values (`KEY=` or `KEY="  "`, as in `.env.example`) mean "not set":
+ * they are dropped before validation, so optional settings fall back to
+ * their defaults and required ones report "required" instead of a length or
+ * URL error. Together with `skipProcessEnv` in the config module, code never
+ * sees an empty string for an optional value.
+ */
+export function withoutBlankValues(raw: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(raw).filter(([, v]) => !(typeof v === 'string' && v.trim() === '')));
+}
+
 export function validateEnv(raw: Record<string, unknown>): Env {
-  const parsed = envSchema.safeParse(raw);
+  const parsed = envSchema.safeParse(withoutBlankValues(raw));
   if (!parsed.success) {
     const problems = parsed.error.issues
       .map((i) => `  - ${i.path.join('.')}: ${i.message}`)

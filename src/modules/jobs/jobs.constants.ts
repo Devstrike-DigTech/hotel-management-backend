@@ -29,16 +29,35 @@ export const OPS_JOBS = {
   domainChecks: { name: 'domain-checks', scheduler: 'domain-checks-10m', cron: '*/10 * * * *' },
 } as const;
 
-/** ioredis connection options from a redis:// URL. */
+/** Query options whose value is a number (ioredis option names). */
+const NUMERIC_REDIS_OPTIONS = new Set(['family', 'db', 'connectTimeout', 'commandTimeout', 'keepAlive', 'socketTimeout']);
+
+/**
+ * ioredis connection options from a redis:// or rediss:// URL. Query
+ * parameters are kept as ioredis options, like `new Redis(url)` does (for
+ * example `?family=0` for IPv6-only private networks such as Railway's);
+ * numeric ones are converted. `maxRetriesPerRequest` stays null (BullMQ).
+ */
 export function redisConnection(url: string) {
   const u = new URL(url);
+  const query: Record<string, string | number | boolean | object> = {};
+  u.searchParams.forEach((value, key) => {
+    if (key === 'tls') {
+      if (value === 'true' || value === '1') query.tls = {};
+      return;
+    }
+    if (NUMERIC_REDIS_OPTIONS.has(key) && /^-?\d+$/.test(value)) query[key] = Number(value);
+    else if (value === 'true' || value === 'false') query[key] = value === 'true';
+    else query[key] = value;
+  });
   return {
-    host: u.hostname,
+    host: u.hostname.replace(/^\[|\]$/g, ''),
     port: Number(u.port || 6379),
-    username: u.username || undefined,
+    username: u.username ? decodeURIComponent(u.username) : undefined,
     password: u.password ? decodeURIComponent(u.password) : undefined,
     db: u.pathname && u.pathname !== '/' ? Number(u.pathname.slice(1)) : 0,
     ...(u.protocol === 'rediss:' && { tls: {} }),
+    ...query,
     maxRetriesPerRequest: null,
   };
 }

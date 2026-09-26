@@ -219,7 +219,10 @@ audit rows can never be updated or deleted.
 ## Environment
 
 All variables are validated at startup (`src/config/env.schema.ts`). The
-process refuses to start and lists every missing or invalid value.
+process refuses to start and lists every missing or invalid value. An
+empty value (`KEY=` as in `.env.example`) means "not set": optional settings
+fall back to their defaults, and the code only ever reads validated values
+(`skipProcessEnv`), never a raw empty string.
 
 | variable | required | notes |
 |---|---|---|
@@ -252,7 +255,7 @@ process refuses to start and lists every missing or invalid value.
 | `PUBLIC_RATE_LIMITS` | no (true) | Redis rate limits on public endpoints |
 | `DATABASE_MIGRATION_URL` | for migrate/seed | owner role `hotel` |
 | `DATABASE_POOL_MAX` | no (10) | pg pool size |
-| `REDIS_URL` | yes | BullMQ |
+| `REDIS_URL` | yes | BullMQ, rate limits, caches. Query options reach every connection (e.g. `?family=0` on IPv6-only private networks) |
 | `JWT_ACCESS_SECRET` | yes, min 32 chars | hotel staff tokens (audience `hotel`) |
 | `JWT_PLATFORM_SECRET` | yes, min 32 chars | platform console tokens (audience `platform`) |
 | `JWT_REFRESH_SECRET` | yes, min 32 chars | HMAC key for stored refresh-token hashes |
@@ -270,6 +273,7 @@ process refuses to start and lists every missing or invalid value.
 | `DNS_PROVIDER` | no (`system` in production, else `mock`) | custom-domain checks: `node:dns` or the in-memory mock |
 | `CUSTOM_DOMAIN_TARGET` | no (`sites.<APP_DOMAIN>`) | the CNAME target hotels point their domain at |
 | `JOBS_ENABLED` | no (true) | `false` starts no BullMQ workers or schedules (dunning, night audit, digest, guard sweep, M4 jobs) |
+| `PROCESS_ROLE` | no (`all`) | `all`: HTTP and BullMQ workers in one process; `api`: HTTP only (enqueues and schedules, processes nothing); `worker`: BullMQ processors (still answers `/api/v1/health`). New `@Processor` classes go in `PROCESSORS` in `src/modules/jobs/jobs.module.ts` |
 | `SWAGGER_ENABLED` | no (true) | serve `/docs` |
 
 ---
