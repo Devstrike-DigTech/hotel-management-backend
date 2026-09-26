@@ -1727,16 +1727,134 @@ M7 suite (`m7-site-forms`):
 - NDPA: export with answers, profile answers without sensitive ones,
   anonymise wiping answers; seed data and the setup wizard.
 
-## Docker
+## Run everything with Docker
+
+One command brings up the whole product (database, Redis, migrations, demo
+data, API, worker and the three Next.js apps as production builds).
+
+**Prerequisites.** Docker Engine 24+ or Docker Desktop with Compose v2.24+
+(`docker compose version`), about 4 GB of free memory for the first build and
+8 GB of disk. The four repos cloned side by side:
 
 ```bash
-docker compose up -d                    # postgres + redis only
+git clone <...>/hotel-management-backend
+git clone <...>/hotel-management-web
+git clone <...>/hotel-management-admin
+git clone <...>/hotel-management-platform
+cd hotel-management-backend
+cp .env.example .env
+docker compose -f docker-compose.full.yml up --build
+```
+
+The first build takes several minutes. Services start in order: `postgres`
+and `redis` (healthy) > `migrate` (`pnpm db:migrate:all`, exits) > `seed`
+(`pnpm db:seed`, idempotent, exits) > `api` and `worker` (healthy) > `web`,
+`admin`, `platform`. Add `-d` to run in the background and
+`docker compose -f docker-compose.full.yml ps` to watch the health column.
+
+| App | URL |
+|---|---|
+| Guest web (marketplace, hotel sites) | http://localhost:3000 (a hotel: http://localhost:3000/h/palmwine-house) |
+| Hotel staff app | http://localhost:3001 |
+| Platform console | http://localhost:3002 (use `localhost`, not `127.0.0.1`) |
+| API | http://localhost:4000/api/v1 (Swagger at http://localhost:4000/docs) |
+| Dev outbox (emails, SMS and OTP codes) | http://localhost:4000/api/v1/public/dev/outbox |
+
+**Demo logins** (full list under "Seed accounts" above):
+
+| App | Email | Password |
+|---|---|---|
+| Staff app, hotel owner (The Palmwine House) | `demo@palmwine.ng` | `Demo1234!` |
+| Staff app, Enterprise group | `owner@harmattanhotels.com` | `Demo1234!` |
+| Platform console, SUPER_ADMIN | `admin@devstrike.ng` | `Admin1234!` |
+
+The console asks for a TOTP code: add the secret
+`DEVSTRIKEADMINTOTPSECRET234567AB` to an authenticator app, run
+`oathtool --totp -b DEVSTRIKEADMINTOTPSECRET234567AB`, or open
+http://localhost:4000/api/v1/platform/auth/dev/totp?email=admin@devstrike.ng
+(the stack runs the API with `NODE_ENV=development`, so the dev helpers and
+mocks are on). The console's session cookies are `Secure`: Chrome, Edge and
+Firefox accept them on `http://localhost`; Safari does not.
+
+**What runs where.** One backend image serves four services: `api`
+(`PROCESS_ROLE=api`: HTTP, enqueues jobs, no BullMQ processors), `worker`
+(`PROCESS_ROLE=worker`: the processors; health on its own port 4000, not
+published), `migrate` and `seed`. `PROCESS_ROLE` defaults to `all` (one
+process, as in `pnpm start:dev`). Server-side calls go over the Compose
+network (`http://api:4000`); the browser uses `http://localhost:<port>`,
+which is baked into the Next.js builds. `TRUSTED_PROXY_SECRET` is shared by
+the API, web and platform. Uploads live in the `uploads` volume
+(`STORAGE_LOCAL_DIR=/app/storage`), with `pgdata` and `redisdata` beside it.
+
+**Everyday commands** (all with `-f docker-compose.full.yml`):
+
+```bash
+docker compose -f docker-compose.full.yml up -d --build          # start / rebuild after pulling
+docker compose -f docker-compose.full.yml logs -f api worker     # follow logs
+docker compose -f docker-compose.full.yml run --rm seed          # refresh the demo "today"
+docker compose -f docker-compose.full.yml exec postgres psql -U hotel hotel
+docker compose -f docker-compose.full.yml down                   # stop, keep data
+docker compose -f docker-compose.full.yml down -v                # stop and DELETE all data
+SEED=false docker compose -f docker-compose.full.yml up -d       # start without demo data
+docker compose -f docker-compose.full.yml --profile clamav up -d # also run ClamAV (clamd on clamav:3310)
+```
+
+**Settings.** `.env` supplies every backend variable (provider keys and
+secrets; the Compose file overrides the addresses so containers find each
+other, and gives defaults to the required secrets and to the variables
+`.env.example` leaves empty). Compose-only knobs, from the shell or `.env`:
+
+| Variable | Default | |
+|---|---|---|
+| `WEB_PORT`, `ADMIN_PORT`, `PLATFORM_PORT`, `API_PORT` | 3000, 3001, 3002, 4000 | host ports (the Next.js containers listen on the same port) |
+| `PUBLIC_WEB_URL`, `PUBLIC_ADMIN_URL`, `PUBLIC_PLATFORM_URL`, `PUBLIC_API_URL` | `http://localhost:<port>` | what the browser uses (CORS, links, bundles) |
+| `SEED` | `true` | `false` skips the demo data |
+| `TRUSTED_PROXY_SECRET` | a local value | shared by api, web and platform |
+| `WEB_CONTEXT`, `ADMIN_CONTEXT`, `PLATFORM_CONTEXT` | `../hotel-management-<app>` | where the frontend repos are |
+
+**Common problems.**
+
+- *Port already in use* (a local dev server, Postgres or another stack):
+  stop it, or move the whole stack, e.g.
+  `API_PORT=14000 WEB_PORT=13000 ADMIN_PORT=13001 PLATFORM_PORT=13002 docker compose -f docker-compose.full.yml up -d --build`.
+  Keep `--build`: the browser URLs are compiled into the frontends. Postgres
+  and Redis are not published, so they never clash.
+- *The marketplace home is empty right after start*: it was pre-rendered
+  during the build, when no API was running, and refreshes itself within a
+  minute (reload twice). Hotel pages are rendered on request.
+- *`api` stays unhealthy*: `docker compose -f docker-compose.full.yml logs api`.
+  "Invalid environment configuration" names the variable; a secret shorter
+  than 32 characters in `.env` is the usual cause.
+- *Console sign-in says "Cross-site request refused"*: open it at
+  `http://localhost:<PLATFORM_PORT>` exactly (not `127.0.0.1` or a LAN IP).
+- *Old data or schema after switching branches*: `down -v` and `up --build`.
+- *Building behind a TLS-inspecting corporate proxy*: builds fail with
+  certificate errors. Every Dockerfile accepts the proxy's CA as an optional
+  BuildKit secret `extra_ca` (add `build.secrets: [extra_ca]` to the services
+  in a Compose override with `secrets: { extra_ca: { file: /path/ca.pem } }`).
+- *Docker Hub "429 Too Many Requests"*: `docker login`, then retry.
+
+### Databases only
+
+For running the API with Node on your machine:
+
+```bash
+docker compose up -d                    # postgres + redis only (ports 5432, 6379)
 docker compose --profile api up --build # also build and run the API (runs migrate deploy first)
 ```
 
-The `Dockerfile` is a multi-stage build on `node:22-bookworm-slim`. The final
-image contains only production dependencies (including the Prisma CLI for
-`migrate deploy`) and the compiled `dist/`, and runs as the `node` user.
+The `Dockerfile` is a multi-stage build on `node:22-alpine`. The final image
+holds production dependencies (including the Prisma CLI), the compiled
+`dist/`, and `src/`, `scripts/` and `prisma/` with a global `tsx` for
+`pnpm db:migrate:all` and `pnpm db:seed`; it runs as the `node` user.
+
+## Deploy
+
+Railway (api + worker, Postgres, Redis) and Vercel (web, admin, platform):
+step by step, with every variable and third-party account, in
+[`docs/deploy.md`](docs/deploy.md). Config: `railway.json` (api: pre-deploy
+`pnpm db:migrate:all`, health check `/api/v1/health`) and
+`railway.worker.json` (worker).
 
 ---
 
