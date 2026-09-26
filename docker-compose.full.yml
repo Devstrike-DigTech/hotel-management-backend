@@ -1,0 +1,271 @@
+# The whole product with one command (see "Run everything with Docker" in README.md).
+#
+#   git clone the four repos side by side:
+#     hotel-management-backend/  hotel-management-web/  hotel-management-admin/  hotel-management-platform/
+#   cd hotel-management-backend
+#   cp .env.example .env
+#   docker compose -f docker-compose.full.yml up --build
+#
+#   web      http://localhost:3000    guest marketplace + hotel sites
+#   admin    http://localhost:3001    hotel staff app
+#   platform http://localhost:3002    Devstrike platform console
+#   api      http://localhost:4000    /api/v1, Swagger at /docs
+#
+# Optional ClamAV:  docker compose -f docker-compose.full.yml --profile clamav up --build
+# Reset all data:   docker compose -f docker-compose.full.yml down -v
+#
+# Knobs (shell env or .env; all optional):
+#   WEB_PORT / ADMIN_PORT / PLATFORM_PORT / API_PORT   host ports (3000 / 3001 / 3002 / 4000)
+#   PUBLIC_WEB_URL / PUBLIC_ADMIN_URL / PUBLIC_PLATFORM_URL / PUBLIC_API_URL
+#                     what the BROWSER uses (default http://localhost:<port>); baked into the
+#                     Next.js builds, so change them together with --build
+#   SEED=false        skip the demo data
+#   TRUSTED_PROXY_SECRET  shared by the API and the web / platform servers
+# Every other backend variable (provider keys, secrets) is read from .env.
+
+name: hotel-stack
+
+x-api-build: &api-build
+  context: .
+  target: runtime
+
+# Wiring shared by api, worker, migrate and seed. Containers reach each other by
+# service name (postgres, redis, api); the browser uses the PUBLIC_* URLs.
+x-api-env: &api-env
+  NODE_ENV: ${NODE_ENV:-development}
+  PORT: "4000"
+  DATABASE_URL: postgresql://hotel_app:hotel_app@postgres:5432/hotel
+  DATABASE_PLATFORM_URL: postgresql://hotel_platform:hotel_platform@postgres:5432/hotel
+  DATABASE_MIGRATION_URL: postgresql://hotel:hotel@postgres:5432/hotel
+  # Owner role with CREATEDB: dedicated tenant databases and db:migrate:all.
+  DATABASE_ADMIN_URL: postgresql://hotel:hotel@postgres:5432/hotel
+  REDIS_URL: redis://redis:6379
+  STORAGE_DRIVER: local
+  STORAGE_LOCAL_DIR: /app/storage
+  API_PUBLIC_URL: ${PUBLIC_API_URL:-http://localhost:${API_PORT:-4000}}
+  WEB_URL: ${PUBLIC_WEB_URL:-http://localhost:${WEB_PORT:-3000}}
+  ADMIN_URL: ${PUBLIC_ADMIN_URL:-http://localhost:${ADMIN_PORT:-3001}}
+  CORS_ORIGINS: ${PUBLIC_WEB_URL:-http://localhost:${WEB_PORT:-3000}},${PUBLIC_ADMIN_URL:-http://localhost:${ADMIN_PORT:-3001}}
+  PLATFORM_ORIGINS: ${PUBLIC_PLATFORM_URL:-http://localhost:${PLATFORM_PORT:-3002}}
+  PLATFORM_APP_URL: ${PUBLIC_PLATFORM_URL:-http://localhost:${PLATFORM_PORT:-3002}}
+  TRUSTED_PROXY_SECRET: ${TRUSTED_PROXY_SECRET:-docker-local-trusted-proxy-secret}
+  # Required secrets: .env values win; these defaults only make the stack start
+  # without a .env. Never use them outside your machine.
+  DB_CONTEXT_SECRET: ${DB_CONTEXT_SECRET:-docker-local-db-context-secret-000000000000}
+  JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-docker-local-jwt-access-secret-0000000000000}
+  JWT_PLATFORM_SECRET: ${JWT_PLATFORM_SECRET:-docker-local-jwt-platform-secret-00000000000}
+  JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-docker-local-jwt-refresh-secret-000000000000}
+  GUEST_DATA_KEY: ${GUEST_DATA_KEY:-docker-local-guest-data-key-000000000000000}
+  SHARE_TOKEN_SECRET: ${SHARE_TOKEN_SECRET:-docker-local-share-token-secret-00000000000}
+  GUEST_JWT_SECRET: ${GUEST_JWT_SECRET:-docker-local-guest-jwt-secret-0000000000000}
+  GUEST_TOKEN_SECRET: ${GUEST_TOKEN_SECRET:-docker-local-guest-token-secret-000000000000}
+  # .env.example leaves these empty; an empty value reaches the app as "" (not
+  # "unset"), so give them their documented defaults here.
+  PLATFORM_DATA_KEY: ${PLATFORM_DATA_KEY:-docker-local-platform-data-key-00000000000}
+  PLATFORM_ALERT_EMAIL: ${PLATFORM_ALERT_EMAIL:-${SUPPORT_EMAIL:-support@hotelos.ng}}
+  CUSTOM_DOMAIN_TARGET: ${CUSTOM_DOMAIN_TARGET:-sites.${APP_DOMAIN:-hotelos.ng}}
+  STAFF_PORTAL_TARGET: ${STAFF_PORTAL_TARGET:-portal.${APP_DOMAIN:-hotelos.ng}}
+  APP_NAME: ${APP_NAME:-HotelOS}
+  APP_DOMAIN: ${APP_DOMAIN:-hotelos.ng}
+  SUPPORT_EMAIL: ${SUPPORT_EMAIL:-support@hotelos.ng}
+
+x-env-file: &env-file
+  - path: .env
+    required: false
+
+x-api-healthcheck: &api-healthcheck
+  test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+  interval: 10s
+  timeout: 5s
+  retries: 30
+  start_period: 30s
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: hotel
+      POSTGRES_PASSWORD: hotel
+      POSTGRES_DB: hotel
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/01-roles.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hotel -d hotel"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  # One-shot: shared database + every dedicated tenant database.
+  migrate:
+    image: hotel-api:local
+    build: *api-build
+    env_file: *env-file
+    environment:
+      <<: *api-env
+      JOBS_ENABLED: "false"
+    command: ["pnpm", "db:migrate:all"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # One-shot, idempotent demo data. SEED=false skips it (exits 0).
+  seed:
+    image: hotel-api:local
+    build: *api-build
+    env_file: *env-file
+    environment:
+      <<: *api-env
+      JOBS_ENABLED: "false"
+      SEED: ${SEED:-true}
+    command: ["sh", "-c", "if [ \"$$SEED\" = false ]; then echo 'SEED=false: skipping the demo data'; else exec pnpm db:seed; fi"]
+    volumes:
+      - uploads:/app/storage
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    image: hotel-api:local
+    build: *api-build
+    env_file: *env-file
+    environment:
+      <<: *api-env
+      PROCESS_ROLE: api
+    ports:
+      - "${API_PORT:-4000}:4000"
+    volumes:
+      - uploads:/app/storage
+    healthcheck: *api-healthcheck
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # BullMQ processors (dunning, sweeps, notifications, platform jobs). Answers
+  # /api/v1/health on its own port 4000 inside the network; not published.
+  worker:
+    image: hotel-api:local
+    build: *api-build
+    env_file: *env-file
+    environment:
+      <<: *api-env
+      PROCESS_ROLE: worker
+    volumes:
+      - uploads:/app/storage
+    healthcheck: *api-healthcheck
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Optional virus scanner (`--profile clamav`); clamd on clamav:3310. The API
+  # ships a no-op FileScanner, so nothing calls it until a scanner is bound.
+  clamav:
+    image: clamav/clamav:stable
+    profiles: ["clamav"]
+    volumes:
+      - clamdb:/var/lib/clamav
+    healthcheck:
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 300s
+    restart: unless-stopped
+
+  web:
+    image: hotel-web:local
+    build:
+      context: ${WEB_CONTEXT:-../hotel-management-web}
+      args:
+        NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:${API_PORT:-4000}}
+        NEXT_PUBLIC_SITE_URL: ${PUBLIC_WEB_URL:-http://localhost:${WEB_PORT:-3000}}
+        NEXT_PUBLIC_ADMIN_URL: ${PUBLIC_ADMIN_URL:-http://localhost:${ADMIN_PORT:-3001}}
+        NEXT_PUBLIC_APP_NAME: ${APP_NAME:-HotelOS}
+        NEXT_PUBLIC_APP_DOMAIN: ${APP_DOMAIN:-hotelos.ng}
+        NEXT_PUBLIC_SUPPORT_EMAIL: ${SUPPORT_EMAIL:-support@hotelos.ng}
+    environment:
+      # Listen on the published port (see the platform service).
+      PORT: ${WEB_PORT:-3000}
+      # Server components, the proxy and the /api/v1 gateway call the API directly.
+      API_URL: http://api:4000
+      TRUSTED_PROXY_SECRET: ${TRUSTED_PROXY_SECRET:-docker-local-trusted-proxy-secret}
+    ports:
+      - "${WEB_PORT:-3000}:${WEB_PORT:-3000}"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  admin:
+    image: hotel-admin:local
+    build:
+      context: ${ADMIN_CONTEXT:-../hotel-management-admin}
+      args:
+        NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:${API_PORT:-4000}}
+        NEXT_PUBLIC_WEB_URL: ${PUBLIC_WEB_URL:-http://localhost:${WEB_PORT:-3000}}
+        NEXT_PUBLIC_APP_NAME: ${APP_NAME:-HotelOS}
+        NEXT_PUBLIC_APP_DOMAIN: ${APP_DOMAIN:-hotelos.ng}
+        NEXT_PUBLIC_SUPPORT_EMAIL: ${SUPPORT_EMAIL:-support@hotelos.ng}
+    environment:
+      PORT: ${ADMIN_PORT:-3001}
+    ports:
+      - "${ADMIN_PORT:-3001}:${ADMIN_PORT:-3001}"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  platform:
+    image: hotel-platform:local
+    build:
+      context: ${PLATFORM_CONTEXT:-../hotel-management-platform}
+      args:
+        NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:${API_PORT:-4000}}
+        NEXT_PUBLIC_ADMIN_URL: ${PUBLIC_ADMIN_URL:-http://localhost:${ADMIN_PORT:-3001}}
+        NEXT_PUBLIC_WEB_URL: ${PUBLIC_WEB_URL:-http://localhost:${WEB_PORT:-3000}}
+        NEXT_PUBLIC_APP_NAME: ${APP_NAME:-HotelOS}
+        NEXT_PUBLIC_APP_DOMAIN: ${APP_DOMAIN:-hotelos.ng}
+        NEXT_PUBLIC_SUPPORT_EMAIL: ${SUPPORT_EMAIL:-support@hotelos.ng}
+        NEXT_PUBLIC_CONSOLE_ENV: ${CONSOLE_ENV:-development}
+    environment:
+      # Same port inside and outside: the console's CSRF check expects the
+      # browser origin to be http://localhost:<PORT> (see its Dockerfile).
+      PORT: ${PLATFORM_PORT:-3002}
+      # The console's /api/* route handlers forward here (server to server).
+      API_INTERNAL_URL: http://api:4000
+      TRUSTED_PROXY_SECRET: ${TRUSTED_PROXY_SECRET:-docker-local-trusted-proxy-secret}
+    ports:
+      - "${PLATFORM_PORT:-3002}:${PLATFORM_PORT:-3002}"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  uploads:
+  clamdb:
