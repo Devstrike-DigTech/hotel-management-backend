@@ -8,24 +8,24 @@ import { CatalogueService, type ServiceInput } from './catalogue.service.js';
 import { ConciergeService } from './concierge.service.js';
 import {
   AcceptAupDto,
-  AssignDto,
-  ConfirmDto,
+  ConciergeAssignDto,
+  ConciergeConfirmDto,
   CreateServiceDto,
   CreateVendorDto,
   ExportQueryDto,
-  FlagReviewDto,
+  ConciergeFlagReviewDto,
   FromMessageDto,
-  NoteDto,
+  ConciergeNoteDto,
   PriceDto,
-  QuoteDto,
+  ConciergeQuoteDto,
   RateVendorDto,
   ReportQueryDto,
   RequestQueryDto,
   ScreenDto,
   SendToVendorDto,
   ServiceQueryDto,
-  SettingsDto,
-  SettleDto,
+  ConciergeSettingsDto,
+  ConciergeSettleDto,
   SlotsQueryDto,
   StaffCreateRequestDto,
   StatusDto,
@@ -80,7 +80,7 @@ export class ConciergeController {
   }
 
   @Put('settings') @RequirePermission('concierge.settings')
-  updateSettings(@CurrentUser() u: AuthUser, @Body() dto: SettingsDto, @ClientIp() ip?: string) {
+  updateSettings(@CurrentUser() u: AuthUser, @Body() dto: ConciergeSettingsDto, @ClientIp() ip?: string) {
     return this.core.updateSettings(u, dto, ip);
   }
 
@@ -164,7 +164,7 @@ export class ConciergeController {
   }
 
   @Post('vendors/:id/settle') @RequirePermission('concierge.reports') @HttpCode(200)
-  settle(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: SettleDto, @ClientIp() ip?: string) {
+  settle(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ConciergeSettleDto, @ClientIp() ip?: string) {
     return this.catalogue.settle(u, id, dto, ip);
   }
 
@@ -222,17 +222,17 @@ export class ConciergeController {
   }
 
   @Post('requests/:id/quote') @RequirePermission('concierge.work') @HttpCode(200)
-  quote(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: QuoteDto, @ClientIp() ip?: string) {
+  quote(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ConciergeQuoteDto, @ClientIp() ip?: string) {
     return this.requests.quote(u, id, dto, ip);
   }
 
   @Post('requests/:id/confirm') @RequirePermission('concierge.work') @HttpCode(200)
-  confirm(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ConfirmDto, @ClientIp() ip?: string) {
+  confirm(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ConciergeConfirmDto, @ClientIp() ip?: string) {
     return this.requests.confirm(u, id, dto, ip);
   }
 
   @Post('requests/:id/assign') @RequirePermission('concierge.work') @HttpCode(200)
-  assign(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: AssignDto, @ClientIp() ip?: string) {
+  assign(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ConciergeAssignDto, @ClientIp() ip?: string) {
     return this.requests.assign(u, id, dto, ip);
   }
 
@@ -247,12 +247,12 @@ export class ConciergeController {
   }
 
   @Post('requests/:id/notes') @RequirePermission('concierge.work') @HttpCode(200)
-  note(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: NoteDto, @ClientIp() ip?: string) {
+  note(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ConciergeNoteDto, @ClientIp() ip?: string) {
     return this.requests.note(u, id, dto.note, ip);
   }
 
   @Post('requests/:id/flag-review') @RequirePermission('concierge.review') @HttpCode(200)
-  flagReview(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: FlagReviewDto, @ClientIp() ip?: string) {
+  flagReview(@CurrentUser() u: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ConciergeFlagReviewDto, @ClientIp() ip?: string) {
     return this.requests.flagReview(u, id, dto, ip);
   }
 

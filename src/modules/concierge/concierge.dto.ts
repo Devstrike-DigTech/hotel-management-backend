@@ -56,7 +56,7 @@ class PaymentsDto {
   @IsOptional() @IsBoolean() folio?: boolean;
 }
 
-export class SettingsDto {
+export class ConciergeSettingsDto {
   @IsOptional() @IsBoolean() enabled?: boolean;
   @IsOptional() @ValidateNested() @Type(() => SlaDto) sla?: SlaDto;
   @IsOptional() @ValidateNested() @Type(() => FolioLabelsDto) folioLabels?: FolioLabelsDto;
@@ -173,7 +173,7 @@ export class VendorQueryDto {
   @IsOptional() @IsIn(CATEGORY_CODES) category?: string;
 }
 
-export class SettleDto {
+export class ConciergeSettleDto {
   @IsOptional() @IsArray() @ArrayMaxSize(500) @IsUUID('all', { each: true }) requestIds?: string[];
   @IsOptional() @Matches(DATE_RE) upTo?: string;
   @IsOptional() @IsString() @MaxLength(120) reference?: string;
@@ -242,7 +242,7 @@ export class UpdateRequestDto {
   @IsOptional() @IsBoolean() discreet?: boolean;
 }
 
-export class QuoteDto {
+export class ConciergeQuoteDto {
   @IsInt() @Min(1) @Max(1_000_000_000) amountKobo!: number;
   @IsOptional() @IsBoolean() taxable?: boolean;
   @IsOptional() @IsInt() @Min(1) @Max(168) validHours?: number;
@@ -251,12 +251,12 @@ export class QuoteDto {
   @IsOptional() @IsBoolean() notify?: boolean;
 }
 
-export class ConfirmDto {
+export class ConciergeConfirmDto {
   @IsIn(['ONLINE', 'FOLIO', 'NONE']) paymentMethod!: 'ONLINE' | 'FOLIO' | 'NONE';
   @IsOptional() @IsString() @MaxLength(300) note?: string;
 }
 
-export class AssignDto {
+export class ConciergeAssignDto {
   @IsOptional() @nullable() @IsUUID() assigneeId?: string | null;
   @IsOptional() @nullable() @IsUUID() vendorId?: string | null;
 }
@@ -277,11 +277,11 @@ export class StatusDto {
   @IsOptional() @IsISO8601() clientCreatedAt?: string;
 }
 
-export class NoteDto {
+export class ConciergeNoteDto {
   @IsString() @Length(1, 500) note!: string;
 }
 
-export class FlagReviewDto {
+export class ConciergeFlagReviewDto {
   @IsIn(['CLEAR', 'DECLINE']) decision!: 'CLEAR' | 'DECLINE';
   @IsString() @Length(1, 500) note!: string;
 }
