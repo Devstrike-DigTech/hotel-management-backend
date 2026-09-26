@@ -26,6 +26,12 @@ not need a template.
 | `in_stay_welcome` | UTILITY | en | Guest inbox: welcome after check-in, inviting requests |
 | `transfer_driver_assigned` | UTILITY | en | Arrival pickup / departure drop-off: driver, phone and plate once a driver is assigned |
 | `transfer_update` | UTILITY | en | Arrival pickup / departure drop-off: driver on the way, delays and cancellations |
+| `concierge_request_received` | UTILITY | en | Concierge: acknowledgement of a guest request (flagged requests get the same neutral text) |
+| `concierge_quote` | UTILITY | en | Concierge: a quote the guest accepts or declines (reply YES / NO or open the link) |
+| `concierge_confirmed` | UTILITY | en | Concierge: request confirmed (automatically, accepted, paid or by staff) |
+| `concierge_update` | UTILITY | en | Concierge: scheduled, payment link, declined, cancelled and other updates |
+| `concierge_completed` | UTILITY | en | Concierge: request completed, with the rating link |
+| `concierge_vendor_job` | UTILITY | en | Concierge: a job sent to a vendor (first name only and no room number unless the hotel allows it) |
 
 ## owner_daily_digest
 
@@ -310,3 +316,153 @@ Hello {{1}}, an update on your {{2}} with {{3}}: {{4}} Booking {{5}}.
 | `{{3}}` | hotel name | The Palmwine House |
 | `{{4}}` | update | Your driver is on the way and will reach Jibowu Motor Park by 19:30. |
 | `{{5}}` | booking code | PWH-7K3Q |
+
+## Concierge replies (M8)
+
+Guests answer a `concierge_quote` by replying `YES` or `NO` (also `Yes please`, `OK`, `No thanks`; with several open quotes, `YES CR-000123`). The reply is matched before the guest inbox: `YES` charges the stay's folio when it is open, otherwise the guest gets the online payment link; `NO` cancels the request. The answer is sent back as plain text (the guest is inside the 24-hour window). Private requests never name the service in these templates: `{{4}}` / `{{3}}` read "private request".
+
+## concierge_request_received
+
+- Category: UTILITY
+- Language: English (`en`)
+- Used for: Concierge: acknowledgement of a guest request (flagged requests get the same neutral text)
+
+Body:
+
+```
+Hello {{1}}, {{2}} has your request {{3}}: {{4}}.
+We will get back to you within {{5}}. Only the concierge team sees your request details.
+See it here: {{6}}
+```
+
+| Placeholder | Meaning | Sample value |
+| --- | --- | --- |
+| `{{1}}` | guest first name | Adaeze |
+| `{{2}}` | hotel name | The Palmwine House |
+| `{{3}}` | request number | CR-000123 |
+| `{{4}}` | service (or "private request") | Private chef dinner |
+| `{{5}}` | reply target | 15 minutes |
+| `{{6}}` | request link | https://hotelos.ng/trips/PWH-7K3Q?t=abc#concierge |
+
+## concierge_quote
+
+- Category: UTILITY
+- Language: English (`en`)
+- Used for: Concierge: a quote the guest accepts or declines (reply YES / NO or open the link)
+
+Body:
+
+```
+Hello {{1}}, {{2}} can arrange your request {{3}} ({{4}}) for {{5}}.
+This price is held until {{6}}. Details: {{7}}
+Reply YES to accept or NO to decline.
+```
+
+| Placeholder | Meaning | Sample value |
+| --- | --- | --- |
+| `{{1}}` | guest first name | Adaeze |
+| `{{2}}` | hotel name | The Palmwine House |
+| `{{3}}` | request number | CR-000123 |
+| `{{4}}` | service (or "private request") | Private chef dinner |
+| `{{5}}` | price | ₦96,750 |
+| `{{6}}` | valid until | Sat 26 Sep 2026, 18:00 |
+| `{{7}}` | quote link | https://hotelos.ng/concierge/q/abc |
+
+Buttons:
+
+- Quick reply: "YES"
+- Quick reply: "NO"
+
+## concierge_confirmed
+
+- Category: UTILITY
+- Language: English (`en`)
+- Used for: Concierge: request confirmed (automatically, accepted, paid or by staff)
+
+Body:
+
+```
+Hello {{1}}, your request {{2}} ({{3}}) with {{4}} is confirmed for {{5}}.
+Payment: {{6}}.
+Details: {{7}}
+```
+
+| Placeholder | Meaning | Sample value |
+| --- | --- | --- |
+| `{{1}}` | guest first name | Adaeze |
+| `{{2}}` | request number | CR-000123 |
+| `{{3}}` | service (or "private request") | In-room massage, 90 minutes |
+| `{{4}}` | hotel name | The Palmwine House |
+| `{{5}}` | date and time | Sat 26 Sep 2026, 19:00 |
+| `{{6}}` | payment | added to your bill |
+| `{{7}}` | request link | https://hotelos.ng/trips/PWH-7K3Q?t=abc#concierge |
+
+## concierge_update
+
+- Category: UTILITY
+- Language: English (`en`)
+- Used for: Concierge: scheduled, payment link, declined, cancelled and other updates
+
+Body:
+
+```
+Hello {{1}}, an update on your request {{2}} with {{3}}: {{4}}
+Details: {{5}}
+```
+
+| Placeholder | Meaning | Sample value |
+| --- | --- | --- |
+| `{{1}}` | guest first name | Adaeze |
+| `{{2}}` | request number | CR-000123 |
+| `{{3}}` | hotel name | The Palmwine House |
+| `{{4}}` | update | Your chef will arrive at 18:30 to set up. |
+| `{{5}}` | request link | https://hotelos.ng/trips/PWH-7K3Q?t=abc#concierge |
+
+## concierge_completed
+
+- Category: UTILITY
+- Language: English (`en`)
+- Used for: Concierge: request completed, with the rating link
+
+Body:
+
+```
+Hello {{1}}, your request {{2}} with {{3}} is complete. We hope you enjoyed it.
+Tell us how it went: {{4}}
+```
+
+| Placeholder | Meaning | Sample value |
+| --- | --- | --- |
+| `{{1}}` | guest first name | Adaeze |
+| `{{2}}` | request number | CR-000123 |
+| `{{3}}` | hotel name | The Palmwine House |
+| `{{4}}` | rating link | https://hotelos.ng/trips/PWH-7K3Q?t=abc#concierge |
+
+## concierge_vendor_job
+
+- Category: UTILITY
+- Language: English (`en`)
+- Used for: Concierge: a job sent to a vendor (first name only and no room number unless the hotel allows it)
+
+Body:
+
+```
+New job from {{1}}: {{2}} ({{3}}).
+When: {{4}}. Guests: {{5}}.
+Guest: {{6}}. Where: {{7}}.
+Notes: {{8}}
+Please confirm with {{9}} on {{10}}.
+```
+
+| Placeholder | Meaning | Sample value |
+| --- | --- | --- |
+| `{{1}}` | hotel name | The Palmwine House |
+| `{{2}}` | service | In-room massage, 90 minutes |
+| `{{3}}` | job number | CR-000123 |
+| `{{4}}` | date and time | Sat 26 Sep 2026, 19:00 |
+| `{{5}}` | party size | 2 |
+| `{{6}}` | guest first name | Adaeze |
+| `{{7}}` | where | at the hotel (the front desk will take you up) |
+| `{{8}}` | notes | Deep tissue, female therapist preferred. |
+| `{{9}}` | hotel contact | Amaka Nwosu |
+| `{{10}}` | hotel phone | +234 803 555 0100 |

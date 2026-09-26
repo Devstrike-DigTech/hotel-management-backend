@@ -55,6 +55,8 @@ export class OperationsProcessor extends WorkerHost {
       case OPS_JOBS.pricingPace.name:
       case OPS_JOBS.loyaltyExpiry.name:
       case OPS_JOBS.domainChecks.name:
+      case OPS_JOBS.conciergeSla.name:
+      case OPS_JOBS.conciergeRedaction.name:
         return this.pro.run(job.name);
       default:
         this.logger.warn(`Unknown job ${job.name}`);
@@ -82,6 +84,6 @@ export class OperationsScheduler implements OnApplicationBootstrap {
         { name: j.name, opts: { removeOnComplete: 50, removeOnFail: 100, attempts: 2, backoff: { type: 'exponential', delay: 60_000 } } },
       );
     }
-    this.logger.log('Scheduled night audit 02:00, owner digest 23:00, guard sweep hourly, stayover 07:00, maintenance 06:00, room blocks hourly, guard alerts every minute, city ledger statements (1st) and reminders 09:00; M5: channel pushes every minute (debounced), sweep every 15 min, iCal import checks every 5 min, dynamic pricing 03:00 and pace checks every 10 min, loyalty expiry 04:00, domain checks every 10 min (Africa/Lagos)');
+    this.logger.log('Scheduled night audit 02:00, owner digest 23:00, guard sweep hourly, stayover 07:00, maintenance 06:00, room blocks hourly, guard alerts every minute, city ledger statements (1st) and reminders 09:00; M5: channel pushes every minute (debounced), sweep every 15 min, iCal import checks every 5 min, dynamic pricing 03:00 and pace checks every 10 min, loyalty expiry 04:00, domain checks every 10 min; M8: concierge SLA escalation every minute, redaction 03:40 (Africa/Lagos)');
   }
 }

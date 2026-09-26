@@ -46,6 +46,7 @@ import { EnterpriseModule } from './modules/enterprise/enterprise.module.js';
 import { PlatformPermissionGuard } from './modules/platform/security/platform-permission.guard.js';
 import { PlatformAuditInterceptor } from './modules/platform/security/platform-audit.interceptor.js';
 import { SiteModule } from './modules/site/site.module.js';
+import { ConciergeModule } from './modules/concierge/concierge.module.js';
 
 function jobsEnabled(): boolean {
   const v = process.env.JOBS_ENABLED;
@@ -92,6 +93,7 @@ function jobsEnabled(): boolean {
     OperationsModule,
     GuestSideModule,
     SiteModule,
+    ConciergeModule,
     BillingModule,
     PlatformModule,
     // BullMQ workers + the daily dunning schedule. Skipped when

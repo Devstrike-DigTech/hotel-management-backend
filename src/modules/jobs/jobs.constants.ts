@@ -27,6 +27,9 @@ export const OPS_JOBS = {
   pricingPace: { name: 'pricing-pace', scheduler: 'pricing-pace-10m', cron: '*/10 * * * *' },
   loyaltyExpiry: { name: 'loyalty-expiry', scheduler: 'loyalty-expiry-daily', cron: '0 4 * * *' },
   domainChecks: { name: 'domain-checks', scheduler: 'domain-checks-10m', cron: '*/10 * * * *' },
+  // M8 (concierge)
+  conciergeSla: { name: 'concierge-sla', scheduler: 'concierge-sla-minutely', cron: '* * * * *' },
+  conciergeRedaction: { name: 'concierge-redaction', scheduler: 'concierge-redaction-daily', cron: '40 3 * * *' },
 } as const;
 
 /** Query options whose value is a number (ioredis option names). */

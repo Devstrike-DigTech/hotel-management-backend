@@ -32,6 +32,10 @@ export interface StayHooks {
   guestExportTx?(tx: Tx, tenantId: string, reservationIds: string[]): Promise<Map<string, Record<string, unknown>>>;
   /** M7: NDPA erasure of the guest's reservations; the returned function runs after the commit (file deletes). */
   guestErasedTx?(tx: Tx, tenantId: string, reservationIds: string[]): Promise<(() => Promise<void>) | void>;
+  /** M8: fields added to the top level of an NDPA guest export (data held per guest, not per stay). */
+  guestRecordExportTx?(tx: Tx, tenantId: string, guestId: string): Promise<Record<string, unknown>>;
+  /** M8: NDPA erasure of data held per guest (inside the anonymise transaction). */
+  guestRecordErasedTx?(tx: Tx, tenantId: string, guestId: string): Promise<void>;
 }
 
 const registry = new Map<string, StayHooks>();
@@ -121,4 +125,18 @@ export async function stayGuestErased(tx: Tx, tenantId: string, reservationIds: 
   return async () => {
     for (const fn of after) await fn().catch((e: unknown) => logger.error(`guest erasure cleanup failed: ${(e as Error).message}`));
   };
+}
+
+/** M8: guest-level data for an NDPA export (e.g. concierge requests). */
+export async function guestRecordExport(tx: Tx, tenantId: string, guestId: string): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  for (const h of registry.values()) {
+    if (h.guestRecordExportTx) Object.assign(out, await h.guestRecordExportTx(tx, tenantId, guestId));
+  }
+  return out;
+}
+
+/** M8: guest-level NDPA erasure hooks. */
+export async function guestRecordErased(tx: Tx, tenantId: string, guestId: string): Promise<void> {
+  for (const h of registry.values()) if (h.guestRecordErasedTx) await h.guestRecordErasedTx(tx, tenantId, guestId);
 }

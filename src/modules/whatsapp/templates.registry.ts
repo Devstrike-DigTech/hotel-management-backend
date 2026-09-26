@@ -19,7 +19,13 @@ export type WhatsAppTemplateName =
   | 'pre_arrival_confirm'
   | 'in_stay_welcome'
   | 'transfer_driver_assigned'
-  | 'transfer_update';
+  | 'transfer_update'
+  | 'concierge_request_received'
+  | 'concierge_quote'
+  | 'concierge_confirmed'
+  | 'concierge_update'
+  | 'concierge_completed'
+  | 'concierge_vendor_job';
 
 export interface WhatsAppTemplateDef {
   name: WhatsAppTemplateName;
@@ -241,6 +247,120 @@ export const WHATSAPP_TEMPLATES: WhatsAppTemplateDef[] = [
     buttons: [],
     usedFor: 'Arrival pickup / departure drop-off: driver on the way, delays and cancellations',
   },
+  // M8: concierge (lawful guest requests). Private requests use "private request" instead of the service.
+  {
+    name: 'concierge_request_received',
+    language: 'en',
+    category: 'UTILITY',
+    body:
+      'Hello {{1}}, {{2}} has your request {{3}}: {{4}}.\n' +
+      'We will get back to you within {{5}}. Only the concierge team sees your request details.\n' +
+      'See it here: {{6}}',
+    params: [
+      { index: 1, name: 'guest first name', example: 'Adaeze' },
+      { index: 2, name: 'hotel name', example: 'The Palmwine House' },
+      { index: 3, name: 'request number', example: 'CR-000123' },
+      { index: 4, name: 'service (or "private request")', example: 'Private chef dinner' },
+      { index: 5, name: 'reply target', example: '15 minutes' },
+      { index: 6, name: 'request link', example: 'https://hotelos.ng/trips/PWH-7K3Q?t=abc#concierge' },
+    ],
+    buttons: [],
+    usedFor: 'Concierge: acknowledgement of a guest request (flagged requests get the same neutral text)',
+  },
+  {
+    name: 'concierge_quote',
+    language: 'en',
+    category: 'UTILITY',
+    body:
+      'Hello {{1}}, {{2}} can arrange your request {{3}} ({{4}}) for {{5}}.\n' +
+      'This price is held until {{6}}. Details: {{7}}\n' +
+      'Reply YES to accept or NO to decline.',
+    params: [
+      { index: 1, name: 'guest first name', example: 'Adaeze' },
+      { index: 2, name: 'hotel name', example: 'The Palmwine House' },
+      { index: 3, name: 'request number', example: 'CR-000123' },
+      { index: 4, name: 'service (or "private request")', example: 'Private chef dinner' },
+      { index: 5, name: 'price', example: '₦96,750' },
+      { index: 6, name: 'valid until', example: 'Sat 26 Sep 2026, 18:00' },
+      { index: 7, name: 'quote link', example: 'https://hotelos.ng/concierge/q/abc' },
+    ],
+    buttons: [{ type: 'QUICK_REPLY', text: 'YES' }, { type: 'QUICK_REPLY', text: 'NO' }],
+    usedFor: 'Concierge: a quote the guest accepts or declines (reply YES / NO or open the link)',
+  },
+  {
+    name: 'concierge_confirmed',
+    language: 'en',
+    category: 'UTILITY',
+    body:
+      'Hello {{1}}, your request {{2}} ({{3}}) with {{4}} is confirmed for {{5}}.\n' +
+      'Payment: {{6}}.\n' +
+      'Details: {{7}}',
+    params: [
+      { index: 1, name: 'guest first name', example: 'Adaeze' },
+      { index: 2, name: 'request number', example: 'CR-000123' },
+      { index: 3, name: 'service (or "private request")', example: 'In-room massage, 90 minutes' },
+      { index: 4, name: 'hotel name', example: 'The Palmwine House' },
+      { index: 5, name: 'date and time', example: 'Sat 26 Sep 2026, 19:00' },
+      { index: 6, name: 'payment', example: 'added to your bill' },
+      { index: 7, name: 'request link', example: 'https://hotelos.ng/trips/PWH-7K3Q?t=abc#concierge' },
+    ],
+    buttons: [],
+    usedFor: 'Concierge: request confirmed (automatically, accepted, paid or by staff)',
+  },
+  {
+    name: 'concierge_update',
+    language: 'en',
+    category: 'UTILITY',
+    body: 'Hello {{1}}, an update on your request {{2}} with {{3}}: {{4}}\nDetails: {{5}}',
+    params: [
+      { index: 1, name: 'guest first name', example: 'Adaeze' },
+      { index: 2, name: 'request number', example: 'CR-000123' },
+      { index: 3, name: 'hotel name', example: 'The Palmwine House' },
+      { index: 4, name: 'update', example: 'Your chef will arrive at 18:30 to set up.' },
+      { index: 5, name: 'request link', example: 'https://hotelos.ng/trips/PWH-7K3Q?t=abc#concierge' },
+    ],
+    buttons: [],
+    usedFor: 'Concierge: scheduled, payment link, declined, cancelled and other updates',
+  },
+  {
+    name: 'concierge_completed',
+    language: 'en',
+    category: 'UTILITY',
+    body: 'Hello {{1}}, your request {{2}} with {{3}} is complete. We hope you enjoyed it.\nTell us how it went: {{4}}',
+    params: [
+      { index: 1, name: 'guest first name', example: 'Adaeze' },
+      { index: 2, name: 'request number', example: 'CR-000123' },
+      { index: 3, name: 'hotel name', example: 'The Palmwine House' },
+      { index: 4, name: 'rating link', example: 'https://hotelos.ng/trips/PWH-7K3Q?t=abc#concierge' },
+    ],
+    buttons: [],
+    usedFor: 'Concierge: request completed, with the rating link',
+  },
+  {
+    name: 'concierge_vendor_job',
+    language: 'en',
+    category: 'UTILITY',
+    body:
+      'New job from {{1}}: {{2}} ({{3}}).\n' +
+      'When: {{4}}. Guests: {{5}}.\n' +
+      'Guest: {{6}}. Where: {{7}}.\n' +
+      'Notes: {{8}}\n' +
+      'Please confirm with {{9}} on {{10}}.',
+    params: [
+      { index: 1, name: 'hotel name', example: 'The Palmwine House' },
+      { index: 2, name: 'service', example: 'In-room massage, 90 minutes' },
+      { index: 3, name: 'job number', example: 'CR-000123' },
+      { index: 4, name: 'date and time', example: 'Sat 26 Sep 2026, 19:00' },
+      { index: 5, name: 'party size', example: '2' },
+      { index: 6, name: 'guest first name', example: 'Adaeze' },
+      { index: 7, name: 'where', example: 'at the hotel (the front desk will take you up)' },
+      { index: 8, name: 'notes', example: 'Deep tissue, female therapist preferred.' },
+      { index: 9, name: 'hotel contact', example: 'Amaka Nwosu' },
+      { index: 10, name: 'hotel phone', example: '+234 803 555 0100' },
+    ],
+    buttons: [],
+    usedFor: 'Concierge: a job sent to a vendor (first name only and no room number unless the hotel allows it)',
+  },
 ];
 
 const BY_NAME = new Map(WHATSAPP_TEMPLATES.map((t) => [t.name, t]));
@@ -316,6 +436,21 @@ export function waTemplateFor(data: TemplateData): WaTemplateRef | null {
     }
     case 'TRANSFER_UPDATE':
       return ref('transfer_update', [first(data.stay.guestName), data.transfer.label.toLowerCase(), data.stay.hotel.name, data.note, data.stay.code]);
+    // M8
+    case 'CONCIERGE_RECEIVED':
+      return ref('concierge_request_received', [first(data.c.guestName), data.c.hotel.name, data.c.number, data.c.discreet ? 'private request' : data.c.title, data.replyWithin, data.c.url]);
+    case 'CONCIERGE_QUOTE':
+      return ref('concierge_quote', [first(data.c.guestName), data.c.hotel.name, data.c.number, data.c.discreet ? 'private request' : data.c.title, data.c.totalKobo !== null ? naira(data.c.totalKobo) : '-', data.validUntilHuman, data.c.url]);
+    case 'CONCIERGE_CONFIRMED':
+      return ref('concierge_confirmed', [first(data.c.guestName), data.c.number, data.c.discreet ? 'private request' : data.c.title, data.c.hotel.name, data.c.whenHuman ?? 'the time agreed', data.c.paymentText ?? 'nothing to pay now', data.c.url]);
+    case 'CONCIERGE_UPDATE':
+      return ref('concierge_update', [first(data.c.guestName), data.c.number, data.c.hotel.name, data.update, data.c.url]);
+    case 'CONCIERGE_COMPLETED':
+      return ref('concierge_completed', [first(data.c.guestName), data.c.number, data.c.hotel.name, data.c.url]);
+    case 'CONCIERGE_VENDOR_JOB': {
+      const j = data.job;
+      return ref('concierge_vendor_job', [j.hotelName, j.service, j.number, j.whenHuman, j.partySize, j.guest, j.where, j.notes, j.contactName, j.contactPhone]);
+    }
     default:
       return null;
   }

@@ -1,5 +1,5 @@
 import { otpMeta } from '../notification.service.js';
-import { fullAddress, naira, renderTemplate, TEMPLATES, type BrandContext, type StayContext, type TemplateData, type TransferContext } from './templates.js';
+import { fullAddress, naira, renderTemplate, TEMPLATES, type BrandContext, type StayContext, type TemplateData, type TransferContext, type ConciergeContext } from './templates.js';
 
 const brand: BrandContext = {
   appName: 'Stayline',
@@ -7,6 +7,19 @@ const brand: BrandContext = {
   supportEmail: 'help@stayline.ng',
   hotel: { name: 'The Palmwine House', accentColor: '#2F5A43', logoUrl: 'https://cdn.example/logo.png', area: 'Lekki Phase 1', city: 'Lagos' },
   hotelBranded: false,
+};
+
+const concierge: ConciergeContext = {
+  guestName: 'Adaeze Okafor',
+  number: 'CR-000123',
+  title: 'Private chef dinner',
+  discreet: false,
+  hotel: { name: 'The Palmwine House', phone: '+234 802 555 0141' },
+  url: 'https://stayline.ng/concierge/q/t',
+  whenHuman: 'Sun 27 Sep 2026, 19:30',
+  totalKobo: 19_350_000,
+  paymentText: null,
+  note: null,
 };
 
 const stay: StayContext = {
@@ -94,6 +107,15 @@ const samples: TemplateData[] = [
   // M7
   { template: 'TRANSFER_DRIVER_ASSIGNED', stay, transfer },
   { template: 'TRANSFER_UPDATE', stay, transfer: { ...transfer, status: 'EN_ROUTE' }, note: 'Your driver is on the way to MMIA.' },
+  // M8
+  { template: 'CONCIERGE_RECEIVED', c: concierge, replyWithin: '15 minutes' },
+  { template: 'CONCIERGE_QUOTE', c: { ...concierge, note: 'Three courses with pepper soup to start.' }, validUntilHuman: 'Sun 27 Sep 2026, 18:00', whatsappReply: true },
+  { template: 'CONCIERGE_CONFIRMED', c: { ...concierge, paymentText: 'added to your bill' } },
+  { template: 'CONCIERGE_UPDATE', c: concierge, update: 'Your chef will arrive at 17:30 to set up.' },
+  { template: 'CONCIERGE_COMPLETED', c: concierge },
+  { template: 'CONCIERGE_VENDOR_JOB', job: { hotelName: 'The Palmwine House', service: 'In-room massage, 90 minutes', number: 'CR-000123', whenHuman: 'Sat 26 Sep 2026, 19:00', partySize: '1', guest: 'Adaeze', where: 'at The Palmwine House (the front desk will take you up)', notes: 'Female therapist preferred.', contactName: 'Amaka Nwosu', contactPhone: '+234 802 555 0141' } },
+  { template: 'CONCIERGE_ESCALATION', hotelName: 'The Palmwine House', number: 'CR-000123', title: 'Private request CR-000123', overdueMinutes: 12, adminUrl: 'https://admin.stayline.ng/concierge/requests/1' },
+  { template: 'CONCIERGE_SUSPENDED', hotelName: 'The Palmwine House', reason: 'A service breached the acceptable-use policy.' },
 ];
 
 // Emoji and pictographs (the brand forbids them in every channel).
@@ -179,5 +201,23 @@ describe('transfer notifications (M7)', () => {
     expect(r.text).toContain('11:20');
     expect(r.text).toContain('PWH-7K3Q');
     expect(r.sms.length).toBeLessThanOrEqual(320);
+  });
+});
+
+describe('concierge messages (M8)', () => {
+  it('never names the service of a private request', () => {
+    const c: ConciergeContext = { ...concierge, discreet: true, title: 'your private request' };
+    for (const template of ['CONCIERGE_RECEIVED', 'CONCIERGE_QUOTE', 'CONFIRMED', 'CONCIERGE_UPDATE', 'CONCIERGE_COMPLETED'] as const) {
+      const data = (template === 'CONFIRMED' ? { template: 'CONCIERGE_CONFIRMED', c } : template === 'CONCIERGE_QUOTE' ? { template, c, validUntilHuman: 'x', whatsappReply: false } : template === 'CONCIERGE_UPDATE' ? { template, c, update: 'Booked in.' } : template === 'CONCIERGE_RECEIVED' ? { template, c, replyWithin: '15 minutes' } : { template, c }) as TemplateData;
+      const r = renderTemplate(brand, data);
+      expect(`${r.subject} ${r.text} ${r.sms}`).not.toContain('Private chef dinner');
+    }
+  });
+
+  it('asks for YES / NO on WhatsApp quotes only', () => {
+    const wa = renderTemplate(brand, { template: 'CONCIERGE_QUOTE', c: concierge, validUntilHuman: 'x', whatsappReply: true });
+    const mail = renderTemplate(brand, { template: 'CONCIERGE_QUOTE', c: concierge, validUntilHuman: 'x', whatsappReply: false });
+    expect(wa.text).toContain('reply YES');
+    expect(mail.text).not.toContain('reply YES');
   });
 });

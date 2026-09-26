@@ -28,6 +28,15 @@ export const TEMPLATES = [
   // M7
   'TRANSFER_DRIVER_ASSIGNED',
   'TRANSFER_UPDATE',
+  // M8
+  'CONCIERGE_RECEIVED',
+  'CONCIERGE_QUOTE',
+  'CONCIERGE_CONFIRMED',
+  'CONCIERGE_UPDATE',
+  'CONCIERGE_COMPLETED',
+  'CONCIERGE_VENDOR_JOB',
+  'CONCIERGE_ESCALATION',
+  'CONCIERGE_SUSPENDED',
 ] as const;
 export type TemplateName = (typeof TEMPLATES)[number];
 
@@ -89,6 +98,38 @@ export interface TransferContext {
   status: string;
 }
 
+/**
+ * M8: a concierge request in a guest message. `title` is the service, or
+ * "your private request" for discreet requests (the details stay behind the
+ * signed link).
+ */
+export interface ConciergeContext {
+  guestName: string;
+  number: string;
+  title: string;
+  discreet: boolean;
+  hotel: { name: string; phone: string };
+  url: string;
+  whenHuman: string | null;
+  totalKobo: number | null;
+  paymentText: string | null;
+  note: string | null;
+}
+
+/** M8: a job sent to a vendor (first name only and "at the hotel" unless the hotel allows more). */
+export interface VendorJobContext {
+  hotelName: string;
+  service: string;
+  number: string;
+  whenHuman: string;
+  partySize: string;
+  guest: string;
+  where: string;
+  notes: string;
+  contactName: string;
+  contactPhone: string;
+}
+
 export type TemplateData =
   | { template: 'OTP'; code: string; minutes: number }
   | { template: 'MAGIC_LINK'; url: string; minutes: number; fullName: string }
@@ -131,7 +172,16 @@ export type TemplateData =
   | { template: 'OFFBOARDING_NOTICE'; hotelName: string; deleteAfterHuman: string; exportReady: boolean }
   // M7
   | { template: 'TRANSFER_DRIVER_ASSIGNED'; stay: StayContext; transfer: TransferContext }
-  | { template: 'TRANSFER_UPDATE'; stay: StayContext; transfer: TransferContext; note: string };
+  | { template: 'TRANSFER_UPDATE'; stay: StayContext; transfer: TransferContext; note: string }
+  // M8
+  | { template: 'CONCIERGE_RECEIVED'; c: ConciergeContext; replyWithin: string }
+  | { template: 'CONCIERGE_QUOTE'; c: ConciergeContext; validUntilHuman: string; whatsappReply: boolean }
+  | { template: 'CONCIERGE_CONFIRMED'; c: ConciergeContext }
+  | { template: 'CONCIERGE_UPDATE'; c: ConciergeContext; update: string }
+  | { template: 'CONCIERGE_COMPLETED'; c: ConciergeContext }
+  | { template: 'CONCIERGE_VENDOR_JOB'; job: VendorJobContext }
+  | { template: 'CONCIERGE_ESCALATION'; hotelName: string; number: string; title: string; overdueMinutes: number; adminUrl: string }
+  | { template: 'CONCIERGE_SUSPENDED'; hotelName: string; reason: string };
 
 export interface Rendered {
   subject: string;
@@ -645,6 +695,121 @@ function build(ctx: BrandContext, d: TemplateData): { subject: string; spec: Ema
         sms: `${s.hotel.name}: ${d.note} (${t.label.toLowerCase()}, booking ${s.code})`.slice(0, 300),
       };
     }
+    default:
+      return buildConcierge(ctx, d);
+  }
+}
+
+function conciergeRows(c: ConciergeContext) {
+  return [
+    { label: 'Request', value: c.number, mono: true },
+    { label: 'What', value: c.title },
+    ...(c.whenHuman ? [{ label: 'When', value: c.whenHuman }] : []),
+    ...(c.totalKobo !== null ? [{ label: 'Price', value: naira(c.totalKobo) }] : []),
+    ...(c.paymentText ? [{ label: 'Payment', value: c.paymentText }] : []),
+  ];
+}
+
+const CONCIERGE_PRIVACY = 'Only the concierge team sees your request details.';
+
+/** M8 concierge messages (guest, vendor, hotel). */
+function buildConcierge(ctx: BrandContext, d: Extract<TemplateData, { template: `CONCIERGE_${string}` }>): { subject: string; spec: EmailSpec; sms: string } {
+  switch (d.template) {
+    case 'CONCIERGE_RECEIVED': {
+      const c = d.c;
+      return {
+        subject: `We have your request ${c.number}`,
+        spec: spec(ctx, `We will get back to you within ${d.replyWithin}.`, 'Concierge', 'We have your request', [
+          { kind: 'paragraph', text: `Hello ${firstName(c.guestName)}, thank you. ${c.hotel.name} has ${c.discreet ? 'your private request' : `your request for ${c.title}`} and will get back to you within ${d.replyWithin}.` },
+          { kind: 'rows', rows: conciergeRows(c) },
+          { kind: 'paragraph', text: CONCIERGE_PRIVACY, muted: true },
+          { kind: 'button', label: 'See your request', url: c.url },
+        ]),
+        sms: `${c.hotel.name}: we have your request ${c.number} and will reply within ${d.replyWithin}. ${CONCIERGE_PRIVACY} ${c.url}`,
+      };
+    }
+    case 'CONCIERGE_QUOTE': {
+      const c = d.c;
+      return {
+        subject: `Your price for ${c.discreet ? 'your private request' : c.title} (${c.number})`,
+        spec: spec(ctx, `${c.totalKobo !== null ? naira(c.totalKobo) : 'Your price'}, held until ${d.validUntilHuman}.`, 'Concierge', 'Your price is ready', [
+          { kind: 'paragraph', text: `Hello ${firstName(c.guestName)}, ${c.hotel.name} can arrange ${c.discreet ? 'your private request' : c.title} for ${c.totalKobo !== null ? naira(c.totalKobo) : 'the price below'}. The price is held until ${d.validUntilHuman}.` },
+          { kind: 'rows', rows: conciergeRows(c) },
+          ...(c.note ? [{ kind: 'quote' as const, text: c.note }] : []),
+          { kind: 'button', label: 'Accept or decline', url: c.url },
+          ...(d.whatsappReply ? [{ kind: 'paragraph' as const, text: 'On WhatsApp you can also reply YES to accept or NO to decline.', muted: true }] : []),
+        ]),
+        sms: `${c.hotel.name}: your price for request ${c.number} is ${c.totalKobo !== null ? nairaSms(c.totalKobo) : 'ready'}, held until ${d.validUntilHuman}. Accept or decline: ${c.url}`,
+      };
+    }
+    case 'CONCIERGE_CONFIRMED': {
+      const c = d.c;
+      return {
+        subject: `Confirmed: ${c.discreet ? 'your private request' : c.title} (${c.number})`,
+        spec: spec(ctx, c.whenHuman ? `Confirmed for ${c.whenHuman}.` : 'Your request is confirmed.', 'Concierge', 'Your request is confirmed', [
+          { kind: 'paragraph', text: `Hello ${firstName(c.guestName)}, ${c.discreet ? 'your private request' : c.title} with ${c.hotel.name} is confirmed${c.whenHuman ? ` for ${c.whenHuman}` : ''}.` },
+          { kind: 'rows', rows: conciergeRows(c) },
+          { kind: 'paragraph', text: `Questions? Call the hotel on ${c.hotel.phone || 'the number on your booking page'}.`, muted: true },
+          { kind: 'links', links: [{ label: 'Your request', url: c.url }] },
+        ]),
+        sms: `${c.hotel.name}: request ${c.number} is confirmed${c.whenHuman ? ` for ${c.whenHuman}` : ''}. ${c.paymentText ? `Payment: ${c.paymentText}. ` : ''}${c.url}`,
+      };
+    }
+    case 'CONCIERGE_UPDATE': {
+      const c = d.c;
+      return {
+        subject: `An update on your request ${c.number}`,
+        spec: spec(ctx, d.update, 'Concierge', 'An update on your request', [
+          { kind: 'quote', text: d.update },
+          { kind: 'rows', rows: conciergeRows(c) },
+          { kind: 'links', links: [{ label: 'Your request', url: c.url }] },
+        ]),
+        sms: `${c.hotel.name}: ${d.update} (request ${c.number}) ${c.url}`.slice(0, 320),
+      };
+    }
+    case 'CONCIERGE_COMPLETED': {
+      const c = d.c;
+      return {
+        subject: `Thank you: request ${c.number} is complete`,
+        spec: spec(ctx, 'Tell us how it went.', 'Concierge', 'All done', [
+          { kind: 'paragraph', text: `Hello ${firstName(c.guestName)}, ${c.discreet ? 'your private request' : c.title} is complete. We hope you enjoyed it.` },
+          { kind: 'button', label: 'Tell us how it went', url: c.url },
+          { kind: 'paragraph', text: CONCIERGE_PRIVACY, muted: true },
+        ]),
+        sms: `${c.hotel.name}: request ${c.number} is complete. Tell us how it went: ${c.url}`,
+      };
+    }
+    case 'CONCIERGE_VENDOR_JOB': {
+      const j = d.job;
+      return {
+        subject: `New job from ${j.hotelName}: ${j.service} (${j.number})`,
+        spec: spec({ ...ctx, hotelBranded: false }, `${j.service}, ${j.whenHuman}.`, 'New job', `${j.service}`, [
+          { kind: 'rows', rows: [{ label: 'Job', value: j.number, mono: true }, { label: 'When', value: j.whenHuman }, { label: 'Guests', value: j.partySize }, { label: 'Guest', value: j.guest }, { label: 'Where', value: j.where }] },
+          { kind: 'paragraph', text: `Notes: ${j.notes}` },
+          { kind: 'paragraph', text: `Please confirm with ${j.contactName} on ${j.contactPhone}.`, muted: true },
+        ]),
+        sms: `New job from ${j.hotelName}: ${j.service} (${j.number}). When: ${j.whenHuman}. Guests: ${j.partySize}. Guest: ${j.guest}. Where: ${j.where}. Notes: ${j.notes} Confirm with ${j.contactName} on ${j.contactPhone}.`,
+      };
+    }
+    case 'CONCIERGE_ESCALATION':
+      return {
+        subject: `Concierge request ${d.number} is waiting (${d.overdueMinutes} min past target)`,
+        spec: spec({ ...ctx, hotelBranded: false }, `${d.title} has had no reply.`, 'Concierge', 'A guest request is waiting', [
+          { kind: 'paragraph', text: `${d.title} (${d.number}) at ${d.hotelName} has had no reply for ${d.overdueMinutes} minutes past its response target.` },
+          { kind: 'button', label: 'Open the request', url: d.adminUrl },
+        ]),
+        sms: `${d.hotelName}: concierge request ${d.number} is waiting, ${d.overdueMinutes} min past target.`,
+      };
+    case 'CONCIERGE_SUSPENDED':
+      return {
+        subject: `${d.hotelName}: the concierge has been suspended`,
+        spec: spec({ ...ctx, hotelBranded: false }, 'Guests cannot send new concierge requests for now.', 'Concierge', 'Your concierge has been suspended', [
+          { kind: 'paragraph', text: `The platform has suspended the concierge of ${d.hotelName}. Guests cannot send new requests and the catalogue is hidden; your team can still finish requests already under way.` },
+          { kind: 'callout', title: 'Reason', text: d.reason, tone: 'ochre' },
+          { kind: 'paragraph', text: `Reply to this email or contact ${ctx.supportEmail} to discuss it.`, muted: true },
+        ]),
+        sms: `${d.hotelName}: the concierge has been suspended. ${d.reason}`.slice(0, 300),
+      };
   }
 }
 
