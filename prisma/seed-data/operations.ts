@@ -183,6 +183,8 @@ async function resetTenant(prisma: PrismaClient, tenantId: string) {
       'lost_found_items',
       // M7 rows that hang off reservations; the M7 seed rebuilds them.
       'transfers', 'reservation_extras', 'form_uploads',
+      // M8 requests and their payments hang off guests and stays; the M8 seed rebuilds them.
+      'concierge_payments', 'concierge_requests',
       'notification_logs', 'reviews', 'commission_entries', 'booking_refunds', 'booking_payments',
       'idempotency_keys', 'guard_flags', 'owner_digests', 'daily_stats', 'night_audit_runs',
       'housekeeping_tasks', 'receipts', 'guest_invoices', 'folio_entries', 'folios', 'cashier_shifts',

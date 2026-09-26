@@ -20,6 +20,7 @@ import { seedPlatformUsers } from './seed-data/platform-users.js';
 import { HARMATTAN, seedConsole, seedHarmattan, seedHarmattanControl } from './seed-data/enterprise.js';
 import { announceChanges, provisionDedicated, seedFailedJobs } from './seed-data/provision.js';
 import { seedM7, seedM7Harmattan, seedTransportLists } from './seed-data/m7.js';
+import { seedM8, seedM8Harmattan } from './seed-data/m8.js';
 import { withDatabase } from '../src/modules/dedicated-db/engine.js';
 import { installPgConcurrencyGuard } from '../src/common/pg-concurrency-guard.js';
 
@@ -349,6 +350,9 @@ async function main() {
   const lists = await seedTransportLists(prisma);
   const m7 = await seedM7(prisma);
   console.log('  transport lists=%d %s', lists, Object.entries(m7).map(([k, v]) => `${k}=${v}`).join(' '));
+  console.log('Seeding M8 (concierge: policy, services, vendors, requests; lawful services only)...');
+  const m8 = await seedM8(prisma, passwordHash);
+  console.log('  %s', Object.entries(m8).map(([k, v]) => `${k}=${v}`).join(' '));
   if (hh.dedicated) {
     // Harmattan already lives in its own database: its M7 rows go there.
     const reg = await prisma.tenantDatabase.findUnique({ where: { tenantId: hh.tenantId } });
@@ -357,6 +361,8 @@ async function main() {
       try {
         const r = await seedM7Harmattan(dedicated, hh.tenantId);
         console.log('  %s (dedicated) %s', HARMATTAN.slug, Object.entries(r).map(([k, v]) => `${k}=${v}`).join(' '));
+        const c = await seedM8Harmattan(dedicated, hh.tenantId);
+        console.log('  %s (dedicated) concierge %s', HARMATTAN.slug, Object.entries(c).map(([k, v]) => `${k}=${v}`).join(' '));
       } finally {
         await dedicated.$disconnect();
       }
