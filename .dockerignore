@@ -9,3 +9,7 @@ src/generated
 *.log
 storage
 storage-e2e
+test
+docs
+docker-compose*.yml
+railway*.json
