@@ -13,7 +13,7 @@ import { DbService, type Tx } from '../../prisma/db.service.js';
 import { AuditService, userActor } from '../audit/audit.service.js';
 import { appError, Err, paginate } from '../ops/ops.helpers.js';
 import { OBJECT_STORAGE, type ObjectStorage } from '../storage/object-storage.js';
-import { stayGuestErased, stayGuestExport } from '../../common/stay-hooks.js';
+import { guestRecordErased, guestRecordExport, stayGuestErased, stayGuestExport } from '../../common/stay-hooks.js';
 import type { GuestInputDto, GuestQueryDto, GuestUpdateDto, RegisterQueryDto } from './guests.dto.js';
 
 const ALLOWED_TYPES: Record<string, string> = {
@@ -369,6 +369,8 @@ export class GuestsService {
       const stats = await this.stats(tx, [id]);
       // M7: booking-form answers (sensitive included, files as short-lived links), extras and transfers.
       const m7 = await stayGuestExport(tx, user.tenantId, reservations.map((r) => r.id));
+      // M8: data held per guest (concierge requests, private ones included: it is the guest's own data).
+      const m8 = await guestRecordExport(tx, user.tenantId, id);
       return {
         exportedAt: new Date().toISOString(),
         guest: { ...this.toView(g, stats.get(id)), idNumber: this.decryptIdNumber(g) },
@@ -413,6 +415,7 @@ export class GuestsService {
         invoices: reservations.flatMap((r) =>
           (r.folio?.invoices ?? []).map((i) => ({ id: i.id, number: i.number, kind: i.kind, issuedAt: i.issuedAt.toISOString(), totalKobo: Number(i.totalKobo) })),
         ),
+        ...m8,
       };
     });
   }
@@ -453,6 +456,8 @@ export class GuestsService {
       // M7: uploaded form files, transfer contact details, flight numbers and notes.
       const resIds = (await tx.reservation.findMany({ where: { guestId: id }, select: { id: true } })).map((r) => r.id);
       const cleanup = await stayGuestErased(tx, user.tenantId, resIds);
+      // M8: concierge requests (notes, texts, answers, contact details).
+      await guestRecordErased(tx, user.tenantId, id);
       await tx.folio.updateMany({ where: { guestId: id }, data: { name: 'Anonymised guest' } });
       await tx.folio.updateMany({ where: { reservation: { guestId: id } }, data: { name: 'Anonymised guest' } });
       await this.audit.record(tx, {

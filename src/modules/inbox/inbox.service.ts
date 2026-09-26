@@ -1,3 +1,4 @@
+import { runInboundReplyHooks } from '../../common/inbound-hooks.js';
 import { HttpStatus, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import type { Conversation, ConversationMessage, InboxSetting, Prisma, Property, TaskSuggestion } from '../../generated/prisma/client.js';
@@ -643,9 +644,15 @@ export class GuestInboxService implements OnModuleInit {
   }
 
   /** The guest-message pipeline (webhook and the dev simulator). */
-  async receiveGuest(m: GuestInbound, now = new Date()): Promise<{ conversationId: string | null; routed: boolean; tenantId: string | null }> {
+  async receiveGuest(m: GuestInbound, now = new Date()): Promise<{ conversationId: string | null; routed: boolean; tenantId: string | null; handledBy?: string }> {
     const digits = phoneDigits(m.from);
     const phone = `+${digits}`;
+    // M8: a "YES" / "NO" to a concierge quote is answered before the inbox.
+    const answered = await runInboundReplyHooks({ digits, text: m.text });
+    if (answered) {
+      await this.notifications.send([{ tenantId: answered.tenantId, template: 'WHATSAPP_REPLY', channel: 'WHATSAPP', audience: 'GUEST', to: phone, subject: null, text: answered.reply, html: null, meta: { concierge: true } }]);
+      return { conversationId: null, routed: true, tenantId: answered.tenantId, handledBy: 'concierge' };
+    }
     const target = await this.route(digits, m.phoneNumberId, now);
     if (!target) return { conversationId: null, routed: false, tenantId: null };
     const result = await this.db.tenant(target.tenantId, (tx) =>
@@ -731,8 +738,8 @@ export class GuestInboxService implements OnModuleInit {
     const digits = phoneDigits(dto.phone);
     await this.db.system((tx) => tx.whatsAppInbound.create({ data: { messageId: id, fromPhone: `+${digits}`, body: dto.body.slice(0, 1000) } }));
     const r = await this.receiveGuest({ providerMessageId: id, from: digits, text: dto.body, name: dto.name ?? null });
-    await this.db.system((tx) => tx.whatsAppInbound.update({ where: { messageId: id }, data: { tenantId: r.tenantId, result: r.routed ? 'guest inbox' : 'unknown sender', handledAt: new Date() } }));
-    return { conversationId: r.conversationId, routed: r.routed };
+    await this.db.system((tx) => tx.whatsAppInbound.update({ where: { messageId: id }, data: { tenantId: r.tenantId, result: r.handledBy === 'concierge' ? 'concierge quote reply' : r.routed ? 'guest inbox' : 'unknown sender', handledAt: new Date() } }));
+    return { conversationId: r.conversationId, routed: r.routed, ...(r.handledBy && { handledBy: r.handledBy }) };
   }
 
   // ---------------------------------------------------------------------------

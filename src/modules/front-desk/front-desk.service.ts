@@ -1,5 +1,7 @@
 import { HotelBookingService } from '../booking/hotel-booking.service.js';
 import { Injectable } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
+import { RequestsService } from '../concierge/requests.service.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import { RoomStatus } from '../../generated/prisma/enums.js';
 import type { AuthUser } from '../../common/auth-types.js';
@@ -28,6 +30,7 @@ export class FrontDeskService {
     private readonly hotelBooking: HotelBookingService,
     private readonly transfers: TransfersService,
     private readonly setup: SetupService,
+    private readonly refs: ModuleRef,
   ) {}
 
   async todayTx(tx: Tx, user: AuthUser, now = new Date()) {
@@ -113,6 +116,8 @@ export class FrontDeskService {
       myShift: await this.shifts.currentTx(tx, user),
       online: await this.hotelBooking.onlineCountsTx(tx, user.tenantId, now),
       ...(await this.m7Tx(tx, user, ent.features)),
+      // M8: counts and up to five items; private requests never named here (a shared screen).
+      concierge: ent.features.includes('concierge') && can(user, 'concierge.view') ? await this.refs.get(RequestsService, { strict: false }).todayTx(tx, user, now) : null,
     };
   }
 
@@ -141,6 +146,7 @@ export class FrontDeskService {
       online: t.online,
       setup: t.setup,
       transfersToday: t.transfersToday,
+      concierge: t.concierge ? { ...t.concierge, next: undefined } : null,
     };
   }
 }

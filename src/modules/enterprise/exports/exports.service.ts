@@ -12,6 +12,7 @@ import { TenantDbRouter } from '../../../prisma/tenant-db-router.js';
 import { AuditService, csvCell, SYSTEM_ACTOR } from '../../audit/audit.service.js';
 import { connect, tenantTables } from '../../dedicated-db/engine.js';
 import { appError, Err } from '../../ops/ops.helpers.js';
+import { permissionsFor } from '../../../common/permissions/catalogue.js';
 import { PlatformAuditService } from '../../platform/security/platform-audit.service.js';
 import { OBJECT_STORAGE, type ObjectStorage } from '../../storage/object-storage.js';
 
@@ -153,6 +154,8 @@ export class ExportsService {
       data = await connect(route ? this.router.urlsOf(route).platform : this.config.get('DATABASE_PLATFORM_URL'));
       control = await connect(this.config.get('DATABASE_PLATFORM_URL'));
       const tables = (await tenantTables(data)).filter((t) => !SKIP_TABLES.has(t.name));
+      // M8: private concierge requests are masked unless the requesting staff member holds concierge.discreet.
+      const maskDiscreet = await this.masksDiscreet(tenantId, e.requestedByKind, e.requestedById);
       const cipher = new FieldCipher(this.config.get('GUEST_DATA_KEY'));
       const zip = new ZipWriter();
       const entities: { name: string; rows: number }[] = [];
@@ -167,7 +170,7 @@ export class ExportsService {
       addEntity('tenant', tenantRow);
       for (const t of tables) {
         const rows = await fetchAll(data, t.name, tenantId, t.pk);
-        addEntity(t.name, sanitise(t.name, rows, (enc) => {
+        addEntity(t.name, sanitise(t.name, maskDiscreet && t.name === 'concierge_requests' ? maskDiscreetRows(rows) : rows, (enc) => {
           try {
             return cipher.decrypt(enc, tenantId);
           } catch {
@@ -207,6 +210,13 @@ export class ExportsService {
     } finally {
       await Promise.allSettled([data?.end(), control?.end()]);
     }
+  }
+
+  /** Staff exports hide private concierge requests from people without concierge.discreet (platform exports do not). */
+  private async masksDiscreet(tenantId: string, kind: string, userId: string): Promise<boolean> {
+    if (kind !== 'USER') return false;
+    const u = await this.db.systemFor(tenantId, (tx) => tx.user.findFirst({ where: { id: userId, tenantId }, select: { role: true, customRole: { select: { permissions: true } } } }));
+    return !u || !permissionsFor(u.role, u.customRole?.permissions).has('concierge.discreet');
   }
 
   // ---------------------------------------------------------------------------
@@ -289,6 +299,17 @@ async function fetchAll(c: pg.ClientBase, table: string, tenantId: string, pk: s
 }
 
 /** Drops secrets (`*_hash`, `*_enc`); guest ID numbers are decrypted into `id_number`. */
+/** Private concierge requests without their contents (service, texts, answers, contact, guest link kept as ids only). */
+export function maskDiscreetRows(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+  const hidden = ['service_name', 'variant_name', 'request_text', 'notes', 'internal_notes', 'quote_note', 'rating_comment', 'flag_note', 'contact_phone', 'contact_email', 'folio_description', 'vendor_name'];
+  return rows.map((r) => {
+    if (r.discreet !== true) return r;
+    const out: Record<string, unknown> = { ...r, category: 'OTHER', answers: {}, questions: [], timeline: [], flag_terms: [], flag_categories: [] };
+    for (const k of hidden) if (k in out) out[k] = k === 'service_name' ? 'Private request' : null;
+    return out;
+  });
+}
+
 export function sanitise(table: string, rows: Record<string, unknown>[], decrypt: (enc: string) => string | null): Record<string, unknown>[] {
   return rows.map((r) => {
     const out: Record<string, unknown> = {};

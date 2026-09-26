@@ -166,7 +166,7 @@ export class WhatsAppInboundService {
       // M5: a guest writing to a hotel with the guest inbox.
       const routed = await this.inbox.receiveGuest({ providerMessageId: m.id, from: digits, text: m.text, name: m.name ?? null, phoneNumberId: m.phoneNumberId ?? null });
       if (routed.routed) {
-        await this.db.system((tx) => tx.whatsAppInbound.update({ where: { messageId: m.id }, data: { tenantId: routed.tenantId, result: 'guest inbox', handledAt: new Date() } }));
+        await this.db.system((tx) => tx.whatsAppInbound.update({ where: { messageId: m.id }, data: { tenantId: routed.tenantId, result: routed.handledBy === 'concierge' ? 'concierge quote reply' : 'guest inbox', handledAt: new Date() } }));
         return true;
       }
       this.logger.log(`WhatsApp message from an unknown number ${phone.slice(0, 7)}••• ignored`);

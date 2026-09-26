@@ -15,6 +15,8 @@ export const WEBHOOK_EVENTS = [
   { type: 'guard.flag_raised', description: 'Revenue Guard raised a flag', object: 'guard_flag' },
   { type: 'transfer.created', description: 'An arrival pickup or departure drop-off was booked', object: 'transfer' },
   { type: 'transfer.updated', description: 'A transfer changed: confirmed, driver assigned, on the way, completed, delayed or cancelled', object: 'transfer' },
+  { type: 'concierge.request_created', description: 'A guest concierge request was made (private requests are never sent)', object: 'concierge_request' },
+  { type: 'concierge.request_updated', description: 'A concierge request changed: quoted, confirmed, paid, scheduled, completed, declined or cancelled (private requests are never sent)', object: 'concierge_request' },
   { type: 'webhook.ping', description: 'Test event sent from the settings page', object: 'ping' },
 ] as const;
 

@@ -12,6 +12,7 @@ import { HOLD_MINUTES, MAX_ADVANCE_DAYS, MAX_ONLINE_NIGHTS, QUOTE_TTL_MINUTES } 
 import { AvailabilityQueryDto,
   PriceCalendarQueryDto, CreateBookingDto, DevConfirmDto, OutboxQueryDto, QuoteDto, TripCancelDto } from './booking.dto.js';
 import { BookingPaymentsService } from './booking-payments.service.js';
+import { ConciergePaymentsService } from '../concierge/concierge-payments.service.js';
 import { PublicBookingService } from './public-booking.service.js';
 import { TripsService } from './trips.service.js';
 
@@ -28,6 +29,7 @@ export class PublicBookingController {
     private readonly trips: TripsService,
     private readonly config: AppConfigService,
     private readonly paystack: PaystackClient,
+    private readonly concierge: ConciergePaymentsService,
   ) {}
 
   @Get('booking-config')
@@ -80,6 +82,8 @@ export class PublicBookingController {
   @RateLimit({ name: 'verify', limit: 60, windowSec: MINUTE })
   @ApiOperation({ summary: 'Payment status after the Paystack redirect (verifies with Paystack when still pending)' })
   verify(@Param('reference') reference: string) {
+    // M8: concierge payments (CRQ_...) answer ConciergePaymentStatus.
+    if (ConciergePaymentsService.isConciergeReference(reference)) return this.concierge.verify(reference);
     return this.payments.verify(reference);
   }
 
@@ -137,6 +141,7 @@ export class DevController {
   constructor(
     private readonly outbox: DevOutboxService,
     private readonly payments: BookingPaymentsService,
+    private readonly concierge: ConciergePaymentsService,
   ) {}
 
   private assertDev() {
@@ -162,6 +167,7 @@ export class DevController {
   @ApiOperation({ summary: 'Mock checkout: complete or fail a payment (dev only, mock provider)' })
   confirm(@Param('reference') reference: string, @Body() dto: DevConfirmDto) {
     this.assertDev();
+    if (ConciergePaymentsService.isConciergeReference(reference)) return this.concierge.devConfirm(reference, dto);
     return this.payments.devConfirm(reference, dto);
   }
 }

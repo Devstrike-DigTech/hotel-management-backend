@@ -86,6 +86,19 @@ const schemas: Record<string, Schema> = {
     id: uuid, propertyId: uuid, name: str(), description: str(), category: str(), kind: str({ enum: ['STANDARD', 'EARLY_CHECK_IN', 'LATE_CHECK_OUT'] }),
     pricing: str(), priceKobo: kobo, maxUnits: nullable(int()), taxable: bool, channels: { type: 'array', items: str() }, dailyCap: nullable(int()), leadTimeHours: int(), active: bool,
   }),
+  ConciergeRequest: obj({
+    id: uuid, number: str({ examples: ['CR-000123'] }), propertyId: uuid, reservationId: nullable(uuid),
+    status: str({ enum: ['NEW', 'QUOTED', 'AWAITING_GUEST', 'CONFIRMED', 'SCHEDULED', 'IN_PROGRESS', 'COMPLETED', 'DECLINED', 'CANCELLED'] }),
+    source: str({ enum: ['BOOKING_FLOW', 'TRIP_PAGE', 'WHATSAPP', 'FRONT_DESK'] }), category: str(), serviceId: nullable(uuid), serviceName: str(),
+    partySize: nullable(int()), preferredStart: nullable(dateTime), preferredEnd: nullable(dateTime), totalKobo: nullable(kobo),
+    paymentMethod: nullable(str({ enum: ['ONLINE', 'FOLIO', 'NONE'] })), paymentStatus: str({ enum: ['NONE', 'PENDING', 'PAID', 'POSTED', 'REFUNDED'] }),
+    completedAt: nullable(dateTime), createdAt: dateTime, updatedAt: dateTime,
+  }),
+  ConciergeService: obj({
+    id: uuid, propertyId: uuid, name: str(), description: str(), category: str(), pricing: str({ enum: ['FIXED', 'FROM', 'PER_HOUR', 'PER_PERSON', 'FREE'] }),
+    priceKobo: nullable(kobo), variants: { type: 'array', items: obj({ id: str(), name: str(), priceKobo: kobo, durationMinutes: nullable(int()) }) },
+    durationMinutes: nullable(int()), location: str({ enum: ['IN_ROOM', 'ON_PROPERTY', 'OFF_PROPERTY'] }), active: bool,
+  }),
   PickupPoint: obj({
     id: uuid, propertyId: uuid, name: str(), shortName: nullable(str()), kind: str({ enum: ['AIRPORT', 'MOTOR_PARK', 'TRAIN_STATION', 'JETTY', 'OTHER'] }), city: str(), address: nullable(str()),
     priceKobo: kobo, dropOffPriceKobo: nullable(kobo), vehicleOptions: { type: 'array', items: obj({ id: str(), name: str(), maxPassengers: int(), priceKobo: nullable(kobo) }) },
@@ -191,6 +204,7 @@ export const PARTNER_TAGS = [
   { name: 'Guests', description: 'Guest profiles (names and contact details only).' },
   { name: 'Housekeeping', description: 'Housekeeping tasks.' },
   { name: 'Extras and pickups', description: 'Paid extras, pickup points and airport / motor-park / station transfers.' },
+  { name: 'Concierge', description: 'Lawful guest requests arranged by the hotel (private requests are never included).' },
   { name: 'Reports', description: 'Daily occupancy, ADR, RevPAR and revenue.' },
   { name: 'Webhooks', description: 'Endpoints that receive signed event notifications.' },
 ];
@@ -223,6 +237,8 @@ const OPERATIONS: Record<string, { id: string; tag: string }> = {
   'get /transfers': { id: 'listTransfers', tag: 'Extras and pickups' },
   'get /extras': { id: 'listExtras', tag: 'Extras and pickups' },
   'get /pickup-points': { id: 'listPickupPoints', tag: 'Extras and pickups' },
+  'get /concierge-requests': { id: 'listConciergeRequests', tag: 'Concierge' },
+  'get /concierge-services': { id: 'listConciergeServices', tag: 'Concierge' },
   'get /webhook-endpoints': { id: 'listWebhookEndpoints', tag: 'Webhooks' },
   'post /webhook-endpoints': { id: 'createWebhookEndpoint', tag: 'Webhooks' },
   'patch /webhook-endpoints/{id}': { id: 'updateWebhookEndpoint', tag: 'Webhooks' },
@@ -238,6 +254,7 @@ const EVENT_OBJECTS: Record<string, string> = {
   review: 'ReviewPublished',
   guard_flag: 'GuardFlagRaised',
   transfer: 'Transfer',
+  concierge_request: 'ConciergeRequest',
   ping: 'Ping',
 };
 
@@ -281,7 +298,7 @@ export function partnerOpenApi(serverUrl: string) {
         'Authenticate with an API key created in the hotel admin under Developers: `Authorization: Bearer hk_live_...`. ' +
         'Test keys (`hk_test_...`) validate writes fully and roll them back; responses carry `dryRun: true`.',
     },
-    'x-changelog': [{ date: PARTNER_API_VERSION, changes: ['First release: properties, room types, rooms, availability, rates, reservations, guests, folios, housekeeping, daily reports, webhook endpoints.', 'Tags per resource, stable operationIds, scopes per operation (security + x-scopes) and one schema per webhook event.', 'Booking-form answers (with field metadata), paid extras and transfers on reservations; GET /transfers, /extras and /pickup-points; transfer.created and transfer.updated events.'] }],
+    'x-changelog': [{ date: PARTNER_API_VERSION, changes: ['First release: properties, room types, rooms, availability, rates, reservations, guests, folios, housekeeping, daily reports, webhook endpoints.', 'Tags per resource, stable operationIds, scopes per operation (security + x-scopes) and one schema per webhook event.', 'Booking-form answers (with field metadata), paid extras and transfers on reservations; GET /transfers, /extras and /pickup-points; transfer.created and transfer.updated events.'] }, { date: '2026-09-26', changes: ['Concierge: GET /concierge-requests and /concierge-services; concierge.request_created and concierge.request_updated events. Private (discreet) requests are never included.'] }],
     servers: [{ url: serverUrl }],
     components: {
       securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'hk_live_<prefix>_<secret>', description: 'API key (or header X-Api-Key)' } },
@@ -355,6 +372,12 @@ export function partnerOpenApi(serverUrl: string) {
       },
       '/extras': { get: op('Paid extras', 'rates:read', { '200': many(ref('Extra')) }, { parameters: [q('propertyId', uuid), ...pageParams] }) },
       '/pickup-points': { get: op('Pickup points (airports, motor parks, stations, jetties)', 'rates:read', { '200': many(ref('PickupPoint')) }, { parameters: [q('propertyId', uuid), ...pageParams] }) },
+      '/concierge-requests': {
+        get: op('Concierge requests (never private ones)', 'reservations:read', { '200': many(ref('ConciergeRequest')) }, {
+          parameters: [q('propertyId', uuid), q('status', str()), q('from', date), q('to', date), ...pageParams],
+        }),
+      },
+      '/concierge-services': { get: op('Live concierge services', 'rates:read', { '200': many(ref('ConciergeService')) }, { parameters: [q('propertyId', uuid), ...pageParams] }) },
       '/webhook-endpoints': {
         get: op('Webhook endpoints', 'webhooks:manage', { '200': list(ref('WebhookEndpoint')) }),
         post: op('Create a webhook endpoint (the secret is returned once)', 'webhooks:manage', { '201': one(obj({ endpoint: ref('WebhookEndpoint'), secret: str() }), 'Created') }, {

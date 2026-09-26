@@ -8,6 +8,7 @@ import { AuditService, type AuditActor } from '../audit/audit.service.js';
 import { isUniqueViolation } from '../auth/auth.service.js';
 import { BookingPaymentsService, runAfter, type After } from '../booking/booking-payments.service.js';
 import { RefundsService } from '../booking/refunds.service.js';
+import { ConciergePaymentsService } from '../concierge/concierge-payments.service.js';
 import { BillingService } from './billing.service.js';
 import { PaystackClient } from './paystack.client.js';
 
@@ -61,6 +62,7 @@ export class PaystackWebhookService {
     private readonly bookings: BookingPaymentsService,
     private readonly refunds: RefundsService,
     private readonly mirror: ControlMirrorService,
+    private readonly concierge: ConciergePaymentsService,
   ) {}
 
   async handle(
@@ -125,6 +127,13 @@ export class PaystackWebhookService {
     const meta = typeof d.metadata === 'object' && d.metadata ? d.metadata : null;
     let reference: string | null = null;
     if (type.startsWith('charge.')) {
+      // M8: concierge payments live in the tenant's database too.
+      if (meta?.kind === 'concierge' || ConciergePaymentsService.isConciergeReference(d.reference)) {
+        const hinted = typeof meta?.tenantId === 'string' ? meta.tenantId : null;
+        if (hinted && this.db.router.isDedicated(hinted)) return hinted;
+        const tid = d.reference ? await this.concierge.paymentTenant(d.reference) : null;
+        return tid && this.db.router.isDedicated(tid) ? tid : null;
+      }
       const isBooking = meta?.kind === 'booking' || (d.reference ?? '').startsWith('BKG_');
       if (!isBooking) return null;
       const hinted = typeof meta?.tenantId === 'string' ? meta.tenantId : null;
@@ -150,8 +159,22 @@ export class PaystackWebhookService {
     const d = event.data ?? {};
     const meta = typeof d.metadata === 'object' && d.metadata ? d.metadata : null;
     const isBooking = meta?.kind === 'booking' || (d.reference ?? '').startsWith('BKG_');
+    const isConcierge = meta?.kind === 'concierge' || ConciergePaymentsService.isConciergeReference(d.reference);
     switch (type) {
       case 'charge.success':
+        if (isConcierge) {
+          const res = await this.concierge.applyChargeTx(tx, {
+            reference: d.reference ?? '',
+            amountKobo: Number(d.amount ?? 0),
+            paidAt: d.paid_at ? new Date(d.paid_at) : new Date(),
+            channel: d.channel ?? null,
+            providerTransactionId: d.id !== undefined ? String(d.id) : null,
+            source: 'webhook',
+          });
+          if (!res) return null;
+          after.push(res.after);
+          return res.tenantId;
+        }
         if (isBooking) {
           const res = await this.bookings.applyChargeTx(tx, {
             reference: d.reference ?? '',
@@ -168,6 +191,7 @@ export class PaystackWebhookService {
         }
         return this.onChargeSuccess(tx, d);
       case 'charge.failed':
+        if (isConcierge && d.reference) return this.concierge.onChargeFailedTx(tx, d.reference);
         return isBooking && d.reference ? this.bookings.onChargeFailedTx(tx, d.reference) : null;
       case 'refund.processed':
       case 'refund.pending':

@@ -1,3 +1,4 @@
+import { partnerRequest } from '../../concierge/requests.service.js';
 import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Put, Query, Req, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiExcludeController } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
@@ -92,6 +93,12 @@ export class TransfersQueryDto extends PropertyFilterDto {
   @IsOptional() @Matches(DATE) from?: string;
   @IsOptional() @Matches(DATE) to?: string;
   @IsOptional() @IsIn(['REQUESTED', 'CONFIRMED', 'DRIVER_ASSIGNED', 'EN_ROUTE', 'PICKED_UP', 'COMPLETED', 'NO_SHOW', 'CANCELLED']) status?: string;
+}
+
+export class ConciergeQueryDto extends PropertyFilterDto {
+  @IsOptional() @Matches(DATE) from?: string;
+  @IsOptional() @Matches(DATE) to?: string;
+  @IsOptional() @IsIn(['NEW', 'QUOTED', 'AWAITING_GUEST', 'CONFIRMED', 'SCHEDULED', 'IN_PROGRESS', 'COMPLETED', 'DECLINED', 'CANCELLED']) status?: string;
 }
 
 export class DailyQueryDto {
@@ -674,6 +681,43 @@ export class PartnerController {
       tx.pickupPoint.findMany({ where: { tenantId: p.tenantId, ...cursorWhere(q.cursor) }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], take: limitOf(q) + 1 }),
     );
     return page(rows, limitOf(q), (x) => ({ propertyId: x.propertyId, active: x.active, ...publicPickupPoint(x) }));
+  }
+
+  // ---- M8: concierge (private requests are never included) -----------------------------------
+
+  @Get('concierge-requests')
+  @PartnerScope('reservations:read')
+  async conciergeRequests(@Req() req: PartnerRequest, @Query() q: ConciergeQueryDto) {
+    const { p } = this.ctx(req);
+    if (q.propertyId) await this.assertProperty(p, q.propertyId);
+    const rows = await this.scoped(p, q.propertyId, (tx) =>
+      tx.conciergeRequest.findMany({
+        where: {
+          tenantId: p.tenantId,
+          discreet: false,
+          ...(q.status && { status: q.status as 'NEW' }),
+          ...((q.from || q.to) && { createdAt: { ...(q.from && { gte: lagosStartOfDay(q.from) }), ...(q.to && { lt: lagosStartOfDay(addDays(q.to, 1)) }) } }),
+          ...cursorWhere(q.cursor),
+        },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        take: limitOf(q) + 1,
+      }),
+    );
+    return page(rows, limitOf(q), partnerRequest);
+  }
+
+  @Get('concierge-services')
+  @PartnerScope('rates:read')
+  async conciergeServices(@Req() req: PartnerRequest, @Query() q: PropertyFilterDto) {
+    const { p } = this.ctx(req);
+    if (q.propertyId) await this.assertProperty(p, q.propertyId);
+    const rows = await this.scoped(p, q.propertyId, (tx) =>
+      tx.conciergeService.findMany({ where: { tenantId: p.tenantId, reviewStatus: 'LIVE', active: true, ...cursorWhere(q.cursor) }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], take: limitOf(q) + 1 }),
+    );
+    return page(rows, limitOf(q), (x) => ({
+      id: x.id, propertyId: x.propertyId, name: x.name, description: x.description, category: x.category, pricing: x.pricing, priceKobo: x.priceKobo,
+      variants: Array.isArray(x.variants) ? x.variants : [], durationMinutes: x.durationMinutes, location: x.location, active: x.active,
+    }));
   }
 
   @Get('housekeeping/tasks')
