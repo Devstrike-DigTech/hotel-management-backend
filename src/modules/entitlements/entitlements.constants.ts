@@ -38,6 +38,9 @@ export const FEATURE_CODES = [
   'form_conditional_logic',
   'paid_extras',
   'form_file_uploads',
+  // M8
+  'concierge',
+  'concierge_vendors',
 ] as const;
 
 export type FeatureCode = (typeof FEATURE_CODES)[number];

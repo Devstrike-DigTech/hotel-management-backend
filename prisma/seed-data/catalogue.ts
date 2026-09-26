@@ -45,6 +45,9 @@ export const FEATURES: FeatureSeed[] = [
   { code: 'form_conditional_logic', name: 'Conditional questions', category: 'Guests', description: 'Show booking-form questions only when an earlier answer calls for them.' },
   { code: 'paid_extras', name: 'Paid extras and pickups', category: 'Revenue', description: 'Sell breakfast, early check-in, celebrations and airport or motor-park pickups with the room.' },
   { code: 'form_file_uploads', name: 'File uploads in the booking form', category: 'Guests', description: 'Let guests attach documents such as an event invitation or a company letter.' },
+  // M8: the concierge (lawful guest requests) and vendor commission.
+  { code: 'concierge', name: 'Guest concierge', category: 'Guests', description: 'Guests ask for lawful services (spa, chef, car hire, tours, celebrations) and the team quotes, arranges and bills them, privately when asked.' },
+  { code: 'concierge_vendors', name: 'Concierge vendors and commission', category: 'Revenue', description: 'Track the commission you earn from outside providers such as spas, chefs and car hire firms.' },
   { code: 'data_export', name: 'Full data export', category: 'Platform', description: 'Download every record of your hotel group as JSON and CSV, any time.' },
 ];
 
@@ -57,12 +60,14 @@ const GROWTH = [
   'booking_site_branding', 'revenue_guard_full', 'owner_whatsapp_alerts',
   'housekeeping', 'maintenance', 'custom_roles', 'promotions', 'sms_messaging',
   'site_templates_all', 'site_sections', 'form_fields_unlimited', 'form_conditional_logic', 'paid_extras',
+  'concierge',
 ];
 const PRO = [
   ...GROWTH,
   'custom_domain', 'pos', 'channel_manager', 'dynamic_pricing',
   'whatsapp_messaging', 'loyalty', 'multi_property', 'audit_export',
   'site_fonts', 'form_file_uploads',
+  'concierge_vendors',
 ];
 const ENTERPRISE = [...PRO, 'white_label', 'api_access', 'dedicated_database', 'sso', 'data_export'];
 

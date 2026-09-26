@@ -41,6 +41,8 @@ enum StaffRole {
   /// M5: waiter / cashier (POS) and kitchen / bar (KDS).
   WAITER
   KITCHEN
+  /// M8: concierge (guest requests, private requests, catalogue and vendors).
+  CONCIERGE
   /// The user holds a custom role (users.custom_role_id).
   CUSTOM
 }
@@ -192,6 +194,12 @@ model Tenant {
   reservationExtras       ReservationExtra[]
   transfers               Transfer[]
   setupProgress           SetupProgress[]
+  conciergeAccount        ConciergeAccount?
+  conciergeSettings       ConciergeSettings[]
+  conciergeVendors        ConciergeVendor[]
+  conciergeServices       ConciergeService[]
+  conciergeRequests       ConciergeRequest[]
+  conciergePayments       ConciergePayment[]
 
   @@map("tenants")
 }
@@ -301,6 +309,11 @@ model Property {
   reservationExtras  ReservationExtra[]
   transfers          Transfer[]
   setupProgress      SetupProgress?
+  conciergeSettings  ConciergeSettings?
+  conciergeVendors   ConciergeVendor[]
+  conciergeServices  ConciergeService[]
+  conciergeRequests  ConciergeRequest[]
+  conciergePayments  ConciergePayment[]
 
   @@unique([tenantId, invoicePrefix])
   @@index([tenantId])
@@ -752,6 +765,7 @@ enum DocumentCounterKind {
   POS_ORDER
   KDS_TICKET
   LOYALTY_MEMBER
+  CONCIERGE_REQUEST
 }
 
 enum ShiftStatus {
@@ -881,11 +895,12 @@ model Guest {
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  tenant       Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  reservations Reservation[]
-  folios       Folio[]
-  reviews      Review[]
-  loyalty      LoyaltyMember?
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reservations      Reservation[]
+  folios            Folio[]
+  reviews           Review[]
+  loyalty           LoyaltyMember?
+  conciergeRequests ConciergeRequest[]
 
   @@unique([tenantId, phone])
   @@index([guestAccountId])
@@ -998,6 +1013,7 @@ model Reservation {
   // M7
   addOnExtras       ReservationExtra[]
   transfers         Transfer[]
+  conciergeRequests ConciergeRequest[]
 
   @@unique([tenantId, code])
   @@unique([tenantId, quoteRef])
@@ -4562,4 +4578,362 @@ model SetupProgress {
 
   @@index([tenantId])
   @@map("setup_progress")
+}
+
+// -----------------------------------------------------------------------------
+// M8: concierge (lawful guest requests), acceptable use, vendors
+// -----------------------------------------------------------------------------
+
+enum ConciergeCategory {
+  WELLNESS
+  DINING
+  ROMANCE_AND_CELEBRATION
+  GROOMING
+  TRANSPORT
+  SECURITY
+  TOURS_AND_EXPERIENCES
+  FAMILY
+  SHOPPING
+  PHOTOGRAPHY
+  EVENTS
+  NIGHTLIFE_RESERVATIONS
+  BUSINESS
+  LAUNDRY_EXPRESS
+  OTHER
+}
+
+enum ConciergePricing {
+  FIXED
+  FROM
+  PER_HOUR
+  PER_PERSON
+  FREE
+}
+
+enum ConciergeLocation {
+  IN_ROOM
+  ON_PROPERTY
+  OFF_PROPERTY
+}
+
+enum ConciergeReviewStatus {
+  LIVE
+  PENDING_REVIEW
+  REJECTED
+  HIDDEN
+}
+
+enum ConciergeRequestStatus {
+  NEW
+  QUOTED
+  AWAITING_GUEST
+  CONFIRMED
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  DECLINED
+  CANCELLED
+}
+
+/// One row per tenant (hotel group): acceptable-use acceptance and the platform's concierge suspension.
+model ConciergeAccount {
+  tenantId          String    @id @map("tenant_id") @db.Uuid
+  aupVersion        String?   @map("aup_version")
+  aupAcceptedAt     DateTime? @map("aup_accepted_at") @db.Timestamptz(3)
+  aupAcceptedById   String?   @map("aup_accepted_by_id") @db.Uuid
+  aupAcceptedByName String?   @map("aup_accepted_by_name")
+  aupAcceptedIp     String?   @map("aup_accepted_ip")
+  suspendedAt       DateTime? @map("suspended_at") @db.Timestamptz(3)
+  suspendedReason   String?   @map("suspended_reason")
+  suspendedByName   String?   @map("suspended_by_name")
+  reinstatedAt      DateTime? @map("reinstated_at") @db.Timestamptz(3)
+  reinstatedByName  String?   @map("reinstated_by_name")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("concierge_accounts")
+}
+
+/// Per-property concierge settings (SLA targets, neutral folio wording, retention, discretion).
+model ConciergeSettings {
+  id                   String   @id @default(uuid()) @db.Uuid
+  tenantId             String   @map("tenant_id") @db.Uuid
+  propertyId           String   @unique @map("property_id") @db.Uuid
+  enabled              Boolean  @default(false)
+  slaInStayMinutes     Int      @default(15) @map("sla_in_stay_minutes")
+  slaPreArrivalMinutes Int      @default(120) @map("sla_pre_arrival_minutes")
+  escalateAfterMinutes Int      @default(0) @map("escalate_after_minutes")
+  folioLabelInRoom     String   @default("In-room service") @map("folio_label_in_room")
+  folioLabelOther      String   @default("Guest service") @map("folio_label_other")
+  redactAfterDays      Int      @default(90) @map("redact_after_days")
+  /// MASKED | HIDDEN: what staff without concierge.discreet see of private requests.
+  discreetVisibility   String   @default("MASKED") @map("discreet_visibility")
+  vendorShareSurname   Boolean  @default(false) @map("vendor_share_surname")
+  vendorShareRoom      Boolean  @default(false) @map("vendor_share_room")
+  payOnline            Boolean  @default(true) @map("pay_online")
+  payFolio             Boolean  @default(true) @map("pay_folio")
+  freeFormEnabled      Boolean  @default(true) @map("free_form_enabled")
+  quoteValidityHours   Int      @default(24) @map("quote_validity_hours")
+  intro                String?
+  updatedById          String?  @map("updated_by_id") @db.Uuid
+  updatedByName        String?  @map("updated_by_name")
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("concierge_settings")
+}
+
+/// Outside providers the hotel works with (licensed spa, chef, car hire, photographer, tour operator ...). Staff-only.
+model ConciergeVendor {
+  id              String            @id @default(uuid()) @db.Uuid
+  tenantId        String            @map("tenant_id") @db.Uuid
+  propertyId      String            @map("property_id") @db.Uuid
+  name            String
+  category        ConciergeCategory @default(OTHER)
+  contactName     String?           @map("contact_name")
+  phone           String?
+  whatsapp        String?
+  email           String?
+  /// NONE | PERCENT (basis points) | FIXED (kobo)
+  commissionType  String            @default("NONE") @map("commission_type")
+  commissionValue Int               @default(0) @map("commission_value")
+  payoutNotes     String?           @map("payout_notes")
+  notes           String?
+  active          Boolean           @default(true)
+  ratingSum       Int               @default(0) @map("rating_sum")
+  ratingCount     Int               @default(0) @map("rating_count")
+  createdAt       DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property Property           @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  services ConciergeService[]
+  requests ConciergeRequest[]
+
+  @@unique([propertyId, name])
+  @@index([tenantId])
+  @@map("concierge_vendors")
+}
+
+/// A service the hotel can arrange (lawful services only; screened, platform-reviewable).
+model ConciergeService {
+  id               String                @id @default(uuid()) @db.Uuid
+  tenantId         String                @map("tenant_id") @db.Uuid
+  propertyId       String                @map("property_id") @db.Uuid
+  name             String
+  description      String                @default("")
+  category         ConciergeCategory     @default(OTHER)
+  imageUrl         String?               @map("image_url")
+  pricing          ConciergePricing      @default(FROM)
+  priceKobo        Int?                  @map("price_kobo")
+  /// [{ id, name, priceKobo, durationMinutes }]
+  variants         Json                  @default("[]")
+  durationMinutes  Int?                  @map("duration_minutes")
+  leadTimeHours    Int                   @default(0) @map("lead_time_hours")
+  /// { days: number[], from: "HH:MM", to: "HH:MM" } or null (any time)
+  availability     Json?
+  requiresSlot     Boolean               @default(false) @map("requires_slot")
+  slotCapacity     Int?                  @map("slot_capacity")
+  location         ConciergeLocation     @default(ON_PROPERTY)
+  /// STAFF | VENDOR
+  fulfilledBy      String                @default("STAFF") @map("fulfilled_by")
+  vendorId         String?               @map("vendor_id") @db.Uuid
+  discreetEligible Boolean               @default(false) @map("discreet_eligible")
+  /// Service questions (M7 FormField list, CUSTOM fields only).
+  questions        Json                  @default("[]")
+  taxable          Boolean               @default(true)
+  channels         String[]              @default(["BOOKING_FLOW", "TRIP_PAGE", "FRONT_DESK"])
+  active           Boolean               @default(true)
+  sortOrder        Int                   @default(0) @map("sort_order")
+  reviewStatus     ConciergeReviewStatus @default(LIVE) @map("review_status")
+  flaggedTerms     String[]              @default([]) @map("flagged_terms")
+  /// [{ term, category, excerpt }]
+  flagMatches      Json                  @default("[]") @map("flag_matches")
+  reviewReason     String?               @map("review_reason")
+  submittedAt      DateTime?             @map("submitted_at") @db.Timestamptz(3)
+  reviewedAt       DateTime?             @map("reviewed_at") @db.Timestamptz(3)
+  reviewedByName   String?               @map("reviewed_by_name")
+  createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property Property           @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  vendor   ConciergeVendor?   @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  requests ConciergeRequest[]
+
+  @@unique([propertyId, name])
+  @@index([tenantId])
+  @@index([reviewStatus])
+  @@map("concierge_services")
+}
+
+/// A guest request (CR-000123 per property). Private (discreet) requests are masked for staff without concierge.discreet.
+model ConciergeRequest {
+  id                  String                 @id @default(uuid()) @db.Uuid
+  tenantId            String                 @map("tenant_id") @db.Uuid
+  propertyId          String                 @map("property_id") @db.Uuid
+  seq                 Int
+  number              String
+  reservationId       String?                @map("reservation_id") @db.Uuid
+  guestId             String                 @map("guest_id") @db.Uuid
+  serviceId           String?                @map("service_id") @db.Uuid
+  serviceName         String                 @map("service_name")
+  category            ConciergeCategory      @default(OTHER)
+  pricing             ConciergePricing?
+  location            ConciergeLocation?
+  variantId           String?                @map("variant_id")
+  variantName         String?                @map("variant_name")
+  hours               Int?
+  /// Snapshot of the service questions the answers were given to.
+  questions           Json                   @default("[]")
+  answers             Json                   @default("{}")
+  requestText         String?                @map("request_text")
+  preferredStart      DateTime?              @map("preferred_start") @db.Timestamptz(3)
+  preferredEnd        DateTime?              @map("preferred_end") @db.Timestamptz(3)
+  partySize           Int?                   @map("party_size")
+  notes               String?
+  internalNotes       String?                @map("internal_notes")
+  discreet            Boolean                @default(false)
+  /// WHATSAPP | SMS | EMAIL | IN_APP
+  contactPreference   String                 @default("SMS") @map("contact_preference")
+  contactPhone        String?                @map("contact_phone")
+  contactEmail        String?                @map("contact_email")
+  status              ConciergeRequestStatus @default(NEW)
+  /// BOOKING_FLOW | TRIP_PAGE | WHATSAPP | FRONT_DESK
+  source              String                 @default("TRIP_PAGE")
+  flagged             Boolean                @default(false)
+  flagTerms           String[]               @default([]) @map("flag_terms")
+  flagCategories      String[]               @default([]) @map("flag_categories")
+  /// PENDING | CLEARED | DECLINED
+  flagStatus          String?                @map("flag_status")
+  flagNote            String?                @map("flag_note")
+  flagReviewedById    String?                @map("flag_reviewed_by_id") @db.Uuid
+  flagReviewedByName  String?                @map("flag_reviewed_by_name")
+  flagReviewedAt      DateTime?              @map("flag_reviewed_at") @db.Timestamptz(3)
+  /// Automatic price (FIXED / PER_* / FREE).
+  priceAmountKobo     Int?                   @map("price_amount_kobo")
+  priceNetKobo        Int?                   @map("price_net_kobo")
+  priceTaxKobo        Int?                   @map("price_tax_kobo")
+  priceTaxes          Json?                  @map("price_taxes")
+  priceDescription    String?                @map("price_description")
+  /// Tax components frozen with the price or the latest quote.
+  taxComponents       Json                   @default("[]") @map("tax_components")
+  quoteVersion        Int                    @default(0) @map("quote_version")
+  quoteAmountKobo     Int?                   @map("quote_amount_kobo")
+  quoteNetKobo        Int?                   @map("quote_net_kobo")
+  quoteTaxKobo        Int?                   @map("quote_tax_kobo")
+  quoteTaxes          Json?                  @map("quote_taxes")
+  quoteValidUntil     DateTime?              @map("quote_valid_until") @db.Timestamptz(3)
+  quoteNote           String?                @map("quote_note")
+  quoteSentAt         DateTime?              @map("quote_sent_at") @db.Timestamptz(3)
+  quoteSentById       String?                @map("quote_sent_by_id") @db.Uuid
+  quoteSentByName     String?                @map("quote_sent_by_name")
+  quoteChannel        String?                @map("quote_channel")
+  /// ACCEPTED | DECLINED
+  quoteAnswer         String?                @map("quote_answer")
+  quoteAnsweredAt     DateTime?              @map("quote_answered_at") @db.Timestamptz(3)
+  /// LINK | WHATSAPP | TRIP_PAGE | STAFF
+  quoteAnsweredVia    String?                @map("quote_answered_via")
+  /// ONLINE | FOLIO | NONE
+  paymentMethod       String?                @map("payment_method")
+  /// NONE | PENDING | PAID | POSTED | REFUNDED
+  paymentStatus       String                 @default("NONE") @map("payment_status")
+  paymentReference    String?                @map("payment_reference")
+  paidAt              DateTime?              @map("paid_at") @db.Timestamptz(3)
+  folioId             String?                @map("folio_id") @db.Uuid
+  folioEntryId        String?                @map("folio_entry_id") @db.Uuid
+  postedAt            DateTime?              @map("posted_at") @db.Timestamptz(3)
+  folioDescription    String?                @map("folio_description")
+  assigneeId          String?                @map("assignee_id") @db.Uuid
+  assigneeName        String?                @map("assignee_name")
+  vendorId            String?                @map("vendor_id") @db.Uuid
+  vendorName          String?                @map("vendor_name")
+  vendorSentAt        DateTime?              @map("vendor_sent_at") @db.Timestamptz(3)
+  vendorSentVia       String?                @map("vendor_sent_via")
+  commissionType      String?                @map("commission_type")
+  commissionValue     Int?                   @map("commission_value")
+  commissionKobo      Int?                   @map("commission_kobo")
+  vendorPayableKobo   Int?                   @map("vendor_payable_kobo")
+  vendorSettledAt     DateTime?              @map("vendor_settled_at") @db.Timestamptz(3)
+  vendorSettlementRef String?                @map("vendor_settlement_ref")
+  /// IN_STAY | PRE_ARRIVAL
+  slaTarget           String                 @default("PRE_ARRIVAL") @map("sla_target")
+  slaDueAt            DateTime               @map("sla_due_at") @db.Timestamptz(3)
+  firstResponseAt     DateTime?              @map("first_response_at") @db.Timestamptz(3)
+  escalatedAt         DateTime?              @map("escalated_at") @db.Timestamptz(3)
+  scheduledAt         DateTime?              @map("scheduled_at") @db.Timestamptz(3)
+  startedAt           DateTime?              @map("started_at") @db.Timestamptz(3)
+  completedAt         DateTime?              @map("completed_at") @db.Timestamptz(3)
+  cancelledAt         DateTime?              @map("cancelled_at") @db.Timestamptz(3)
+  declineReason       String?                @map("decline_reason")
+  cancelReason        String?                @map("cancel_reason")
+  rating              Int?
+  ratingComment       String?                @map("rating_comment")
+  ratedAt             DateTime?              @map("rated_at") @db.Timestamptz(3)
+  vendorRating        Int?                   @map("vendor_rating")
+  /// [{ at, type, status, note, by, guestVisible }]
+  timeline            Json                   @default("[]")
+  redactedAt          DateTime?              @map("redacted_at") @db.Timestamptz(3)
+  createdById         String?                @map("created_by_id") @db.Uuid
+  createdByName       String?                @map("created_by_name")
+  clientCreatedAt     DateTime?              @map("client_created_at") @db.Timestamptz(3)
+  createdAt           DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant      Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property    Property           @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  reservation Reservation?       @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+  guest       Guest              @relation(fields: [guestId], references: [id], onDelete: Cascade)
+  service     ConciergeService?  @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  vendor      ConciergeVendor?   @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  payments    ConciergePayment[]
+
+  @@unique([propertyId, seq])
+  @@unique([propertyId, number])
+  @@index([tenantId])
+  @@index([propertyId, status])
+  @@index([propertyId, createdAt(sort: Desc)])
+  @@index([guestId])
+  @@index([reservationId])
+  @@index([status, slaDueAt])
+  @@map("concierge_requests")
+}
+
+/// Online payment of a concierge request (Paystack, reference CRQ_...).
+model ConciergePayment {
+  id                    String    @id @default(uuid()) @db.Uuid
+  tenantId              String    @map("tenant_id") @db.Uuid
+  propertyId            String    @map("property_id") @db.Uuid
+  requestId             String    @map("request_id") @db.Uuid
+  reference             String    @unique
+  amountKobo            Int       @map("amount_kobo")
+  /// INITIALIZED | SUCCEEDED | FAILED | REFUNDED
+  status                String    @default("INITIALIZED")
+  email                 String
+  quoteVersion          Int       @default(0) @map("quote_version")
+  authorizationUrl      String?   @map("authorization_url")
+  accessCode            String?   @map("access_code")
+  subaccountCode        String?   @map("subaccount_code")
+  channel               String?
+  providerTransactionId String?   @map("provider_transaction_id")
+  paidAt                DateTime? @map("paid_at") @db.Timestamptz(3)
+  lastVerifiedAt        DateTime? @map("last_verified_at") @db.Timestamptz(3)
+  refundedAt            DateTime? @map("refunded_at") @db.Timestamptz(3)
+  refundReference       String?   @map("refund_reference")
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property Property         @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  request  ConciergeRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([requestId])
+  @@map("concierge_payments")
 }

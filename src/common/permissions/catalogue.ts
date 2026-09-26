@@ -246,6 +246,20 @@ export const PERMISSION_GROUPS: PermissionGroupDef[] = [
       p('transfers.manage', 'Run transfers', 'Confirm pickups, assign drivers, update their status and message the guest.'),
     ],
   },
+  // M8
+  {
+    group: 'concierge',
+    label: 'Concierge',
+    permissions: [
+      p('concierge.view', 'See concierge requests', 'See the concierge board and guest requests (private ones masked or hidden).'),
+      p('concierge.work', 'Work concierge requests', 'Create requests for guests, send quotes, assign staff or vendors, update, complete.'),
+      p('concierge.discreet', 'See private requests', 'See the service, notes and guest of private (discreet) requests. Every view is audited.', true),
+      p('concierge.catalogue', 'Concierge catalogue and vendors', 'Services guests can ask for, their prices and questions, and the vendor directory.'),
+      p('concierge.review', 'Review held requests', 'Clear or decline guest requests held by the content screen; receive SLA escalations.', true),
+      p('concierge.settings', 'Concierge settings', 'Switch the concierge on, accept the acceptable-use policy, SLA targets, folio wording, retention.', true),
+      p('concierge.reports', 'Concierge reports', 'Concierge reports, exports and vendor settlements.', true),
+    ],
+  },
   // M6 (Enterprise)
   {
     group: 'integrations',
@@ -301,6 +315,8 @@ const FRONT_DESK = [
   'inbox.view', 'inbox.reply', 'loyalty.view', 'loyalty.redeem',
   // M7
   'transfers.view', 'transfers.manage',
+  // M8
+  'concierge.view', 'concierge.work',
 ];
 
 const ACCOUNTANT = [
@@ -309,6 +325,8 @@ const ACCOUNTANT = [
   'rates.view', 'corporate.view', 'maintenance.view', 'reviews.view',
   // M5
   'pos.view', 'stock.view', 'channels.view', 'pricing.view', 'loyalty.view',
+  // M8
+  'concierge.view', 'concierge.reports',
 ];
 
 export interface SystemRoleDef {
@@ -364,6 +382,15 @@ export const SYSTEM_ROLES: SystemRoleDef[] = ([
     name: 'Kitchen / bar',
     description: 'Works the kitchen display: prepares and bumps tickets.',
     permissions: ['kds.view', 'pos.view', 'stock.view'],
+  },
+  {
+    key: 'CONCIERGE',
+    name: 'Concierge',
+    description: 'Arranges guest requests, sees private requests, keeps the service catalogue and the vendor directory.',
+    permissions: [
+      'concierge.view', 'concierge.work', 'concierge.discreet', 'concierge.catalogue',
+      'reservations.view', 'guests.view', 'folio.view', 'inbox.view', 'inbox.reply', 'transfers.view',
+    ],
   },
 ] as SystemRoleDef[]).map((r) => ({ ...r, permissions: [...new Set([...r.permissions, ...EVERY_ROLE])] }));
 

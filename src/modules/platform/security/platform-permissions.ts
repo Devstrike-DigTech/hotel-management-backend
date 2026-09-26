@@ -16,6 +16,7 @@ export const PLATFORM_PERMISSIONS = [
   { code: 'platform_users.manage', label: 'Manage platform users', description: 'Invite staff, change roles, reset two-factor, deactivate.' },
   { code: 'audit.view', label: 'View the platform audit log', description: 'See and export every platform action.' },
   { code: 'system.view', label: 'View system health', description: 'Queues, deliveries, cron jobs; retry or clear failed jobs.' },
+  { code: 'concierge.review', label: 'Review concierge services', description: "Approve, reject or hide hotels' concierge services and suspend a hotel's concierge." },
 ] as const;
 
 export type PlatformPermission = (typeof PLATFORM_PERMISSIONS)[number]['code'];
@@ -27,9 +28,9 @@ export const PLATFORM_ROLES: { role: PlatformRole; label: string; permissions: P
   {
     role: 'OPERATIONS',
     label: 'Operations',
-    permissions: ['tenants.view', 'tenants.manage', 'billing.view', 'reviews.moderate', 'impersonate', 'announcements.manage', 'support.handle', 'dedicated_db.manage', 'audit.view', 'system.view'],
+    permissions: ['tenants.view', 'tenants.manage', 'billing.view', 'reviews.moderate', 'impersonate', 'announcements.manage', 'support.handle', 'dedicated_db.manage', 'audit.view', 'system.view', 'concierge.review'],
   },
-  { role: 'SUPPORT', label: 'Support', permissions: ['tenants.view', 'impersonate', 'support.handle', 'reviews.moderate', 'system.view'] },
+  { role: 'SUPPORT', label: 'Support', permissions: ['tenants.view', 'impersonate', 'support.handle', 'reviews.moderate', 'system.view', 'concierge.review'] },
   { role: 'FINANCE', label: 'Finance', permissions: ['tenants.view', 'billing.view', 'billing.manage', 'commission.manage', 'plans.manage', 'audit.view'] },
   { role: 'SALES_READONLY', label: 'Sales (read only)', permissions: ['tenants.view', 'billing.view'] },
 ];

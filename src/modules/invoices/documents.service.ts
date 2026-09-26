@@ -25,11 +25,11 @@ export type FolioForDoc = Prisma.FolioGetPayload<{ include: typeof folioDocInclu
 
 const PREFIX: Record<DocumentCounterKind, string> = {
   INVOICE: 'INV', PROFORMA: 'PRO', RECEIPT: 'RCT', MAINTENANCE_TICKET: 'MT', CITY_LEDGER: 'CL',
-  POS_ORDER: 'ORD', KDS_TICKET: 'K', LOYALTY_MEMBER: 'M',
+  POS_ORDER: 'ORD', KDS_TICKET: 'K', LOYALTY_MEMBER: 'M', CONCIERGE_REQUEST: 'CR',
 };
 
 /** Series numbered per property (M5); the rest are per group. */
-export const PER_PROPERTY_KINDS: ReadonlySet<DocumentCounterKind> = new Set(['INVOICE', 'PROFORMA', 'RECEIPT', 'POS_ORDER', 'KDS_TICKET']);
+export const PER_PROPERTY_KINDS: ReadonlySet<DocumentCounterKind> = new Set(['INVOICE', 'PROFORMA', 'RECEIPT', 'POS_ORDER', 'KDS_TICKET', 'CONCIERGE_REQUEST']);
 
 /**
  * `INV-2026-000123`, or with a property prefix (M5) `INV-PWH-2026-000123`.

@@ -57,7 +57,7 @@ describe('CIDR allowlists', () => {
 describe('platform roles', () => {
   it('gives SUPER_ADMIN everything and SALES_READONLY only reads', () => {
     const all = platformPermissionsFor('SUPER_ADMIN');
-    expect(all.size).toBe(14);
+    expect(all.size).toBe(15);
     expect([...platformPermissionsFor('SALES_READONLY')].sort()).toEqual(['billing.view', 'tenants.view']);
     expect(platformPermissionsFor('SUPPORT').has('impersonate')).toBe(true);
     expect(platformPermissionsFor('FINANCE').has('impersonate')).toBe(false);

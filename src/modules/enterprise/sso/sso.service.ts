@@ -19,7 +19,7 @@ import { defaultIssuer, emailDomainOf, IdTokenError, pkcePair, randomToken, veri
 const SECRET_PURPOSE = 'sso-client-secret';
 const STATE_TTL = 600;
 const CODE_TTL = 120;
-const JIT_ROLES: StaffRole[] = ['MANAGER', 'FRONT_DESK', 'HOUSEKEEPING', 'ACCOUNTANT', 'SUPERVISOR', 'MAINTENANCE', 'WAITER', 'KITCHEN'];
+const JIT_ROLES: StaffRole[] = ['MANAGER', 'FRONT_DESK', 'HOUSEKEEPING', 'ACCOUNTANT', 'SUPERVISOR', 'MAINTENANCE', 'WAITER', 'KITCHEN', 'CONCIERGE'];
 
 export interface SsoInput {
   provider: 'GOOGLE' | 'MICROSOFT' | 'OIDC';

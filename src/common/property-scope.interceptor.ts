@@ -2,6 +2,7 @@ import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nes
 import type { Response } from 'express';
 import { Observable } from 'rxjs';
 import type { AppRequest } from './auth-types.js';
+import { permsOf } from './permissions/can.js';
 import { propertyScopeStore } from './property-scope.js';
 
 /**
@@ -18,7 +19,7 @@ export class PropertyScopeInterceptor implements NestInterceptor {
     const user = req.user;
     if (!user?.propertyId) return next.handle();
     ctx.switchToHttp().getResponse<Response>().setHeader('X-Property-Id', user.propertyId);
-    const scope = { tenantId: user.tenantId, propertyId: user.propertyId, propertyIds: [user.propertyId] };
+    const scope = { tenantId: user.tenantId, propertyId: user.propertyId, propertyIds: [user.propertyId], viewer: { userId: user.userId, permissions: permsOf(user) } };
     return new Observable<unknown>((subscriber) => propertyScopeStore.run(scope, () => next.handle().subscribe(subscriber)));
   }
 }

@@ -31,6 +31,17 @@ export interface PropertyScope {
   propertyId: string | null;
   /** Properties visible in this scope; null = no property filter. */
   propertyIds: string[] | null;
+  /**
+   * M8: the staff member of the request (their effective permissions), for
+   * views composed deep inside shared code (e.g. private concierge requests
+   * masked in the reservation detail). Absent in jobs and public paths.
+   */
+  viewer?: { userId: string; permissions: ReadonlySet<string> };
+}
+
+/** M8: permissions of the staff member of the current request, if any. */
+export function currentViewer(tenantId: string): { userId: string; permissions: ReadonlySet<string> } | null {
+  return currentScope(tenantId)?.viewer ?? null;
 }
 
 export const propertyScopeStore = new AsyncLocalStorage<PropertyScope>();
@@ -85,6 +96,8 @@ export const PROPERTY_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'CustomDomain',
   // M7 (themes and assets can belong to the group root: filtered explicitly)
   'BookingForm', 'BookingFormVersion', 'FormUpload', 'Extra', 'PickupPoint', 'ReservationExtra', 'Transfer', 'SetupProgress',
+  // M8
+  'ConciergeSettings', 'ConciergeVendor', 'ConciergeService', 'ConciergeRequest', 'ConciergePayment',
 ]);
 
 const FILTERED_OPS = new Set([

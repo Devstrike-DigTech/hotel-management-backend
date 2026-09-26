@@ -26,7 +26,7 @@ describe('permission catalogue', () => {
     // M5 adds minibar consumption (charged to the room) to housekeepers.
     // M6: every built-in role can contact platform support.
     expect([...hk].sort()).toEqual(['housekeeping.view', 'housekeeping.work', 'maintenance.report', 'minibar.record', 'support.request']);
-    for (const role of ['OWNER', 'MANAGER', 'FRONT_DESK', 'ACCOUNTANT', 'HOUSEKEEPING', 'SUPERVISOR', 'MAINTENANCE', 'WAITER', 'KITCHEN'] as const) {
+    for (const role of ['OWNER', 'MANAGER', 'FRONT_DESK', 'ACCOUNTANT', 'HOUSEKEEPING', 'SUPERVISOR', 'MAINTENANCE', 'WAITER', 'KITCHEN', 'CONCIERGE'] as const) {
       expect(permissionsFor(role).has('support.request')).toBe(true);
     }
     expect(permissionsFor('SUPERVISOR').has('housekeeping.inspect')).toBe(true);
